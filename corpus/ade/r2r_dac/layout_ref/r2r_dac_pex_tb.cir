@@ -1,0 +1,28 @@
+* pex_sim bench for r2r_dac - typical corner (docs/design.md 1.5's ade
+* pex_sim row). Lives under layout_ref/, not tb/: this bench runs against
+* the magic-extracted, parasitic-annotated netlist of THIS rung's own
+* layout, not against netlist/r2r_dac.cir - M8 (docs/design.md "### M8.")
+* never added one of these, post-layout is entirely M9's own artifact
+* kind. {pdk} and {extracted} are substituted by check_pex_sim.py at run
+* time.
+*
+* `res_typical` (not `typical`) is the corner-selector section this PDK's
+* own sm141064.spice uses for its resistor models (rsh_npolyf_s and its
+* matched mc_* parameters) - the fet-only `typical` section does not
+* define them, and npolyf_s's own subcircuit body references them
+* unconditionally. GND is wired straight to node 0 rather than through
+* its own 0V source: naming a net "GND" and tying it to 0 via a source
+* hit ngspice's "shorted VSRC" check.
+.include '{pdk}/libs.tech/ngspice/design.spice'
+.lib '{pdk}/libs.tech/ngspice/sm141064.spice' res_typical
+.include '{extracted}'
+
+vin VIN 0 dc 1.8
+xdut VIN 0 VOUT r2r_dac
+
+.control
+op
+print v(vin)
+print v(vout)
+.endc
+.end

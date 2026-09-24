@@ -229,27 +229,37 @@ gates:
       fault: "not applicable by default"
       description: "Yield at or above the spec."
     drc:
+      # M9 (docs/design.md, "### M9."): klayout's real GF180 signoff deck
+      # only - docs/spikes/glayout.md found magic re-snaps a GDS to the
+      # manufacturing grid on load, hiding off-grid shapes klayout reports,
+      # so magic is not run here (would only recreate that false
+      # confidence). `analog_drc`, not `drc`, so this row's tool never
+      # collides with vde's own check_drc.py (M4, magic+klayout on a
+      # hardened digital GDS - a different check entirely).
       phase: P5
-      tool: stub
-      future_tool: "magic and klayout"
+      tool: analog_drc
       fail_severities: [error]
       max_count: 0
-      fault: "a planted spacing violation"
-      description: "0."
+      fault: "a planted spacing violation (also: an off-grid shape, a missing guard ring)"
+      description: "0, from klayout's GF180 signoff deck."
     lvs:
+      # M9: netgen against a real schematic (docs/spikes/glayout.md: the
+      # spike's own LVS only compared gLayout's output with itself).
+      # `analog_lvs`, not `lvs` - see drc's own note above; vde's `lvs`
+      # (M4) is netgen against a hardened digital netlist, a different tool.
       phase: P5
-      tool: stub
-      future_tool: "netgen, extracted layout versus the sized netlist"
+      tool: analog_lvs
       fail_severities: [error]
       max_count: 0
-      fault: "a device sized differently in the generator than in the netlist"
+      fault: "a device sized differently in the generator than in the netlist (also: a swapped net)"
       description: "Match."
     pex_sim:
+      # M9: magic ext2spice with parasitics (extract + extresist), then the
+      # bench at typical. klayout_pex as a second extractor and the worst-
+      # corner sweep are not wired up yet - out of scope until the /ade
+      # skill session (docs/design.md 1.9) lands on this.
       phase: P5
-      tool: stub
-      future_tool: >-
-        magic ext2spice with parasitics (klayout_pex second), then the bench
-        at typical and the worst corner
+      tool: pex_sim
       fail_severities: [error]
       max_count: 0
       fault: "an output routed on a long minimum-width metal1 line"

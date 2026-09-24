@@ -1,0 +1,29 @@
+* mirror - minimal reference schematic netlist for the ade.lvs gate
+* (docs/design.md 1.5, "### M9."). Kept as the LVS reference even after
+* M8 merged (docs/design.md "### M8.") its own netlist/mirror.cir: that
+* subckt is a DIFFERENT device - sized 4u/8u (a 2:1 mirror) at l=0.5u,
+* named `current_mirror` with pins iref_node/iout/vdd/vss - while
+* layout/gen_mirror.py's own geometry is fixed (its own docstring: changing
+* l_gate/w_gate from draw_nfet()'s declared defaults would move the pads
+* and invalidate the routing) to the 1:1, 0.22u/0.28u device below. LVS
+* against M8's real schematic would fail on a genuine device/ratio
+* mismatch, not a planted fault, so check_analog_lvs.py's own
+* find_reference_netlist() (which already prefers netlist/<block>.spice
+* over this dir) never reaches this file by extension alone - M8 shipped
+* `.cir`, not `.spice` - and even a renamed copy would still fail LVS for
+* the sizing reason above. Making this rung's own LVS compare against
+* M8's real schematic needs gen_mirror.py to draw M8's actual sizing,
+* which is out of scope for a rebase.
+*
+* Matches layout/gen_mirror.py exactly: M1 diode-connected (gate=drain=
+* IREF), M2's gate tied to IREF, drain=IOUT, both sources+bulk at VSS.
+* ad/pd/as/ps mirror magic's own extraction of the layout (verified with
+* netgen: "Netlists match uniquely." with zero property errors) - a
+* hand-written reference with no area/perimeter properties at all still
+* matches topologically but netgen then reports "Property errors were
+* found", which this repo's own LVS convention (tests/check.sh's
+* netgen-lvs-match smoke) treats as a failed match.
+.subckt mirror IREF IOUT VSS
+xm1 IREF IREF VSS VSS nfet_03v3 w=0.22u l=0.28u ad=0.2014p pd=1.98u as=0.2014p ps=1.98u
+xm2 IOUT IREF VSS VSS nfet_03v3 w=0.22u l=0.28u ad=0.2014p pd=1.98u as=0.2014p ps=1.98u
+.ends

@@ -47,14 +47,17 @@ from checklib import CheckError  # noqa: E402
 SCRIPT = "faults"
 CORPUS = REPO / "corpus"
 DEFAULT_GATES = ENGINE / "reference" / "gates.yaml"
-COPY_SUBDIRS = ("rtl", "netlist", "tb", "holdout", "formal", "sizing")
+COPY_SUBDIRS = ("rtl", "netlist", "tb", "holdout", "formal", "sizing",
+               "layout", "layout_ref")
 # formal: M3. sizing: M8 (docs/design.md "### M8.") - an ade rung's own
 # sizing/sizing.yaml (section 4's optimise target) is a real per-block
 # artifact (already in state.py's SUBDIRS and invalidation.yaml's ade
 # artifact_kinds), so a scratch workspace copy must carry it exactly like
 # tb/'s bounds sidecars - a gate whose bench references `{{SIZING}}`
 # (engine/lib/simlib.py) with no sizing/sizing.yaml on disk gets an
-# undefined-parameter ngspice error, not a silent default.
+# undefined-parameter ngspice error, not a silent default. layout,
+# layout_ref: M9 - see the mkdir note just below for layout_ref's own
+# scaffolding gap.
 
 
 def load_manifest(rung_dir: Path) -> dict:
@@ -100,6 +103,11 @@ def make_scratch_workspace(tmp_root: Path, rung_dir: Path, skill: str,
         src_dir = rung_dir / sub
         if not src_dir.is_dir():
             continue
+        # state.py init's own SUBDIRS scaffold does not include "layout_ref"
+        # (M9's own stand-in dir, not one of docs/design.md 1.4's named
+        # workspace dirs) - mkdir here rather than teach state.py a
+        # corpus-only subdir.
+        (ws / sub).mkdir(parents=True, exist_ok=True)
         for f in src_dir.iterdir():
             if f.is_file():
                 shutil.copy2(f, ws / sub / f.name)

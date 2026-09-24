@@ -1,11 +1,12 @@
-# faults manifest (docs/design.md section 3, "### M8."): one entry per ade
-# gate this rung demonstrates. Same contract as corpus/vde's own manifests -
-# faults.py copies the rung into a scratch workspace, imports plant.py's
-# `plant(ws)` and runs it, then runs `gate` and checks the result against
-# `expect` (`status` is gate.py's own pass|fail vocabulary, `kind` is a kind
-# from the failing findings list). `mc` has no entry here - gates.yaml's own
-# fault for it is "not applicable by default" (this rung's spec.yaml has no
-# `mc` block).
+# faults manifest (docs/design.md section 3, "### M8."/"### M9."): one
+# entry per ade gate this rung demonstrates. Same contract as corpus/vde's
+# own manifests - faults.py copies the rung into a scratch workspace,
+# imports plant.py's `plant(ws)` and runs it, then runs `gate` and checks
+# the result against `expect` (`status` is gate.py's own pass|fail
+# vocabulary, `kind` is a kind from the failing findings list). `mc` has no
+# entry here - gates.yaml's own fault for it is "not applicable by default"
+# (this rung's spec.yaml has no `mc` block). M8 and M9's builders ran in
+# parallel with no shared base; this list is the two reconciled into one.
 version: 1
 faults:
   - name: spec_lint_measure_no_bounds
@@ -28,3 +29,15 @@ faults:
     gate: bench_strength
     plant: plant_bench_strength.py
     expect: {status: fail, kind: survivor_size_doubled}
+  - name: missing_guard_ring
+    gate: drc
+    plant: plant_drc_missing_guard_ring.py
+    expect:
+      status: fail
+      kind: DF.14_LV
+  - name: swapped_output_net
+    gate: lvs
+    plant: plant_lvs_swapped_net.py
+    expect:
+      status: fail
+      kind: lvs_mismatch

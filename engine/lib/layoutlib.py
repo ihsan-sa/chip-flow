@@ -1,0 +1,372 @@
+"""layoutlib.py - shared analog-layout helpers for M9 (docs/design.md 1.5,
+5, "### M9."; docs/spikes/glayout.md).
+
+New at M9: nothing to port - the spike's own verdict is what this module
+implements. gLayout doesn't run on the image's gdsfactory 9.51 (neither
+backend is DRC-clean out of the box), so M9 takes the documented fallback:
+"generator code written directly against gdsfactory ... with the GF180
+PDK's primitive cells." Those primitive cells turn out to already exist,
+gdsfactory-native, inside the PDK itself:
+`$PDK/libs.tech/klayout/tech/pymacros/cells/{draw_fet,draw_res}.py` (vendor
+code, `import gdsfactory as gf`, `@gf.cell`, returns `gf.Component`) - this
+is what `gf180_cells()` imports. Verified empirically against the real
+klayout GF180 signoff deck (the one docs/spikes/glayout.md says counts,
+since magic re-snaps on load and hides off-grid shapes):
+`draw_nfet()`/`draw_pfet()` at their own declared defaults are 1 violation
+away from clean (DF.14: "max distance of a substrate tap from NCOMP is
+20um" - an isolated device with no tap anywhere in range), and
+`draw_npolyf_res(w_res>=0.564...)` is clean outright. Both generator
+functions' own built-in `lbl=True`/`sd_lbl`/`g_lbl`/`sub_lbl` text-labeling
+path is dead on this gdsfactory version (`Component.add_label()` silently
+registers nothing `get_labels()` or a GDS re-read can find - the same class
+of moved/changed-API break docs/spikes/glayout.md found in gLayout's own
+adapter, just smaller) - `add_text_label()` below is the replacement,
+writing a real GDS text record straight onto the (unlocked) assembling
+Component's own klayout cell.
+
+Every device this module places still needs the "context" a lone PCell
+lacks: a P+ substrate tap within DF.14's 20um for any NMOS, wired to the
+same ground net a source ties to. `psub_tap()` is that tap, hand-drawn
+(no vendor generator for a lone tap was found) and verified clean at >=1.75um
+edge clearance from a device.
+"""
+from __future__ import annotations
+
+import re
+import subprocess
+import sys
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+ENGINE = Path(__file__).resolve().parent.parent  # engine/lib -> engine
+REPO = ENGINE.parent
+EDA_BIN = REPO / "bin" / "eda"
+
+# GF180's own GDS layer numbers (layers_def.py in the pymacros tree) for the
+# handful this module draws or labels directly.
+GF180_LAYER = {
+    "comp": (22, 0),
+    "nwell": (21, 0),
+    "poly2": (30, 0),
+    "nplus": (32, 0),
+    "pplus": (31, 0),
+    "contact": (33, 0),
+    "metal1": (34, 0),
+    "via1": (35, 0),
+    "metal2": (36, 0),
+    "metal1_label": (34, 10),
+    "metal2_label": (36, 10),
+}
+
+DRC_DECK_REL = "libs.tech/klayout/tech/drc/gf180mcu.drc"
+# Same deck subset tests/check.sh's own klayout-drc-gf180mcu smoke uses
+# (M0): beol/density/antenna are chip-level decks that a single hand-placed
+# cell with no floorplan around it cannot meaningfully pass or fail.
+DRC_DECKS = "all,-beol,-density,-antenna"
+
+
+class LayoutError(RuntimeError):
+    """A layout tool step did not complete. Callers raise this up to
+    CheckError - never a silent pass (docs/design.md: "a gate that did not
+    run is a refusal, never a pass")."""
+
+
+_toolchain_root_cache: Path | None = None
+
+
+def toolchain_root(timeout: float = 30.0) -> Path:
+    global _toolchain_root_cache
+    if _toolchain_root_cache is None:
+        proc = subprocess.run(
+            [str(EDA_BIN), "--print-toolchain-root"], capture_output=True,
+            text=True, encoding="utf-8", errors="replace", timeout=timeout)
+        if proc.returncode != 0 or not proc.stdout.strip():
+            raise LayoutError(
+                "could not resolve the eda toolchain root: "
+                f"{(proc.stderr or proc.stdout).strip()}")
+        _toolchain_root_cache = Path(proc.stdout.strip())
+    return _toolchain_root_cache
+
+
+def pdk_root() -> Path:
+    return toolchain_root() / "foss" / "pdks" / "gf180mcuD"
+
+
+def run_eda(args: list[str], cwd=None, timeout: float = 120.0,
+           stdin_text: str | None = None) -> subprocess.CompletedProcess:
+    try:
+        return subprocess.run(
+            [str(EDA_BIN), *args], cwd=str(cwd) if cwd else None,
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=timeout,
+            input=stdin_text if stdin_text is not None else "")
+    except subprocess.TimeoutExpired as exc:
+        raise LayoutError(
+            f"eda {' '.join(args)} timed out after {timeout:g}s") from exc
+    except OSError as exc:
+        raise LayoutError(f"eda {' '.join(args)} failed to launch: {exc}") from exc
+
+
+_cells_path_ready = False
+
+
+def gf180_cells():
+    """Import and return (draw_fet, draw_res), the PDK's own gdsfactory-
+    native primitive-cell modules. Raises LayoutError if the PDK tree is
+    missing them (a stale/foreign toolchain) rather than importing nothing
+    and looking like an empty-but-passing generator."""
+    global _cells_path_ready
+    pymacros = pdk_root() / "libs.tech" / "klayout" / "tech" / "pymacros"
+    cells_dir = pymacros / "cells"
+    if not (cells_dir / "draw_fet.py").is_file():
+        raise LayoutError(f"no GF180 pymacros cells at {cells_dir}")
+    if not _cells_path_ready:
+        for p in (str(cells_dir), str(pymacros)):
+            if p not in sys.path:
+                sys.path.insert(0, p)
+        _cells_path_ready = True
+    import importlib
+    draw_fet = importlib.import_module("cells.draw_fet")
+    draw_res = importlib.import_module("cells.draw_res")
+    return draw_fet, draw_res
+
+
+def psub_tap(size: float = 1.0):
+    """A P+ substrate tap: COMP + PPLUS + one 0.22x0.22 contact (CO.1's own
+    fixed size - GF180 contacts are not a min/max range) + a metal1 pad.
+    Hand-drawn (no vendor single-tap generator found under pymacros/cells);
+    verified 0 klayout-DRC violations standalone and paired with a default
+    draw_nfet() >=1.75um edge-to-edge away (docs/spikes/glayout.md's
+    fallback note: M9's own generator code, not gLayout's)."""
+    import gdsfactory as gf
+
+    c = gf.Component()
+    c.add_polygon([(0, 0), (size, 0), (size, size), (0, size)],
+                 layer=GF180_LAYER["comp"])
+    m = 0.2
+    c.add_polygon([(-m, -m), (size + m, -m), (size + m, size + m),
+                  (-m, size + m)], layer=GF180_LAYER["pplus"])
+    cw = 0.22  # CO.1: contact must be exactly 0.22 x 0.22um, not a range
+    co = (size - cw) / 2
+    c.add_polygon([(co, co), (co + cw, co), (co + cw, co + cw),
+                  (co, co + cw)], layer=GF180_LAYER["contact"])
+    mm = 0.6
+    mo = (size - mm) / 2
+    c.add_polygon([(mo, mo), (mo + mm, mo), (mo + mm, mo + mm),
+                  (mo, mo + mm)], layer=GF180_LAYER["metal1"])
+    return c
+
+
+def pad_center(size: float = 1.0) -> tuple[float, float]:
+    """psub_tap()'s own metal1 pad center, local frame."""
+    return (size / 2, size / 2)
+
+
+def add_text_label(top, text: str, x: float, y: float,
+                   layer: tuple[int, int] | None = None) -> None:
+    """Write a REAL GDS text record at (x, y) on `top`'s own cell.
+
+    gdsfactory 9.51's Component.add_label()/get_labels() do not round-trip
+    on this image (proved empirically: a vendor draw_npolyf_res(lbl=True)
+    label is retrievable from neither get_labels() nor a written-and-reread
+    GDS). `top` must be a component YOU created (gf.Component()) and
+    add_ref()'d sub-cells into - a @gf.cell-decorated Component (what
+    draw_nfet()/draw_npolyf_res() themselves return) is locked and raises
+    on any direct shape insert."""
+    import klayout.db as kdb
+
+    if layer is None:
+        layer = GF180_LAYER["metal1_label"]
+    dbu = top.kcl.dbu
+    li = top.kcl.layer(*layer)
+    top.kdb_cell.shapes(li).insert(
+        kdb.Text(text, kdb.Trans(int(round(x / dbu)), int(round(y / dbu)))))
+
+
+def finalize(top, name: str, labels: list[tuple[str, float, float, tuple]]):
+    """Flatten + snap `top` to the 5nm manufacturing grid via the PDK's own
+    pcell_utilities.snap_to_grid - the same function draw_nfet()/
+    draw_npolyf_res() rely on internally, proven clean against the real
+    klayout deck (docs/spikes/glayout.md's failure was gLayout's OWN
+    from-scratch snap, not this one). Needed here because
+    cells.via_generator.via_stack (unlike draw_fet.py/draw_res.py) does NOT
+    snap itself - calling it directly, as gen_r2r_dac.py's metal2 jumper
+    does, produced real *_OFFGRID findings until this was added.
+
+    snap_to_grid only copies POLYGONS (get_polygons(by_spec=True)) and
+    returns a brand new Component - any text label added before calling
+    this would be silently dropped, and a label could not be added to
+    `top` afterward either (it is the same locked, already-generated
+    Component). So every generator builds refs+wires only, then calls
+    this ONCE at the end with its labels, in that order."""
+    import importlib
+
+    pcell_utilities = importlib.import_module("cells.pcell_utilities")
+    snapped = pcell_utilities.snap_to_grid(top, dbu=0.005)
+    snapped.name = name
+    for text, x, y, layer in labels:
+        add_text_label(snapped, text, x, y, layer)
+    return snapped
+
+
+def rect(top, x0: float, y0: float, x1: float, y1: float,
+        layer: tuple[int, int]) -> None:
+    """Add one axis-aligned metal (or other) rectangle directly onto `top`'s
+    own polygon set - the hand-routed wires connecting placed primitive-cell
+    instances (docs/design.md 5: "routing them explicitly, because there is
+    no analog autorouter")."""
+    top.add_polygon([(x0, y0), (x1, y0), (x1, y1), (x0, y1)], layer=layer)
+
+
+# --------------------------------------------------------------------- DRC
+
+def run_klayout_drc(gds_path, topcell: str, out_rdb, timeout: float = 240.0) -> str:
+    deck = pdk_root() / DRC_DECK_REL
+    if not deck.is_file():
+        raise LayoutError(f"no klayout GF180 DRC deck at {deck}")
+    proc = run_eda(
+        ["klayout", "-b", "-r", str(deck),
+         "-rd", f"input={gds_path}", "-rd", f"topcell={topcell}",
+         "-rd", f"report={out_rdb}", "-rd", "run_mode=flat",
+         "-rd", "verbose=false", "-rd", "variant=A",
+         "-rd", f"decks={DRC_DECKS}", "-rd", "threads=2", "-rd", "workers=1"],
+        cwd=Path(out_rdb).parent, timeout=timeout)
+    out = (proc.stdout or "") + (proc.stderr or "")
+    if "DRC RESULT" not in out:
+        raise LayoutError(
+            "klayout DRC did not complete - no 'DRC RESULT' line (no rules "
+            f"loaded/ran is a refusal, never a pass): {out[-2000:]}")
+    if not Path(out_rdb).is_file():
+        raise LayoutError(f"klayout DRC produced no report at {out_rdb}")
+    return out
+
+
+_LAYER_PREFIXES = [
+    ("OFFGRID", "offgrid"),
+    ("CO.", "contact"), ("DF.", "comp"), ("PL.", "poly2"),
+    ("NP.", "nplus"), ("PP.", "pplus"), ("NW.", "nwell"),
+    ("MET1", "metal1"), ("M1.", "metal1"),
+    ("MET2", "metal2"), ("M2.", "metal2"),
+    ("SAB", "sab"), ("RES", "resistor"),
+]
+
+
+def drc_layer_of(category: str) -> str:
+    up = (category or "").upper()
+    if "OFFGRID" in up:
+        return "offgrid"
+    for prefix, layer in _LAYER_PREFIXES:
+        if up.startswith(prefix):
+            return layer
+    return "unknown"
+
+
+def parse_drc_rdb(path) -> list[dict]:
+    """Parse a klayout .lyrdb report database into
+    [{category, description, cell, value}, ...] - one per violation
+    instance. A report with zero <item> entries is a real clean pass, NOT
+    treated as "no rules loaded" here (run_klayout_drc already refused that
+    case by requiring the 'DRC RESULT' banner)."""
+    tree = ET.parse(str(path))
+    root = tree.getroot()
+    cats: dict[str, str] = {}
+    for c in root.iter("category"):
+        name = (c.findtext("name") or "").strip("'")
+        cats[name] = (c.findtext("description") or "").strip()
+    items = []
+    for item in root.iter("item"):
+        cat = (item.findtext("category") or "").strip("'")
+        cell = (item.findtext("cell") or "").strip("'")
+        values = [v.text for v in item.iter("value") if v.text]
+        items.append({
+            "category": cat,
+            "description": cats.get(cat, cat),
+            "cell": cell or None,
+            "value": values[0] if values else None,
+        })
+    return items
+
+
+# --------------------------------------------------------------------- LVS
+
+def run_magic_extract(work_dir, gds_path, topcell: str, *, parasitics: bool,
+                      timeout: float = 180.0) -> tuple[Path, str]:
+    """extract the GDS to SPICE via magic (same recipe docs/spikes/glayout.md
+    proved on the inverter: "extract all; ext2spice"). `parasitics=True`
+    additionally forces R/C extraction (cthresh/rthresh 0) for pex_sim - the
+    LVS gate never needs it and skips it to stay fast."""
+    lines = [
+        f"gds read {gds_path}",
+        f"load {topcell}",
+        "select top cell",
+        "extract all",
+    ]
+    if parasitics:
+        lines += ["extract do all", "extract all",
+                 "ext2spice cthresh 0", "ext2spice rthresh 0"]
+    lines += ["ext2spice lvs", "ext2spice", "quit -noprompt"]
+    tcl = "\n".join(lines) + "\n"
+    proc = run_eda(["magic", "-noconsole", "-dnull"], cwd=work_dir,
+                   timeout=timeout, stdin_text=tcl)
+    out = (proc.stdout or "") + (proc.stderr or "")
+    out_path = Path(work_dir) / f"{topcell}.spice"
+    if not out_path.is_file():
+        raise LayoutError(
+            f"magic extraction produced no {out_path.name} - the run did "
+            f"not complete: {out[-2000:]}")
+    return out_path, out
+
+
+def run_netgen_lvs(work_dir, extracted_spice, extracted_cell: str,
+                   ref_spice, ref_cell: str, out_log,
+                   timeout: float = 120.0) -> tuple[bool, str]:
+    cmd = (f"lvs {{{extracted_spice} {extracted_cell}}} "
+          f"{{{ref_spice} {ref_cell}}} {{}} {out_log}")
+    proc = run_eda(["netgen", "-batch", cmd], cwd=work_dir, timeout=timeout)
+    out = (proc.stdout or "") + (proc.stderr or "")
+    # netgen writes out_log relative to its own cwd (work_dir) - resolve it
+    # there regardless of the caller's own cwd, or a relative `out_log`
+    # would be checked against the wrong directory.
+    log_path = Path(work_dir) / out_log
+    if not log_path.is_file():
+        raise LayoutError(
+            f"netgen LVS produced no log at {out_log} - the run did not "
+            f"complete: {out[-2000:]}")
+    text = log_path.read_text(encoding="utf-8", errors="replace")
+    if not text.strip():
+        raise LayoutError("netgen LVS log is empty - nothing was compared")
+    fail_markers = ("Property errors were found", "do not match",
+                    "Netlists do not match", "uncertain")
+    matched = "Circuits match uniquely" in text
+    failed = any(m in text for m in fail_markers)
+    return (matched and not failed), text
+
+
+# ---------------------------------------------------------------- ngspice
+
+_MEASURE_RE = re.compile(
+    r"^\s*([A-Za-z_][\w.\[\]()]*)\s*=\s*([-+0-9.eE]+)\s*$")
+
+
+def run_ngspice(cir_path, cwd=None, timeout: float = 120.0) -> str:
+    proc = run_eda(["ngspice", "-b", str(cir_path)], cwd=cwd, timeout=timeout)
+    out = (proc.stdout or "") + (proc.stderr or "")
+    if re.search(r"^Error", out, re.MULTILINE) and "measure" not in out.lower():
+        raise LayoutError(f"ngspice reported an error: {out[-2000:]}")
+    return out
+
+
+def parse_ngspice_prints(output: str) -> dict[str, float]:
+    """Parse simple `NAME = VALUE` lines ngspice's `.control ... print ...`
+    (or `.measure`) emits into a name->float map. The last occurrence of a
+    name wins (a re-print after a further .control step is the final
+    value)."""
+    values: dict[str, float] = {}
+    for line in output.splitlines():
+        m = _MEASURE_RE.match(line)
+        if m:
+            try:
+                values[m.group(1).lower()] = float(m.group(2))
+            except ValueError:
+                continue
+    return values

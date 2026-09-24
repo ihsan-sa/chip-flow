@@ -1,0 +1,30 @@
+* pex_sim bench for mirror - typical corner (docs/design.md 1.5's ade
+* pex_sim row). Lives under layout_ref/, not tb/: this bench runs against
+* the magic-extracted, parasitic-annotated netlist of THIS rung's own
+* layout, not against netlist/mirror.cir - M8 (docs/design.md "### M8.")
+* never added one of these, post-layout is entirely M9's own artifact
+* kind. {pdk} and {extracted} are substituted by check_pex_sim.py at run
+* time - {extracted} is the magic-parasitic-extracted netlist of THIS
+* run's GDS, never a path typed by hand.
+*
+* IREF biased from a 20uA reference; IOUT loaded with a resistor to VDD
+* (not an ideal current sink - with these transistor sizes a 1:1 sink
+* attempt drove V(IOUT) negative, an ideal current sink imposes no voltage
+* constraint and has nowhere sane to settle once the mirror's own output
+* current capability doesn't exactly match) so V(IOUT) settles wherever
+* the mirror's actual output current and the load resistor agree.
+.include '{pdk}/libs.tech/ngspice/design.spice'
+.lib '{pdk}/libs.tech/ngspice/sm141064.spice' typical
+.include '{extracted}'
+
+vdd VDD 0 dc 3.3
+iref_src VDD IREF dc 20u
+rload VDD IOUT 20k
+xdut IREF IOUT 0 mirror
+
+.control
+op
+print v(iref)
+print v(iout)
+.endc
+.end
