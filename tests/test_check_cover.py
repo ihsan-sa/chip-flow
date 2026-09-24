@@ -9,6 +9,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[1]
 ENGINE = REPO / "engine"
 SCRIPTS = ENGINE / "scripts"
@@ -83,6 +85,7 @@ def make_ws(tmp_path: Path, rtl_text: str) -> Path:
     return ws
 
 
+@pytest.mark.slow
 def test_full_coverage_passes(tmp_path, capsys):
     ws = make_ws(tmp_path, RTL)
     code = check_cover.main(["--workspace", str(ws)])
@@ -96,6 +99,7 @@ def test_full_coverage_passes(tmp_path, capsys):
     assert not (ws / "tb" / "coverage.dat").exists()
 
 
+@pytest.mark.slow
 def test_unreachable_state_fails_the_threshold(tmp_path, capsys):
     ws = make_ws(tmp_path, RTL_UNREACHABLE)
     code = check_cover.main(["--workspace", str(ws)])
@@ -127,6 +131,30 @@ def test_exclusion_removes_a_point_from_the_denominator():
     assert counts2["line_pct"] == 100.0
     assert counts2["line_total"] == 2  # the excluded line drops out entirely
     assert violations2 == []
+
+
+RTL_SYNTAX_ERROR = """\
+module top (input wire clk, input wire rst, output reg [3:0] count);
+  always @(posedge clk) count <= rst ? 4'd0 : count + 4'd1
+  // missing semicolon above - a real verilator build error, not just a
+  // lint warning.
+endmodule
+"""
+
+
+@pytest.mark.slow
+def test_failed_verilator_build_refuses_cover(tmp_path, capsys):
+    # a build that never produces a coverage binary at all (a genuine
+    # compile error, gates.yaml-adjacent to the launcher-crash cases
+    # elsewhere in this file) must refuse the gate, never silently report
+    # zero/partial coverage.
+    ws = make_ws(tmp_path, RTL_SYNTAX_ERROR)
+    code = check_cover.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 2, out
+    assert out["status"] == "error"
+    assert "coverage run failed" in out["remediation"]
+    assert not (ws / "tb" / "coverage.dat").exists()
 
 
 def test_crashed_coverage_info_launcher_is_an_error(tmp_path, monkeypatch):

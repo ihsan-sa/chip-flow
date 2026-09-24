@@ -147,14 +147,25 @@ def run_coverage(ws: Path, top: str, sources: list[Path]) -> Path:
                         build_dir=str(build_dir), always=True,
                         build_args=["--coverage", "--coverage-line",
                                     "--coverage-toggle"], log_file=log_file)
-            try:
-                runner.test(hdl_toplevel=top, test_module=modules,
-                           test_dir=str(tb_dir), build_dir=str(build_dir),
-                           results_xml=str(ws / "log" / RESULTS_NAME),
-                           log_file=log_file)
-            except SystemExit:
-                pass  # a failing test still writes coverage.dat; sim
-                      # already failed separately via the `sim` gate.
+            # A failing cocotb TEST is never this gate's concern (that is
+            # `sim`'s job) - only coverage is, and coverage.dat is written
+            # regardless of whether the test's own assertions held. No
+            # special handling is needed for that here: proved empirically
+            # that a genuinely-failing test, run the same way gate.py runs
+            # this script for real (a plain subprocess, not nested in
+            # pytest), returns from runner.test() normally with coverage.dat
+            # written - cocotb_tools.runner.test() only ever calls
+            # sys.exit() on a failed test when PYTEST_CURRENT_TEST is set,
+            # which is true only when THIS SCRIPT is itself running nested
+            # inside pytest (i.e. this gate's own test suite), never for a
+            # real run. A previous `except SystemExit: pass` here existed
+            # only to paper over that pytest-only artifact and did nothing
+            # for a real run - removed rather than kept as dead code that
+            # described a production behavior it did not actually have.
+            runner.test(hdl_toplevel=top, test_module=modules,
+                       test_dir=str(tb_dir), build_dir=str(build_dir),
+                       results_xml=str(ws / "log" / RESULTS_NAME),
+                       log_file=log_file)
         except Exception as exc:  # noqa: BLE001 - a build/launcher crash
             raise CheckError(f"cocotb-over-verilator coverage run failed: "
                              f"{type(exc).__name__}: {exc}") from exc
