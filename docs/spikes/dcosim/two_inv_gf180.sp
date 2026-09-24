@@ -17,10 +17,11 @@
 * periodic sync fallback, or the analysis's own declared final tstop) --
 * reproducible on this exact netlist regardless of .ic, confirmed absent
 * under plain batch `ngspice -b` (which never has to land on such a
-* boundary) end to end for the same duration. Worked around, not fixed:
-* run.sh's bench requests enough duration past its own assertions to have
-* margin, and lets the run finish naturally rather than forcing an early
-* halt.
+* boundary) end to end for the same duration. NOT actually worked around:
+* run.sh's own duration_ns=50.0 is itself one of the values that hits this
+* (dcosim.md's "Resolved for M10" section has the honest account, including
+* a 2026-09-24 recheck); run.sh section 3 now fails on the signature
+* instead of reporting a false pass.
 .subckt two_inv in_pin out_pin vdd vss
 xm1 mid    in_pin vss vss nfet_03v3 w=1e-6 l=0.28e-6
 xm2 mid    in_pin vdd vdd pfet_03v3 w=2e-6 l=0.28e-6

@@ -4,10 +4,10 @@
     check_split.py --workspace DIR [--out FILE]
 
 Reads <workspace>/interface.yaml (every crossing signal, with its direction,
-level, domain and width - docs/design.md section 5: "The splitter writes
-interface.yaml, every crossing signal with its direction, level, domain and
-load, and two specs carrying the same entries, and split checks they
-agree") plus the two side specs that must carry the same entries,
+level, domain, width and load - docs/design.md section 5: "The splitter
+writes interface.yaml, every crossing signal with its direction, level,
+domain and load, and two specs carrying the same entries, and split checks
+they agree") plus the two side specs that must carry the same entries,
 <workspace>/digital_spec.yaml and <workspace>/analog_spec.yaml, each an
 `interface:` list of the same shape.
 
@@ -20,8 +20,10 @@ substitution is out of scope here (docs/design.md, "### M10." boundaries).
 
 Passes when every interface.yaml signal appears, by name, in both
 digital_spec.yaml's and analog_spec.yaml's `interface:` lists, with matching
-direction, level, domain and width. Fault this gate must catch (gates.yaml):
-"a control word width that differs between the two".
+direction, level, domain, width and load - every field is required on an
+interface.yaml entry (a name-only entry is refused, not compared None ==
+None against an equally bare side entry). Fault this gate must catch
+(gates.yaml): "a control word width that differs between the two".
 
 CLI/exit contract: checklib's (argparse, JSON to stdout or --out, exit 0
 pass, 1 violations, 2 error with a remediation string).
@@ -43,12 +45,13 @@ import yaml  # noqa: E402
 SCRIPT = "check_split"
 INTERFACE_REL = "interface.yaml"
 SIDE_SPECS = {"digital": "digital_spec.yaml", "analog": "analog_spec.yaml"}
-# The fields a crossing signal carries (docs/design.md section 5). `width`
-# is not named in section 5's prose alongside direction/level/domain, but
-# it is the field gates.yaml's own named fault for this gate turns on ("a
-# control word width that differs between the two"), so it is checked with
-# the same weight as the three the prose does name.
-SIGNAL_FIELDS = ("direction", "level", "domain", "width")
+# The fields a crossing signal carries (docs/design.md section 5: "every
+# crossing signal with its direction, level, domain and load"). `width` is
+# not named in that sentence, but it is the field gates.yaml's own named
+# fault for this gate turns on ("a control word width that differs between
+# the two"), so it is checked and required with the same weight as the four
+# the prose does name.
+SIGNAL_FIELDS = ("direction", "level", "domain", "width", "load")
 
 
 def _load_yaml_mapping(path: Path, what: str) -> dict:
@@ -65,10 +68,13 @@ def _load_yaml_mapping(path: Path, what: str) -> dict:
 
 
 def load_interface(path: Path) -> dict[str, dict]:
-    """{signal_name: {direction, level, domain, width}} from interface.yaml.
-    Duplicate or malformed entries are refused (CheckError) - interface.yaml
-    is the splitter's own output and a malformed one means the split step
-    itself did not finish, not a finding this gate should report."""
+    """{signal_name: {direction, level, domain, width, load}} from
+    interface.yaml. Duplicate, malformed, or incomplete entries are refused
+    (CheckError) - interface.yaml is the splitter's own output and an entry
+    missing one of its required fields (or carrying only a name) means the
+    split step itself did not finish, not a finding this gate should report.
+    Without this, an entry with only a name would compare None == None
+    against a side spec missing the same fields and pass silently."""
     data = _load_yaml_mapping(path, "interface.yaml")
     signals = data.get("signals")
     if not isinstance(signals, list) or not signals:
@@ -82,15 +88,21 @@ def load_interface(path: Path) -> dict[str, dict]:
             raise CheckError(f"{path}: signals[{i}] has no non-empty 'name'")
         if name in out:
             raise CheckError(f"{path}: signal {name!r} appears more than once")
+        missing = [f for f in SIGNAL_FIELDS if sig.get(f) is None]
+        if missing:
+            raise CheckError(
+                f"{path}: signal {name!r} is missing {', '.join(missing)}")
         out[name] = {k: sig.get(k) for k in SIGNAL_FIELDS}
     return out
 
 
 def load_side_interface(path: Path, side: str) -> dict[str, dict]:
-    """{signal_name: {direction, level, domain, width}} from a side spec's
-    own `interface:` list - same shape as interface.yaml's, read leniently
-    (a side spec missing the whole section is a finding, not a refusal: the
-    splitter may not have reached that side yet)."""
+    """{signal_name: {direction, level, domain, width, load}} from a side
+    spec's own `interface:` list - same shape as interface.yaml's, read
+    leniently (a side spec missing the whole section, or an entry missing a
+    field, is a finding - a mismatch against interface.yaml's now-required
+    fields - not a refusal: the splitter may not have reached that side
+    yet)."""
     if not path.is_file():
         return {}
     data = _load_yaml_mapping(path, f"{side} spec")

@@ -68,10 +68,20 @@ async def test_ring_osc_div(dut):
         divided_freq_hz = (
             1.0e9 / (sum(periods) / len(periods)) if len(periods) >= 2 else None
         )
+        # bridge._last_sync_spice_time is cocotbext-ams's own record of the
+        # absolute SPICE time its last real sync point reached - it only
+        # advances from the analog side's own ngspice thread, through the
+        # same sync callback that drives clk_div's edges above, so it is
+        # evidence the analog bridge actually ran that far, not just that
+        # the digital side toggled (check_cosim.py requires it cover the
+        # last edge in edge_times_ns - a Python-only toggle with no real
+        # analog side behind it would report 0 here and fail that check).
+        spice_time_reached_ns = bridge._last_sync_spice_time * 1e9
         measures = {
             "divided_freq_hz": divided_freq_hz,
             "digital_toggles": len(edges_ns),
             "edge_times_ns": edges_ns,
+            "spice_time_reached_ns": spice_time_reached_ns,
         }
         reports_dir = HERE.parent / "reports"
         reports_dir.mkdir(parents=True, exist_ok=True)

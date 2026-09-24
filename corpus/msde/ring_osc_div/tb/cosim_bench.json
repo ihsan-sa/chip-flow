@@ -1,4 +1,6 @@
 {
   "top": "ring_osc_div_top",
-  "bounds": "ring_osc_div.bounds.json"
+  "bounds": "ring_osc_div.bounds.json",
+  "analog_netlist": "ring5.sp",
+  "analog_kind": "ideal"
 }

@@ -10,8 +10,10 @@ interface:
     level: cmos_3v3
     domain: clk_free
     width: 1
+    load: "digital counter clock input"
   - name: osc_en
     direction: d2a
     level: cmos_3v3
     domain: clk_sys
     width: 1
+    load: "oscillator power-down enable"
