@@ -654,6 +654,36 @@ class State:
     def _workspace(self) -> Path:
         return Path(self.data["workspace"])
 
+    def _default_snapshot_rels(self, ws: Path) -> list[str]:
+        """Every registered artifact's own file(s) - a FILE artifact as
+        itself, a DIRECTORY artifact (rtl/, tb/, formal/, holdout/, ...)
+        expanded to every file it actually contains.
+
+        M5, found by actually running the fix loop for real: this used to
+        be `is_file()`-only, which is true for exactly ZERO of /vde's own
+        design artifacts (rtl/tb/formal/holdout/harden/layout are all
+        directory-kind, docs/design.md 1.4/1.6) - a `state.py snapshot`
+        with no explicit --files silently protected NOTHING for precisely
+        the artifact classes (rtl_edit/tb_edit/formal_edit) the fix loop's
+        own rollback step exists to protect. Same __pycache__/.pyc/.pyo
+        exclusion as statelib's own dir_text hashing (a cocotb import's
+        bytecode cache is not part of the design and must never count as
+        something a restore should bring back)."""
+        rels: list[str] = []
+        for a in self.data["artifacts"].values():
+            if not isinstance(a, dict) or not a.get("path"):
+                continue
+            p = ws / a["path"]
+            if p.is_file():
+                rels.append(a["path"])
+            elif p.is_dir():
+                rels.extend(
+                    f.relative_to(ws).as_posix()
+                    for f in sorted(p.rglob("*"))
+                    if f.is_file() and "__pycache__" not in f.parts
+                    and f.suffix not in (".pyc", ".pyo"))
+        return rels
+
     def snapshot(self, label: str, files: list[str] | None = None) -> dict:
         """Contained copy of workspace files into state_snapshots/<label>.
         Every entry is proven inside the workspace (no absolute/traversal/
@@ -661,9 +691,7 @@ class State:
         ws = self._workspace()
         label = _check_label(label)
         dest = _snapshot_dir(ws, label)
-        rels = files or [a["path"] for a in self.data["artifacts"].values()
-                         if isinstance(a, dict) and a.get("path")
-                         and (ws / a["path"]).is_file()]
+        rels = files or self._default_snapshot_rels(ws)
         plan = []
         for rel in rels:
             rel_norm = str(rel).replace("\\", "/")
@@ -772,8 +800,14 @@ class State:
             if gates.get(g, {}).get("status") != "pass":
                 next_gate = {"phase": ph, "gate": g}
                 break
+        # "escalated" belongs here too (M5, found running the fix loop for
+        # real): it is the fix loop's OWN outcome for a finding that cannot
+        # be closed by looping again (docs/design.md, "Escalate: ... a
+        # human decides") - the single most important thing for a resumed
+        # session to see, not less. Only "fixed"/"waived" are genuinely
+        # closed and belong out of this list.
         open_issues = [i for i in self.data["open_issues"]
-                       if i["status"] in ("open", "fixing")]
+                       if i["status"] in ("open", "fixing", "escalated")]
         running_jobs = [jid for jid, j in self.data["jobs"].items()
                         if j.get("status") == "running"]
         last = self.data["history"][-1] if self.data["history"] else None
