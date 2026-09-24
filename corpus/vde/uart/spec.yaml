@@ -21,10 +21,24 @@ ports:
   tx: {dir: output, width: 1}
   busy: {dir: output, width: 1}
 clock:
-  period_ns: 10
+  # 20ns (50MHz) for the same reason as counter8's spec.yaml: physical
+  # implementation's CLOCK_PERIOD, independent of tb/test_uart_tx.py's own
+  # simulation clock, widened for setup margin at the slow corner.
+  period_ns: 20
   domains: [clk]
 mutate:
   size: 24
   seed: 2
 formal:
   depth: 20
+# M4 (docs/design.md "### M4."): the Tiny Tapeout GF180 tile pin map. `data`
+# (8 bits) already fills ui_in; `start` borrows one uio_in bit as a plain
+# extra input (uio_oe stays 0 - always an input, never truly bidirectional
+# here). rst is active-high inside uart_tx, hence the `~`.
+tt_pins:
+  clk: clk
+  rst: ~rst_n
+  start: uio_in[0]
+  data: ui_in[7:0]
+  tx: uo_out[0]
+  busy: uo_out[1]

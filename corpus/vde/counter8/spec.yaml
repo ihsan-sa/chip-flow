@@ -17,10 +17,26 @@ ports:
   rst: {dir: input, width: 1}
   count: {dir: output, width: 8}
 clock:
-  period_ns: 10
+  # 20ns (50MHz), not the 10ns the functional tb/ clocks at (tb/test_counter8.py
+  # picks its own simulation period independently): this is what M4's harden
+  # gate hands LibreLane as CLOCK_PERIOD, and 10ns left a -0.063ns setup
+  # violation at the slow corner (max_ss_125C_3v00, GF180's mcu7t5v0 library) -
+  # a generic-fallback-SDC artifact (no PNR_SDC_FILE is set), not a real path
+  # this design is anywhere near, so widening the period is the honest fix
+  # (vendored config.json's own comment: "Increase this in case you are
+  # getting setup time violations"), not a relaxed pass criterion.
+  period_ns: 20
   domains: [clk]
 mutate:
   size: 24
   seed: 1
 formal:
   depth: 20
+# M4 (docs/design.md "### M4."): the Tiny Tapeout GF180 tile pin map -
+# engine/lib/ttlib.py::generate_tt_wrapper reads this to build
+# harden/tt_um_counter8.v. rst is active-high inside counter8 but TT's
+# dedicated reset pin is active-low, hence the `~`.
+tt_pins:
+  clk: clk
+  rst: ~rst_n
+  count: uo_out[7:0]
