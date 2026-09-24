@@ -43,8 +43,7 @@ gates:
   vde:
     spec_lint:
       phase: P1
-      tool: stub
-      future_tool: speclib
+      tool: spec_lint
       fail_severities: [error]
       max_count: 0
       fault: "a requirement with no way to check it"
@@ -53,16 +52,14 @@ gates:
         bounds; tt_pins fit the tile.
     lint:
       phase: P4
-      tool: stub
-      future_tool: "verilator --lint-only -Wall"
+      tool: lint
       fail_severities: [error]
       max_count: 0
       fault: "an always @* missing an else (latch)"
       description: "No errors; warnings only from an allowlist with reasons."
     sim:
       phase: P4
-      tool: stub
-      future_tool: "cocotb 2 on Icarus"
+      tool: sim
       fail_severities: [error]
       max_count: 0
       fault: "counter wraps one early"
@@ -70,8 +67,7 @@ gates:
         Every test passes and every requirement id has a test tagged with it.
     holdout:
       phase: P4
-      tool: stub
-      future_tool: "cocotb on holdout/"
+      tool: holdout
       fail_severities: [error]
       max_count: 0
       fault: "UART parity inverted where the visible tests do not look"
@@ -79,8 +75,7 @@ gates:
         Every held-out test passes; the result names requirement ids only.
     mutate:
       phase: P4
-      tool: stub
-      future_tool: "yosys mutate via mcy, fixed seed, N mutants"
+      tool: mutate
       fail_severities: [error]
       max_count: 0
       fault: "a testbench that asserts nothing"

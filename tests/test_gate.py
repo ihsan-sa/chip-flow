@@ -113,8 +113,11 @@ def test_evaluate_pass_and_fail_thresholds():
 # ------------------------------------------------------------------ stub
 
 def test_stub_gate_is_always_exit_2(tmp_path, capsys):
+    # `lint` (M2) is a real gate now - `formal` is still an M1 stub
+    # (docs/design.md "### M3."), so it is what still proves this row's
+    # own point: a gate whose tool is not built is exit 2, never a pass.
     ws = make_ws(tmp_path)
-    code = gate.main(["--gate", "lint", "--workspace", str(ws)])
+    code = gate.main(["--gate", "formal", "--workspace", str(ws)])
     assert code == 2
     out = json.loads(capsys.readouterr().out)
     assert out["status"] == "error"
