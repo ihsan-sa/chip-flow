@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chip-flow/engine/reference/checks.schema.json",
+  "title": "reports/checks.json - the release record (docs/design.md 1.5's `release` row, section 2, \"### M3.\")",
+  "description": "Written by engine/scripts/attest.py's build() (engine/scripts/check_release.py wraps it as the `release` gate). One entry per gate that applies to the block's skill, whether it ran, passed, or was waived.",
+  "type": "object",
+  "required": ["skill", "block", "ts", "checks", "attestation_sha256"],
+  "additionalProperties": false,
+  "properties": {
+    "skill": {"type": "string", "enum": ["vde", "ade", "msde"]},
+    "block": {"type": ["string", "null"]},
+    "ts": {"type": "string"},
+    "attestation_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "sha256 of this document's own body (every field but this one), sorted-key JSON - attest.verify()'s tamper check."
+    },
+    "checks": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/check"}
+    }
+  },
+  "$defs": {
+    "check": {
+      "type": "object",
+      "required": ["gate", "applies", "ran"],
+      "additionalProperties": false,
+      "properties": {
+        "gate": {"type": "string", "minLength": 1},
+        "applies": {
+          "type": "boolean",
+          "const": true,
+          "description": "always true here - a gate that does not apply is simply absent from the list (attest.applicable_gates), never a false entry."
+        },
+        "ran": {"type": "boolean"},
+        "reason": {
+          "type": ["string", "null"],
+          "description": "why a gate has no recorded result, or why `ok` is false - null/absent on an ok, ran check."
+        },
+        "ok": {"type": "boolean"},
+        "status": {"type": ["string", "null"], "enum": ["pass", "fail", null]},
+        "attempts": {"type": ["integer", "null"], "minimum": 0},
+        "ts": {"type": ["string", "null"]},
+        "inputs": {
+          "type": ["object", "null"],
+          "description": "{artifact kind: normalized hash} this gate's last recorded pass read - the durability binding a waiver (attest.waiver_problems) checks against.",
+          "additionalProperties": {"type": ["string", "null"]}
+        },
+        "waived": {
+          "type": "boolean",
+          "description": "true only when a durable waiver covers this otherwise-not-ok gate; absent or false otherwise."
+        },
+        "waiver": {
+          "type": "object",
+          "required": ["reason", "approved_by"],
+          "additionalProperties": false,
+          "properties": {
+            "reason": {"type": "string", "minLength": 1},
+            "approved_by": {"type": "string", "minLength": 1}
+          }
+        }
+      }
+    }
+  }
+}

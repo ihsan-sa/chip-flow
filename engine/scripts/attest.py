@@ -11,9 +11,14 @@ board's fab/order concepts don't port. What attest.py owns is the part that
 does: walk every gate gates.yaml registers for the block's skill, check each
 has a recorded pass whose input hashes match the files now (statelib
 freshness), and write reports/checks.json - gate, tool, result, inputs,
-timestamp. M1's gates are all stubs, so build() always refuses here; M3
-("### M3.") is where a real release can happen, and where the waiver/
-durability machinery /hwde's releaselib carried lands.
+timestamp. M1's gates were all stubs, so build() always refused; M3 ("###
+M3.") is where a real release can happen, and where a scoped-down waiver/
+durability mechanism lands (load_waivers/waiver_problems below) - scoped
+down because a board's fab/order concepts (/hwde releaselib's durable-waiver
+required fields beyond reason+approved, its manufacturing-option waivers)
+don't port, but the CORE idea does: a waiver binds to the gate's own last
+recorded input hashes and to checklib.CHECKER_VERSION, so an artifact edit
+or a checker semantics bump invalidates it and it must be re-approved.
 
 Subcommands:
   build        Assemble + write reports/checks.json. Refuses (status
@@ -53,23 +58,98 @@ import statelib  # noqa: E402
 
 SCRIPT = "attest"
 CHECKS_PATH = "reports/checks.json"
+WAIVERS_PATH = "reports/waivers.json"
+# a waiver missing any of these is not durable - never applied, always a
+# problem attest.py's own build() surfaces (docs/design.md 1.5's release
+# row: "waivers carry reason, approval and durability").
+REQUIRED_WAIVER_FIELDS = ("reason", "approved_by", "inputs_sha256")
 
 
 def _now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S")
 
 
+def load_waivers(ws: Path) -> list[dict]:
+    """The block's own reports/waivers.json - a JSON list, absent by
+    default (no file = no waivers, not an error)."""
+    path = ws / WAIVERS_PATH
+    if not path.is_file():
+        return []
+    data = checklib.load_json(path, "waivers.json")
+    if not isinstance(data, list):
+        raise ValueError(f"{path} must be a JSON list of waivers")
+    return data
+
+
+def waiver_inputs_sha256(entry: dict) -> str | None:
+    """The durability binding: a canonical hash of the gate's own last
+    RECORDED input hashes (state.json's gates.<g>.last.inputs, the same map
+    gate.py's record_gate stamped in) - not the gate's current inputs. A
+    waiver approved against yesterday's inputs says nothing about today's;
+    it is invalidated the moment record_gate's own hashes move, same as any
+    other gate result would be."""
+    inputs = (entry.get("last") or {}).get("inputs")
+    if not isinstance(inputs, dict) or not inputs:
+        return None
+    return hashlib.sha256(
+        json.dumps(inputs, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def waiver_problems(w: dict, gate: str, entry: dict) -> list[str]:
+    """Durability problems for one candidate waiver against the gate entry
+    it claims to cover - every one raises the release refusal, none of them
+    silently drop the waiver back to "no waiver" (a malformed or stale
+    waiver is worse than none: it looks like cover for a gate nobody
+    actually re-approved)."""
+    label = f"{gate}"
+    missing = [f for f in REQUIRED_WAIVER_FIELDS if not w.get(f)]
+    if missing:
+        return [f"waiver [{label}]: not durable - missing "
+                f"{'/'.join(missing)} (a release waiver must bind reason, "
+                "approval and the gate's own input hashes)"]
+    problems = []
+    current = waiver_inputs_sha256(entry)
+    if current is None:
+        problems.append(f"waiver [{label}]: the gate has no recorded input "
+                        "hashes to bind against - nothing durable to waive")
+    elif w["inputs_sha256"] != current:
+        problems.append(f"waiver [{label}]: approved against different "
+                        "inputs than the gate's own last recorded run - "
+                        "re-approve under the current inputs")
+    checker_version = w.get("checker_version")
+    if checker_version != checklib.CHECKER_VERSION:
+        problems.append(f"waiver [{label}]: approved under checker_version "
+                        f"{checker_version!r}, current is "
+                        f"{checklib.CHECKER_VERSION} - re-approve")
+    expires = w.get("expires")
+    if expires:
+        from datetime import datetime, timezone
+        try:
+            exp = datetime.fromisoformat(str(expires))
+        except (TypeError, ValueError):
+            problems.append(f"waiver [{label}]: unparsable expires {expires!r}")
+        else:
+            if exp.tzinfo is None:
+                exp = exp.replace(tzinfo=timezone.utc)
+            if datetime.now(timezone.utc) > exp:
+                problems.append(f"waiver [{label}]: expired {expires}")
+    return problems
+
+
 def applicable_gates(skill: str, imap: dict | None = None) -> list[str]:
-    """Every gate this skill owes - M1 has no not-applicable declarations
-    (that is /hwde's constraints.json verification.not_applicable, which
-    needs the waiver machinery M3 ports), so every gates.yaml row for the
-    skill applies."""
+    """Every gate this skill owes - every gates.yaml row for the skill
+    applies, unconditionally (no /hwde-style constraints.json
+    verification.not_applicable list here: a gate a later milestone has not
+    built yet is not "not applicable", it is simply not fresh-passed, and
+    build() below refuses on it like any other unbuilt/unrun gate - the one
+    way past that for a SPECIFIC, reviewed exception is a durable waiver,
+    never a blanket applicability carve-out)."""
     imap = imap or statelib.load_map()
     return sorted((imap["gate_inputs"].get(skill) or {}))
 
 
 def gate_check(ws: Path, skill: str, gate: str, data: dict,
-              imap: dict, fresh: dict) -> dict:
+              imap: dict, fresh: dict, waivers: list[dict] | None = None) -> dict:
     entry = (data.get("gates") or {}).get(gate)
     if entry is None or not entry.get("status"):
         return {"gate": gate, "applies": True, "ran": False,
@@ -87,12 +167,31 @@ def gate_check(ws: Path, skill: str, gate: str, data: dict,
             reason = "freshness unknown (no recorded input hashes)"
         else:
             reason = "stale: marked by a later edit"
-    return {"gate": gate, "applies": True, "ran": True, "ok": bool(ok),
-            "status": entry.get("status"),
-            "attempts": entry.get("attempts"),
-            "ts": (entry.get("last") or {}).get("ts"),
-            "inputs": (entry.get("last") or {}).get("inputs"),
-            "reason": reason}
+    result = {"gate": gate, "applies": True, "ran": True, "ok": bool(ok),
+             "status": entry.get("status"),
+             "attempts": entry.get("attempts"),
+             "ts": (entry.get("last") or {}).get("ts"),
+             "inputs": (entry.get("last") or {}).get("inputs"),
+             "reason": reason}
+    if ok:
+        return result
+    # A waiver only ever COVERS a gate that is not itself ok - one on an
+    # already-passing gate is inert, never surfaced as a problem (a stale
+    # leftover approval for a gate that has since genuinely passed on its
+    # own is not this release's concern).
+    for w in waivers or []:
+        if w.get("gate") != gate:
+            continue
+        problems = waiver_problems(w, gate, entry)
+        if problems:
+            result["waiver_problems"] = problems
+            continue
+        result["ok"] = True
+        result["waived"] = True
+        result["waiver"] = {"reason": w["reason"], "approved_by": w["approved_by"]}
+        result.pop("waiver_problems", None)
+        return result
+    return result
 
 
 def build(ws: Path, max_report_age_h: float = 24.0) -> tuple[dict | None, list[str]]:
@@ -103,9 +202,18 @@ def build(ws: Path, max_report_age_h: float = 24.0) -> tuple[dict | None, list[s
         return None, ["state.json has no 'skill'"]
     imap = statelib.load_map()
     fresh = statelib.freshness_report(data, ws, imap)
-    checks = [gate_check(ws, skill, g, data, imap, fresh)
+    try:
+        waivers = load_waivers(ws)
+    except ValueError as exc:
+        return None, [str(exc)]
+    checks = [gate_check(ws, skill, g, data, imap, fresh, waivers)
              for g in applicable_gates(skill, imap)]
-    problems = [f"{c['gate']}: {c['reason']}" for c in checks if not c.get("ok")]
+    problems = []
+    for c in checks:
+        if c.get("ok"):
+            continue
+        problems.append(f"{c['gate']}: {c['reason']}")
+        problems.extend(c.get("waiver_problems") or [])
     open_issues = [i for i in data.get("open_issues", [])
                    if i.get("status") in ("open", "fixing")]
     if open_issues:

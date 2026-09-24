@@ -413,6 +413,15 @@ EOF
 
 # verilator_entry -- build the bin/share mirror described in the header and
 # print the path of the copied `verilator` driver script to exec.
+#
+# `cover` (docs/design.md 1.5, "### M3.") is the first thing in this repo to
+# need verilator_coverage - a SEPARATE perl driver from `verilator` itself,
+# same shape (a perl script that locates its own real binary,
+# verilator_coverage_bin_dbg, via $RealBin - FindBin - next to itself), not
+# just a flag to the `verilator` driver. Mirrored into this same vroot/bin/
+# for the same reason verilator_bin/verilator_bin_dbg are: whichever driver
+# script actually runs must find its sibling real binary via $RealBin
+# sitting right next to it, not in $T's read-only tree.
 verilator_entry() {
   local vroot="$SHIM/.verilator-root"
   mkdir -p "$vroot/bin"
@@ -420,6 +429,9 @@ verilator_entry() {
   chmod +x "$vroot/bin/verilator"
   wrap_at "$vroot/bin/verilator_bin" "$T/foss/tools/verilator/bin/verilator_bin"
   wrap_at "$vroot/bin/verilator_bin_dbg" "$T/foss/tools/verilator/bin/verilator_bin_dbg"
+  cp "$T/foss/tools/verilator/bin/verilator_coverage" "$vroot/bin/verilator_coverage"
+  chmod +x "$vroot/bin/verilator_coverage"
+  wrap_at "$vroot/bin/verilator_coverage_bin_dbg" "$T/foss/tools/verilator/bin/verilator_coverage_bin_dbg"
   ln -sfn "$T/foss/tools/verilator/share" "$vroot/share"
   [ -d "$T/foss/tools/verilator/include" ] && ln -sfn "$T/foss/tools/verilator/include" "$vroot/include"
   echo "$vroot/bin/verilator"
@@ -517,7 +529,17 @@ case "$TOOL" in
     ;;
 
   verilator|verilator_coverage|verilator_gantt)
-    entry="$SHIM/.verilator-root/bin/verilator"
+    # verilator_coverage is its own perl driver (verilator_entry's own
+    # comment) - always execing the `verilator` entry here for it used to
+    # hand verilator_coverage's own args (e.g. `--write-info`) to the
+    # COMPILER driver instead, which rejects them as unknown options.
+    # verilator_gantt has no dbg-binary sibling of its own to mirror (it is
+    # a plain python script - see verilator_entry) so it still runs via the
+    # `verilator` entry's PATH/VERILATOR_ROOT setup, unchanged.
+    case "$TOOL" in
+      verilator_coverage) entry="$SHIM/.verilator-root/bin/verilator_coverage" ;;
+      *) entry="$SHIM/.verilator-root/bin/verilator" ;;
+    esac
     export PATH="$SHIM:$SHIM/.verilator-root/bin:$PATH"
     export VERILATOR_ROOT="$T/foss/tools/verilator/share/verilator"
     exec "$entry" "$@"
@@ -541,7 +563,18 @@ case "$TOOL" in
     ;;
 
   # ---- cocotb / python -----------------------------------------------------
+  # `cover` (docs/design.md 1.5, "### M3.") drives cocotb over the VERILATOR
+  # simulator, not Icarus - cocotb_tools.runner.get_runner("verilator")
+  # resolves "verilator" with a bare PATH lookup from inside this very
+  # python process, the same way LibreLane's own flow does (the `librelane`
+  # case below carries the identical two exports) - without them the
+  # verilator driver script (only ever mirrored into $SHIM/.verilator-root,
+  # never $SHIM itself - see verilator_entry's comment) is not on PATH and
+  # "verilator executable not found" fails before a single line of the
+  # script runs.
   python3|python)
+    export PATH="$SHIM:$SHIM/.verilator-root/bin:$PATH"
+    export VERILATOR_ROOT="$T/foss/tools/verilator/share/verilator"
     run_py "$@"
     ;;
 

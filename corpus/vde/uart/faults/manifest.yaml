@@ -18,6 +18,19 @@ faults:
     gate: holdout
     plant: plant_holdout.py
     expect: {status: fail, kind: holdout_failed}
+  # --- M3 (docs/design.md "### M3.") --------------------------------------
+  - name: formal_register_with_no_reset
+    gate: formal
+    plant: plant_formal.py
+    expect: {status: fail, kind: property_failed}
+  - name: cover_unreachable_state
+    gate: cover
+    plant: plant_cover.py
+    expect: {status: fail, kind: line_coverage_below_threshold}
+  - name: synth_combinational_loop
+    gate: synth
+    plant: plant_synth.py
+    expect: {status: fail, kind: combinational_loop}
 
 # `mutate` is NOT exercised on this rung. The untouched reference's own
 # kill rate tops out around 0.65-0.74 (checked across seeds 1-42, sizes

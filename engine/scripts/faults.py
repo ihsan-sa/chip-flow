@@ -47,7 +47,7 @@ from checklib import CheckError  # noqa: E402
 SCRIPT = "faults"
 CORPUS = REPO / "corpus"
 DEFAULT_GATES = ENGINE / "reference" / "gates.yaml"
-COPY_SUBDIRS = ("rtl", "netlist", "tb", "holdout")
+COPY_SUBDIRS = ("rtl", "netlist", "tb", "holdout", "formal")  # formal: M3
 
 
 def load_manifest(rung_dir: Path) -> dict:

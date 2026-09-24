@@ -103,6 +103,28 @@ def test_measure_requirement_needs_bounds():
     assert speclib.lint_spec(spec2) == []
 
 
+def test_formal_requirement_needs_a_property_label():
+    # M3 (docs/design.md "### M3."): check_formal.py joins a requirement to
+    # its assert/cover in formal/*.sv by this label, never by a text search.
+    spec = {**GOOD_SPEC, "requirements": [
+        {"id": "REQ-F", "text": "reset proven", "check": "formal"},
+    ]}
+    kinds = {v["kind"] for v in speclib.lint_spec(spec)}
+    assert "requirement_formal_no_property" in kinds
+
+    spec2 = {**GOOD_SPEC, "requirements": [
+        {"id": "REQ-F", "text": "reset proven", "check": "formal",
+         "property": "REQ_F"},
+    ]}
+    assert speclib.lint_spec(spec2) == []
+
+    spec3 = {**GOOD_SPEC, "requirements": [
+        {"id": "REQ-B", "text": "both", "check": "both"},
+    ]}
+    kinds3 = {v["kind"] for v in speclib.lint_spec(spec3)}
+    assert "requirement_formal_no_property" in kinds3
+
+
 def test_tt_pins_must_be_a_non_empty_mapping_when_present():
     spec = {**GOOD_SPEC, "tt_pins": {}}
     kinds = {v["kind"] for v in speclib.lint_spec(spec)}
