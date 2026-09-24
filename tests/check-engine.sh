@@ -26,4 +26,6 @@ eda_bin() {
 
 EDA_BIN="$(eda_bin)"
 cd "$REPO_ROOT"
-exec timeout 120 "$EDA_BIN" python -m pytest tests/ -q
+# The cap catches a hang, not a slow box: the suite runs real tools and
+# passed 120 s under load (uptime 20-30 on 6 cores).
+exec timeout 600 "$EDA_BIN" python -m pytest tests/ -q
