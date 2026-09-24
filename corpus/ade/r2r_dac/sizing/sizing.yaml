@@ -1,0 +1,15 @@
+# sizing.yaml (docs/design.md section 4, "### M8.") - this rung's OWN
+# deliberately wrong starting point: a 1:1 R:2R ratio (netlist/r2r_dac.cir's
+# own subckt defaults match this exactly, so a bare run with no override at
+# all lands on the same wrong state). `optimise.py numeric` against this
+# file is what corrects the ratio to 2:1 - see that file's own docstring
+# and netlist/r2r_dac.cir's comment on why sim_tt is not in this rung's own
+# faults/manifest.yaml.
+r_unit:
+  value: 1.0e4
+  min: 1.0e3
+  max: 1.0e5
+r2_unit:
+  value: 1.0e4
+  min: 1.0e3
+  max: 1.0e5

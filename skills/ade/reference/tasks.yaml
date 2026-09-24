@@ -1,0 +1,164 @@
+# tasks.yaml - /ade's own verb table (docs/design.md 1.8, "### M8."). Merged
+# with engine/reference/tasks.yaml's shared verbs (task_router.py:
+# load_tasks) - this file's own entries win on a name collision. Mirrors
+# skills/vde/reference/tasks.yaml's own shape exactly (M2's file): `doc:
+# null` on every row (the recipe markdown under skills/ade/reference/
+# recipes/ is skill/M9+ work, same as vde's own recipes); `layout` (design.md
+# 1.8's fourth /ade verb) is NOT here yet - it needs layout_gen.py and the
+# layout-writer role, both M9 ("### M9.").
+
+version: 1
+verbs:
+
+  # -------------------------------------------------------------------------
+  spec:
+    summary: Write or refresh a block's spec.yaml/spec.md - supply, devices,
+      corners and measure bounds - then lint it before anything downstream
+      trusts it.
+    doc: null
+    workspace: required
+    edit_class: spec_edit
+    preconditions: [workspace]
+    match:
+      any: ['\bspec\b', '\bwrite (the |a )?spec\b', '\bbounds?\b.*\bmeasure',
+            '\bdeclare (the )?devices\b', '\bsupply (rail|voltage)\b']
+    steps:
+      - do: "scripts/state.py resume --workspace {ws}"
+        why: "confirm phase before touching spec.yaml"
+      - agent: spec-writer
+        tier: opus/high
+        why: "writes spec.yaml's supply/devices/corners/measures and the
+              matching spec.md prose (docs/design.md section 5: the
+              analog-designer reads this, not the other way around)"
+      - do: "scripts/state.py edit --workspace {ws} --class spec_edit --note \"spec\""
+        why: "declare the edit - invalidation.yaml marks every ade gate
+              stale from a spec_edit (docs/design.md 1.6)"
+      - gate: spec_lint
+        why: "every measure has bounds and a corner set, supply and devices
+              declared (gates.yaml's own words for this row) before any
+              sim gate is worth running at all"
+
+  # -------------------------------------------------------------------------
+  resize:
+    summary: Change a block's sizing (sizing/sizing.yaml, or a netlist
+      device's W/L/value directly) and re-run the sim gates that sizing
+      feeds - never just sim_tt alone, since a fix at typical can lose
+      headroom at a corner sim_tt never looks at.
+    doc: null
+    workspace: required
+    edit_class: sizing_edit
+    preconditions: [workspace]
+    match:
+      any: ['\bresiz', '\bchange (the )?(w|l|width|length|size)\b',
+            '\bsizing\b', '\badjust (the )?(sizing|device)\b',
+            '\bbias current\b']
+    args:
+      device:
+        kind: text
+        required: false
+        extract: none
+        question: "Which device (spec.yaml 'devices' refdes) is being resized?"
+    steps:
+      - do: "scripts/state.py resume --workspace {ws}"
+        why: "confirm which sim gates are already fresh before spending the
+              time a full PVT sweep takes"
+      - agent: analog-designer
+        tier: opus/high
+        why: "the sizing edit itself - one work order, allowed files listed
+              (netlist/ or sizing/sizing.yaml only, never tb/'s bounds)"
+      - do: "scripts/state.py edit --workspace {ws} --class sizing_edit --note \"resize {device}\""
+        why: "invalidation.yaml's sizing_edit marks sim_tt, sim_pvt,
+              bench_strength, mc, lvs, pex_sim and release stale"
+      - gate: sim_tt
+        why: "the cheap check first - typical corner only"
+      - gate: sim_pvt
+        why: "the fault this milestone names is exactly 'meets at typical,
+              loses headroom at slow and hot' - sim_tt alone would miss it"
+      - gate: bench_strength
+        why: "a resize that widens margin by widening the BENCH's own
+              bounds instead of the design is what this gate exists to
+              catch (docs/design.md section 2)"
+
+  # -------------------------------------------------------------------------
+  add-corner:
+    summary: Add a PVT corner to a block's own spec.yaml `corners` list
+      (from engine/reference/corners.yaml's raw axes, via corners.py) and
+      re-run sim_pvt against the widened set.
+    doc: null
+    workspace: required
+    edit_class: spec_edit
+    preconditions: [workspace]
+    args:
+      corner:
+        kind: text
+        required: true
+        extract: none
+        question: "Which corner (a corners.py default_corners name, or a
+                   fresh process/temp/supply point to register there
+                   first)?"
+    match:
+      any: ['\badd (a |another )?corner\b', '\bnew corner\b',
+            '\bpvt corner\b', '\bcorner (set|sweep)\b']
+    steps:
+      - do: "scripts/corners.py --names {corner}"
+        why: "confirm the corner is real (a default_corners name) before
+              writing it into a spec no one has run yet"
+      - do: "scripts/state.py edit --workspace {ws} --class spec_edit --note \"add-corner {corner}\""
+        why: "corners.yaml itself is a shared reference file, never edited
+              per block - only THIS block's spec.yaml `corners` list
+              changes, which is a spec_edit (docs/design.md 1.6)"
+      - gate: spec_lint
+        why: "spec.yaml's own corners field must still validate"
+      - gate: sim_pvt
+        why: "score every measure at every corner in the widened set -
+              design.md 5: 'the default is the four extremes with typical,
+              never fewer', and this verb is how a spec asks for more"
+
+  # -------------------------------------------------------------------------
+  optimise:
+    summary: Run the sizing optimise loop (docs/design.md section 4) against
+      sizing/sizing.yaml - a fixed-budget evaluator (the spec bench at
+      typical, every K-th trial and the winner at the full corner set) an
+      agent or `optimise.py numeric` cannot edit, kept only if the score
+      improved.
+    doc: null
+    workspace: required
+    edit_class: sizing_edit
+    preconditions: [workspace]
+    args:
+      target:
+        kind: path
+        required: false
+        extract: none
+        question: "Which sizing.yaml (default: sizing/sizing.yaml)?"
+      objective:
+        kind: text
+        required: false
+        extract: none
+        question: "power at the spec-meeting point, or the smallest margin
+                   across measures (docs/design.md section 4)?"
+    match:
+      any: ['\boptimi[sz]e\b', '\bnumeric search\b', '\bdifferential
+            evolution\b', '\btune (the )?sizing\b', '\bsizing loop\b']
+    steps:
+      - do: "scripts/state.py resume --workspace {ws}"
+        why: "confirm sim_tt/sim_pvt/bench_strength are fresh before
+              freezing an evaluator against them"
+      - do: "scripts/optimise.py start --workspace {ws} --target {target} --objective {objective}"
+        why: "freezes the evaluator (the bench, its bounds, the corner set)
+              and hashes it - docs/design.md section 4's own words"
+      - do: "scripts/optimise.py numeric --workspace {ws}"
+        why: "scipy differential evolution over sizing.yaml's own bounds -
+              'does most of the work once the topology is right' (docs/
+              design.md section 4)"
+      - note: "An agent may ALSO append trials the numeric searcher cannot
+               make (a topology change is out of scope for this verb) -
+               both searchers write the same trials.tsv."
+      - gate: sim_tt
+        why: "the winner's cheap check"
+      - gate: sim_pvt
+        why: "the winner must hold across the corner set, not just at the
+              trial's own single-corner evaluator"
+      - gate: bench_strength
+        why: "a winner that only looks good because the bench's own bounds
+              are wide is exactly what this gate exists to catch"

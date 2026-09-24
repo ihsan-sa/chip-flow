@@ -175,10 +175,16 @@ gates:
         inputs; waivers carry reason, approval and durability.
 
   ade:
+    # M8 (docs/design.md, "### M8."): spec_lint, netlist_lint, sim_tt,
+    # sim_pvt, bench_strength and mc go from stub to real tools here, same
+    # as M2/M3 did for vde's own rows - `future_tool` drops once `tool` is
+    # real. spec_lint's tool is a DEDICATED script (check_spec_lint_ade.py),
+    # not vde's check_spec_lint.py: that script requires a non-empty
+    # `requirements` list and validates `tt_pins`, neither of which this
+    # row's own criteria ask for.
     spec_lint:
       phase: P1
-      tool: stub
-      future_tool: speclib
+      tool: spec_lint_ade
       fail_severities: [error]
       max_count: 0
       fault: "a measure without bounds"
@@ -187,8 +193,7 @@ gates:
         declared.
     netlist_lint:
       phase: P4
-      tool: stub
-      future_tool: "ngspice dry run"
+      tool: netlist_lint
       fail_severities: [error]
       max_count: 0
       fault: "a model not in the PDK"
@@ -197,34 +202,28 @@ gates:
         subcircuit pins match the spec.
     sim_tt:
       phase: P4
-      tool: stub
-      future_tool: "sim_run at typical"
+      tool: sim_tt
       fail_severities: [error]
       max_count: 0
       fault: "W and L swapped on a mirror's output device"
       description: "Every .measure inside its bound."
     sim_pvt:
       phase: P4
-      tool: stub
-      future_tool: "sim_run over the corner set"
+      tool: sim_pvt
       fail_severities: [error]
       max_count: 0
       fault: "meets at typical, loses headroom at slow and hot"
       description: "Every measure inside its bound at every corner."
     bench_strength:
       phase: P4
-      tool: stub
-      future_tool: >-
-        faults.py device mutants (size doubled, connection removed, type
-        flipped, bias halved)
+      tool: bench_strength
       fail_severities: [error]
       max_count: 0
       fault: "bounds wide enough to pass anything"
       description: "Every mutant pushes a measure out of bounds."
     mc:
       phase: P4
-      tool: stub
-      future_tool: "ngspice Monte Carlo, only when the spec asks"
+      tool: mc
       fail_severities: [error]
       max_count: 0
       fault: "not applicable by default"

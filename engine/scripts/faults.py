@@ -47,7 +47,14 @@ from checklib import CheckError  # noqa: E402
 SCRIPT = "faults"
 CORPUS = REPO / "corpus"
 DEFAULT_GATES = ENGINE / "reference" / "gates.yaml"
-COPY_SUBDIRS = ("rtl", "netlist", "tb", "holdout", "formal")  # formal: M3
+COPY_SUBDIRS = ("rtl", "netlist", "tb", "holdout", "formal", "sizing")
+# formal: M3. sizing: M8 (docs/design.md "### M8.") - an ade rung's own
+# sizing/sizing.yaml (section 4's optimise target) is a real per-block
+# artifact (already in state.py's SUBDIRS and invalidation.yaml's ade
+# artifact_kinds), so a scratch workspace copy must carry it exactly like
+# tb/'s bounds sidecars - a gate whose bench references `{{SIZING}}`
+# (engine/lib/simlib.py) with no sizing/sizing.yaml on disk gets an
+# undefined-parameter ngspice error, not a silent default.
 
 
 def load_manifest(rung_dir: Path) -> dict:

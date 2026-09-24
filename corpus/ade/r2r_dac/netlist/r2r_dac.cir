@@ -1,0 +1,41 @@
+* r2r_dac.cir - a 2-bit R2R ladder DAC (docs/design.md section 5's
+* r2r_ladder.sp topology, section 4's optimise loop target, "### M8.").
+* bmsb is the MSB input, blsb the LSB input (nearest-to-vout carries more
+* weight - confirmed empirically while building this rung, not assumed:
+* bmsb driven alone measures 2.4V at vout, blsb driven alone 0.6V, both
+* together 3.0V, all at the correct 2:1 R:2R ratio and VDD=3.3V). vout is
+* the ladder's own output node, unloaded (no output buffer at this
+* milestone - a real design would add one before driving anything else).
+*
+* Plain ngspice R elements, not this PDK's rm1 subcircuit: rm1's own
+* resistance is sheet-resistance x (length/width), and its corner-dependent
+* sheet-resistance parameters (rsh_rm1 etc.) live in a SEPARATE
+* `.lib res_typical/res_ss/res_ff ... .endl` block from the transistor
+* corner block - entering it did not make those parameters resolve inside
+* a further-nested subcircuit call in practice on this box (confirmed
+* empirically: rm1's own internal formulas came back with literal
+* unevaluated `{rsh_rm1}` even with every relevant `.lib` section entered).
+* A plain `R` element with a numeric value needs none of that, and this
+* rung's whole point - a wrong R:2R RATIO measurably breaking the DAC's
+* transfer function, then optimise.py numeric correcting it - only needs a
+* real resistor VALUE the sizing loop can tune, not this PDK's own
+* physical resistor model. r_unit/r2_unit are exactly the two "resistor...
+* values, each with bounds the designer set" docs/design.md section 4
+* describes as a sizing target.
+*
+* The defaults below (1e4/1e4, a 1:1 ratio) are this rung's OWN
+* deliberately wrong starting point - sizing/sizing.yaml ships the same
+* wrong values, and `optimise.py numeric` against them (docs/design.md
+* section 4, this rung's own done criterion) is what corrects the ratio to
+* 2:1. This rung's faults/manifest.yaml deliberately does NOT exercise
+* sim_tt - the untouched reference is SUPPOSED to fail sim_tt until the
+* sizing loop runs, same as a corpus rung whose "row may stay red" until
+* its own later milestone (docs/design.md "### M6."/"### M9." both do this
+* for a harder rung); it is not a fault demonstration, it is this block's
+* actual, currently-unmet spec.
+.subckt r2r_dac bmsb blsb vout r_unit=1e4 r2_unit=1e4
+rmsb  bmsb vout {r_unit}
+r2lsb vout n0   {r2_unit}
+rlsb  blsb n0   {r_unit}
+r2msb n0   0    {r2_unit}
+.ends r2r_dac

@@ -42,6 +42,121 @@ import yaml
 
 CHECK_KINDS = {"sim", "formal", "both", "measure"}
 
+# ---------------------------------------------------------------- /ade (M8)
+# New at M8 (docs/design.md "### M8."): ade's own spec.yaml shape, on top of
+# the fields lint_spec above already validates generically (top, clock,
+# must_keep). gates.yaml's ade `spec_lint` row: "Every measure has bounds
+# and a corner set; supply and devices declared." - the fault it must catch:
+# "a measure without bounds".
+#
+#     supply: {vdd: float}            required; the nominal rail sim_run.py
+#                                      resolves every corner's VDD from
+#     devices: [str, ...]             required, non-empty; refdes this
+#                                      block's netlist/*.cir must instantiate
+#                                      (check_netlist_lint.py cross-checks)
+#                                      and bench_strength mutates
+#     corners: "default" | [str,...]  optional (default: corners.py's own
+#                                      default_corners())
+#     measures:
+#       - name: str                   required, unique
+#         bounds: {min?, max?}        required, at least one of min/max
+#         corners: "default"|[str,...]|"all"   optional (default: "default")
+#         severity: error|warning     optional (default: error)
+#     mc: {enabled: bool, runs?: int, yield_min?: float}   optional
+
+ADE_MEASURE_CORNER_KINDS = {"default", "all"}
+
+
+def lint_spec_ade(spec: dict, rel_path: str = "spec/spec.yaml") -> list[dict]:
+    """Return the list of ade spec_lint violations - [] means a clean spec.
+    Deliberately independent of lint_spec() above (vde's own): that
+    function requires a non-empty `requirements` list and validates
+    `tt_pins`, neither of which gates.yaml's ade spec_lint row asks for
+    ("Every measure has bounds and a corner set; supply and devices
+    declared.") - reusing it wholesale would force every analog block to
+    also carry digital-shaped requirements it has no use for. `top` is
+    checked here too (every gate downstream needs it, same as vde's)."""
+    from checklib import violation
+
+    out: list[dict] = []
+
+    def bad(kind: str, msg: str, refs=None, severity="error"):
+        out.append(violation("spec_lint", severity, rel_path, None, kind,
+                             refs or [], msg, "speclib"))
+
+    top = spec.get("top")
+    if not isinstance(top, str) or not top.strip():
+        bad("no_top", "spec.yaml has no non-empty 'top' block name")
+
+    supply = spec.get("supply")
+    if not isinstance(supply, dict) or not isinstance(supply.get("vdd"), (int, float)) \
+            or isinstance(supply.get("vdd"), bool) or supply.get("vdd", 0) <= 0:
+        bad("no_supply", "spec.yaml has no 'supply.vdd' (a positive number)")
+
+    devices = spec.get("devices")
+    if not isinstance(devices, list) or not devices \
+            or not all(isinstance(d, str) and d.strip() for d in devices):
+        bad("no_devices", "spec.yaml has no non-empty 'devices' list of "
+                          "refdes strings")
+
+    corners_field = spec.get("corners", "default")
+    if not ((isinstance(corners_field, str) and corners_field in ADE_MEASURE_CORNER_KINDS)
+           or (isinstance(corners_field, list) and corners_field
+               and all(isinstance(c, str) for c in corners_field))):
+        bad("bad_corners", "spec.yaml 'corners' must be 'default', 'all', "
+                           "or a non-empty list of corner names")
+
+    measures = spec.get("measures")
+    if not isinstance(measures, list) or not measures:
+        # this is the fault gates.yaml names for ade's spec_lint: "a
+        # measure without bounds" widened one notch - no measures at all is
+        # the same failure at its most extreme.
+        bad("no_measures", "spec.yaml has no non-empty 'measures' list")
+        measures = []
+
+    seen: set[str] = set()
+    for i, m in enumerate(measures):
+        where = f"measures[{i}]"
+        if not isinstance(m, dict):
+            bad("measure_not_a_mapping", f"{where} is not a mapping")
+            continue
+        name = m.get("name")
+        if not isinstance(name, str) or not name.strip():
+            bad("measure_no_name", f"{where} has no non-empty 'name'")
+            name = None
+        elif name in seen:
+            bad("measure_dup_name", f"measure name {name!r} is not unique",
+               refs=[name])
+        else:
+            seen.add(name)
+
+        bounds = m.get("bounds")
+        if not isinstance(bounds, dict) or not ("min" in bounds or "max" in bounds):
+            bad("measure_no_bounds",
+               f"{where} (name {name!r}) has no 'bounds' with 'min' and/or "
+               "'max'", refs=[name] if name else [])
+
+        mc = m.get("corners", "default")
+        if not ((isinstance(mc, str) and mc in ADE_MEASURE_CORNER_KINDS)
+               or (isinstance(mc, list) and mc
+                   and all(isinstance(c, str) for c in mc))):
+            bad("measure_bad_corners",
+               f"{where} (name {name!r}) 'corners' must be 'default', "
+               "'all', or a non-empty list of corner names",
+               refs=[name] if name else [])
+
+        sev = m.get("severity", "error")
+        if sev not in ("error", "warning"):
+            bad("measure_bad_severity",
+               f"{where} (name {name!r}) 'severity' must be 'error' or "
+               "'warning'", refs=[name] if name else [])
+
+    mc_cfg = spec.get("mc")
+    if mc_cfg is not None and not isinstance(mc_cfg, dict):
+        bad("mc_not_a_mapping", "'mc' is present but not a mapping")
+
+    return out
+
 
 def load_spec(path: Path) -> dict:
     """Parse spec.yaml. Anything that is not a YAML mapping raises - a lint

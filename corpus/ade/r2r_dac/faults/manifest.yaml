@@ -1,0 +1,12 @@
+# faults manifest (docs/design.md section 3, "### M8."). Only spec_lint
+# here on purpose - this rung's own untouched sim_tt is EXPECTED to fail
+# (see netlist/r2r_dac.cir's own comment: the ratio is deliberately wrong
+# until optimise.py numeric corrects it), so it is not a fault
+# DEMONSTRATION and does not belong in this manifest; corpus/ade/mirror
+# already exercises netlist_lint/sim_tt/sim_pvt/bench_strength in full.
+version: 1
+faults:
+  - name: spec_lint_measure_no_bounds
+    gate: spec_lint
+    plant: plant_spec_lint.py
+    expect: {status: fail, kind: measure_no_bounds}
