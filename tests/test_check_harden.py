@@ -173,3 +173,96 @@ def test_no_tt_pins_refuses_before_touching_librelane(tmp_path, monkeypatch, cap
     out = json.loads(capsys.readouterr().out)
     assert code == 2, out
     assert "tt_pins" in out["error"]
+
+
+# ---------------------------------------------------------------------------
+# real toolchain: the harden job's own kill-halfway-then-restart case
+# (docs/design.md 1.7's done criterion), chained straight into the five
+# downstream gates on the SAME real hardened output - one real LibreLane
+# run pays for both proofs instead of two (tests/check-slow.sh's 900s cap
+# is shared with M3's own slow suite).
+# ---------------------------------------------------------------------------
+import os  # noqa: E402
+import signal  # noqa: E402
+import time  # noqa: E402
+
+import pytest  # noqa: E402
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+CORPUS_COUNTER8 = REPO_ROOT / "corpus" / "vde" / "counter8"
+
+
+def _poll_until_not_running(jobs_mod, ws: Path, job_id: str, timeout: float) -> dict:
+    deadline = time.monotonic() + timeout
+    last = None
+    while time.monotonic() < deadline:
+        last = jobs_mod.status(ws, job_id, False)[job_id]
+        if last["status"] != "running":
+            return last
+        time.sleep(1.0)
+    raise TimeoutError(f"job {job_id} still {last}")
+
+
+def make_real_counter8_ws(tmp_path: Path) -> Path:
+    import state as state_mod
+    ws = tmp_path / "ws"
+    state_mod.State.init(ws, "vde", "counter8")
+    for name in ("spec.md", "spec.yaml"):
+        (ws / "spec" / name).write_text(
+            (CORPUS_COUNTER8 / name).read_text(encoding="utf-8"), encoding="utf-8")
+    for f in (CORPUS_COUNTER8 / "rtl").glob("*.v"):
+        (ws / "rtl" / f.name).write_text(f.read_text(encoding="utf-8"), encoding="utf-8")
+    for f in (CORPUS_COUNTER8 / "tb").glob("*.py"):
+        (ws / "tb" / f.name).write_text(f.read_text(encoding="utf-8"), encoding="utf-8")
+    return ws
+
+
+@pytest.mark.slow
+def test_harden_job_killed_halfway_reports_dead_then_restart_finishes_and_signoff_passes(
+        tmp_path):
+    """The real end-to-end M4 proof: start `harden` as a real job through
+    jobs.py, SIGKILL its whole process group partway through (a real
+    LibreLane run, not a fake sleep), confirm jobs.py reports it `dead`
+    (never stuck at `running` forever), restart the SAME gate, confirm it
+    reaches `done` with the gate recorded `pass`, then run timing/drc/lvs/
+    glsim/precheck for real against that hardened output and confirm every
+    one passes on the untouched design - gates.yaml's own criteria, checked
+    against the real toolchain, not a fake subprocess."""
+    import jobs as jobs_mod
+    import check_drc
+    import check_glsim
+    import check_lvs
+    import check_precheck
+    import check_timing
+
+    ws = make_real_counter8_ws(tmp_path)
+
+    rec = jobs_mod.start("harden", ws, "vde", None, None)
+    pid = rec["pid"]
+    # give LibreLane real time to get well into the flow (past synthesis)
+    # before killing it - the point is a genuine mid-flight kill, not a
+    # race against the launcher's own startup.
+    deadline = time.monotonic() + 90
+    run_dir = ws / "harden" / "runs" / "run"
+    while time.monotonic() < deadline and not (run_dir / "06-yosys-synthesis").is_dir():
+        time.sleep(2)
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    killed = _poll_until_not_running(jobs_mod, ws, rec["job"], timeout=30.0)
+    assert killed["status"] == "dead", killed
+
+    restart = jobs_mod.start("harden", ws, "vde", None, None)
+    finished = _poll_until_not_running(jobs_mod, ws, restart["job"], timeout=600.0)
+    assert finished["status"] == "done", finished
+
+    import json as _json
+    state = _json.loads((ws / "state.json").read_text(encoding="utf-8"))
+    assert state["gates"]["harden"]["status"] == "pass", state["gates"].get("harden")
+
+    for mod, name in ((check_timing, "timing"), (check_drc, "drc"),
+                     (check_lvs, "lvs"), (check_glsim, "glsim"),
+                     (check_precheck, "precheck")):
+        payload, _out = mod.run(["--workspace", str(ws)])
+        assert payload["status"] == "pass", f"{name}: {payload}"
