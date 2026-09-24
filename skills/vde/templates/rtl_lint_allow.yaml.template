@@ -1,0 +1,9 @@
+# Copy into rtl/lint_allow.yaml (optional - only when a warning is real and
+# justified; see skills/vde/reference/remediations/LATCH.md before reaching
+# for this file on a LATCH finding specifically - allowlisting one is
+# almost never the right call). Every entry needs BOTH fields;
+# check_lint.py refuses an entry missing either, it does not silently drop
+# it.
+
+- rule: <VERILATOR_RULE_NAME>
+  reason: <why this specific warning is not a defect here>

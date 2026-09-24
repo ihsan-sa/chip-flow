@@ -48,11 +48,16 @@ def test_shared_verb_set_is_exactly_the_six_named():
         ["full-run", "review", "fix-finding", "resume", "release", "learn"])
 
 
-def test_vde_adds_its_own_m2_verbs():
+def test_vde_adds_its_own_verbs():
+    # M2 landed add-test/mutate; M5 (docs/design.md, "### M5.") landed the
+    # rest of section 1.8's /vde list plus a real full-run override - see
+    # tests/test_vde_skill.py's test_vde_verb_set_after_m5 for the M5-era
+    # assertion this one now matches.
     tasks = tr.load_tasks("vde")
     assert sorted(tasks["verbs"]) == sorted(
         ["full-run", "review", "fix-finding", "resume", "release", "learn",
-         "add-test", "mutate"])
+         "add-test", "mutate", "spec", "prove", "harden", "fix-timing",
+         "optimise"])
 
 
 def test_gates_and_holds_are_never_restated_in_the_recipe():

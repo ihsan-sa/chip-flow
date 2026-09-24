@@ -1,20 +1,227 @@
-# tasks.yaml - /vde's own verb table (docs/design.md 1.8, "### M2."). Merged
-# with engine/reference/tasks.yaml's shared verbs (task_router.py:
-# load_tasks) - this file's own entries win on a name collision. First
-# skill-level tasks.yaml to exist (M1: "No skill directories" yet); no
-# SKILL.md alongside it (that lands with the skill itself, "### M5.").
-# `doc: null` for both verbs, same as every M1 row: the recipe markdown
-# under skills/vde/reference/recipes/ is M5+ work.
+# tasks.yaml - /vde's own verb table (docs/design.md 1.8). Merged with
+# engine/reference/tasks.yaml's shared verbs (task_router.py: load_tasks) -
+# this file's own entries win on a name collision. M2 landed add-test and
+# mutate; M5 ("### M5.") lands the rest of section 1.8's /vde list (spec,
+# prove, harden, fix-timing, optimise) plus the real `full-run` - the
+# engine's own full-run is a placeholder that "stops here" once state.py
+# init runs (M1: every gate was a stub); this file's full-run is the real
+# P1..P8 sequence, agents interleaved with gates in phase order, as
+# docs/design.md 1.4 and 1.9 describe. Doc files live under
+# skills/vde/reference/recipes/.
+#
+# harden/timing/drc/lvs/glsim/precheck still point `tool: stub` in
+# engine/reference/gates.yaml until M4 lands (a parallel PR on this same
+# milestone train) - full-run's own P6 steps below are written against the
+# FINISHED design so nothing here needs a second pass once M4 merges, but
+# running them today exits 2 ("not built"), which is a stub gate's designed
+# behavior, not a bug (SKILL.md's Known limits section says this too).
 
 version: 1
 verbs:
+
+  # -------------------------------------------------------------------------
+  full-run:
+    summary: The whole digital pipeline, spec.md to a released package -
+      P1 spec through P8 release, agents and gates interleaved in phase
+      order. Overrides the engine's own placeholder (which stops right
+      after state.py init).
+    doc: skills/vde/reference/recipes/full-run.md
+    workspace: created
+    edit_class: null
+    gates: []
+    human_hold: 0
+    match:
+      any: ['\bdesign (me )?an?\b', '\bdesign [a-z0-9_-]+ from\b',
+            '\bbuild (me )?an?\b', '\bnew block\b',
+            '\bfrom scratch\b', '\bfull (run|pipeline)\b',
+            '\bend[- ]to[- ]end\b', '\bwhole pipeline\b']
+      weight: 1
+    steps:
+      - note: "M5 friction, found by actually running this recipe (docs/
+               design.md ### M5.): 'design counter8 from spec.md' has no
+               article, so the base '\\bdesign (me )?an?\\b' pattern alone
+               misses it - '\\bdesign [a-z0-9_-]+ from\\b' is the widened
+               catch. A task this still misses classifies itself per
+               SKILL.md's own unknown-status instructions (--verb
+               full-run)."
+      - do: "scripts/state.py init --workspace {ws} --skill {skill} --block {block}"
+        why: "workspace + subdirs, in-repo so gate commits work"
+      - do: "scripts/state.py resume --workspace {ws}"
+        why: "confirm the scaffold and starting phase"
+      - note: "P0 intake: copy the task's spec file(s) into {ws}/brief/
+               verbatim, unedited - that is the whole brief the spec-writer
+               gets. Write log/P0-digest.md (<=15 lines) before the very
+               first set-phase call below - its digest-discipline check
+               keys off the phase state.json is CURRENTLY at (P0, right
+               after state.py init), never the phase a step's own label
+               names (M5 friction: an earlier version of this recipe
+               batched P1+P2 behind one set-phase call to P3 and told the
+               orchestrator to write the wrong digest filename as a
+               result - every phase this recipe enters now gets its own
+               set-phase call, so each one's own digest name is the one
+               actually checked)."
+      - do: "scripts/state.py set-phase --workspace {ws} --phase P1"
+        why: "enter P1 - spec writing"
+      - agent: spec-writer
+        tier: fable/high
+        why: "P1 - brief/ -> spec/spec.md + spec/spec.yaml; every
+              requirement gets an id and a checkable kind. No web tools."
+      - gate: spec_lint
+        why: "P1's own gate - a requirement with no way to check it is
+              refused here, never carried forward"
+      - note: "Write log/P1-digest.md before advancing."
+      - do: "scripts/state.py set-phase --workspace {ws} --phase P2"
+        why: "enter P2 - architecture"
+      - agent: architect
+        tier: fable/high
+        why: "P2 - finalize ports/clock/must_keep and, past a trivial
+              block, a module breakdown; still fresh context, spec only"
+      - gate: spec_lint
+        why: "the architect's own edits must leave the spec consistent too"
+      - note: "Write log/P2-digest.md before advancing."
+      - do: "scripts/state.py set-phase --workspace {ws} --phase P3"
+        why: "enter P3 - testbench, before any RTL exists"
+      - note: "tb-writer and property-writer are independent (fresh
+               context each, spec only, before any RTL exists) and may run
+               in parallel."
+      - agent: tb-writer
+        tier: opus/high
+        why: "tb/* (visible tests + reference model) and holdout/* - see
+              docs/design.md section 2. No web tools."
+      - agent: property-writer
+        tier: opus/high
+        why: "formal/* - procedural assert/cover, never bind, never SVA
+              `assert property`. No web tools."
+      - do: "scripts/state.py holdout --workspace {ws} --written-by tb-writer"
+        why: "pin state.holdout's hash now, before rtl-writer ever runs -
+              a later holdout/ change becomes visible against this mark"
+      - note: "Write log/P3-digest.md before advancing."
+      - do: "scripts/state.py set-phase --workspace {ws} --phase P4"
+        why: "enter P4 - RTL and the design gates; tb/formal both exist
+              now"
+      - agent: rtl-writer
+        tier: opus/high
+        why: "rtl/* only - sees tb/ and formal/, never holdout/. No web
+              tools."
+      - gate: lint
+        why: "cheapest check first - no errors, warnings only from an
+              allowlist with reasons"
+      - gate: sim
+        why: "every visible test passes and every sim/both requirement is
+              tagged"
+      - gate: holdout
+        why: "the discipline check - a failure names only the requirement
+              id and the visible tests, never the held-out test itself"
+      - gate: mutate
+        why: "scores the TESTBENCH - a survivor or low kill rate routes to
+              tb-writer, never rtl-writer (docs/design.md section 2)"
+      - gate: formal
+        why: "every formal/both requirement proven or bounded; a
+              bounded-not-proven result is never claimed as a proof"
+      - gate: cover
+        why: "line >=95%, toggle >=90% on the DUT; a gap routes to
+              tb-writer (coverage is what the tests never reached)"
+      - note: "Any gate above failing: the fix loop (SKILL.md) - budget,
+               snapshot, fix_dispatch.py, one fixer per work order, declare
+               the edit, re-run. Do not advance past a fail."
+      - note: "Write log/P4-digest.md before H1: numbers first - lint/sim/
+               holdout/mutate/formal/cover pass counts, kill rate, coverage
+               %, open issues."
+      - agent: reviewer
+        tier: fable/high
+        why: "H1 - fresh context, never the rtl-writer's or any fixer's
+              conversation; reads the design against the spec, not just
+              the gate table"
+      - human: H1
+        why: "present the reviewer's digest + gate table; the person
+              decides whether P4 is done (docs/design.md 1.4: H1 after the
+              design gates, before synthesis)"
+      - do: "scripts/state.py set-phase --workspace {ws} --phase P5"
+        why: "advance to synthesis once H1 is approved"
+      - gate: synth
+        why: "no latches, unmapped cells or combinational loops - almost
+              always an RTL fix when it fails, never a hand-edited netlist"
+      - note: "Write log/P5-digest.md before advancing."
+      - do: "scripts/state.py set-phase --workspace {ws} --phase P6"
+        why: "advance to harden + signoff"
+      - do: "scripts/jobs.py start --gate harden --workspace {ws} --skill {skill}"
+        why: "harden runs detached (docs/design.md 1.7) - poll with
+              jobs.py status rather than blocking; gate.py records the
+              result itself when it finishes, same as a foreground gate"
+      - note: "harden/timing/drc/lvs/glsim/precheck are engine stubs until
+               M4 lands (SKILL.md Known limits) - the job above exits 2
+               'not built' today. That is the correct behavior for an
+               unbuilt gate. STOP HERE until M4 merges; do not attempt the
+               gates below on this milestone's own proof runs."
+      - gate: timing
+        why: "setup+hold slack >=0 at every corner (real once M4 lands)"
+      - gate: drc
+        why: "0 violations, magic + klayout (real once M4 lands)"
+      - gate: lvs
+        why: "extracted layout matches the hardened netlist (real once M4
+              lands)"
+      - gate: glsim
+        why: "the sim suite on the gate-level netlist, functional then SDF
+              (real once M4 lands)"
+      - gate: precheck
+        why: "tt-support-tools precheck (real once M4 lands)"
+      - note: "P7 optimise is optional and not part of a default full-run -
+               invoke the `optimise` verb directly when wanted."
+      - do: "scripts/state.py set-phase --workspace {ws} --phase P8 --force"
+        why: "P7 is skipped by design (optional) - --force is the
+              documented escape hatch for advancing past an unentered
+              optional phase; it logs phase_forced with nothing actually
+              owed there since P7 has no gate of its own"
+      - gate: release
+        why: "strict - refuses rather than pass on any gap; cannot pass
+              until harden onward are real (M4)"
+      - do: "scripts/attest.py build --workspace {ws}"
+        why: "assembles reports/checks.json only once release is fresh-
+              pass; lists every miss at once otherwise"
+      - do: "scripts/attest.py disposition --workspace {ws}"
+        why: "the derived, never-hand-set release state, for H2's digest"
+      - human: H2
+        why: "the person signs off before anything is submitted (docs/
+              design.md 1.4: submitting to a shuttle is always the
+              person's)"
+
+  # -------------------------------------------------------------------------
+  spec:
+    summary: Write or revise a block's spec.yaml/spec.md - a fresh
+      spec-writer pass, or a deliberate revision on a block that already
+      has RTL. A revision invalidates EVERY gate (edit class spec_edit) -
+      that cascade is intentional, not a bug in this verb.
+    doc: skills/vde/reference/recipes/spec.md
+    workspace: required
+    edit_class: spec_edit
+    preconditions: [workspace]
+    match:
+      any: ['\b(write|revise|update|change) the spec\b',
+            '\bspec (revision|change|update)\b',
+            '\brequirement (text|wording) (is wrong|needs? (a )?change)\b']
+    steps:
+      - do: "scripts/state.py resume --workspace {ws}"
+        why: "confirm what already exists before a revision, not just a
+              fresh write"
+      - agent: spec-writer
+        tier: fable/high
+        why: "fresh context; no web tools"
+      - gate: spec_lint
+        why: "must pass before the cascade below is worth running at all"
+      - do: "scripts/state.py edit --workspace {ws} --class spec_edit --note \"spec revision\""
+        why: "declares the edit - invalidation.yaml's spec_edit marks
+              EVERY vde gate stale on purpose: a spec change can move any
+              requirement, and every gate reads spec.yaml somewhere"
+      - note: "Every gate from lint through release now auto-schedules
+               below (spec_edit's own mapped set) - do not hand-pick a
+               subset to re-run."
 
   # -------------------------------------------------------------------------
   add-test:
     summary: Add a visible test for a requirement spec.yaml already names,
       then re-run sim and mutate so the new test's own effect on both is
       recorded, not assumed.
-    doc: null
+    doc: skills/vde/reference/recipes/add-test.md
     workspace: required
     edit_class: tb_edit
     preconditions: [workspace]
@@ -50,11 +257,37 @@ verbs:
                failure goes back to the tb-writer, not the rtl-writer')."
 
   # -------------------------------------------------------------------------
+  prove:
+    summary: Run formal on demand - a property, a requirement, or the
+      whole formal/ suite - without touching sim/mutate/cover.
+    doc: skills/vde/reference/recipes/prove.md
+    workspace: required
+    gates: [formal]
+    human_hold: 0
+    preconditions: [workspace]
+    match:
+      any: ['\bprove\b', '\bformal(ly)?\b', '\bproperty\b', '\bproperties\b',
+            '\bk-induction\b', '\bcounterexample\b']
+    steps:
+      - do: "scripts/state.py resume --workspace {ws}"
+        why: "confirm rtl and formal/ are both fresh inputs first"
+      - gate: formal
+        why: "two engines - smtbmc k-induction for a full proof, abc pdr
+              as the second opinion - plus cover points, straight from
+              gate.py's own recorded result"
+      - note: "A property_failed finding routes to rtl (formal is what sim
+               cannot prove - docs/design.md section 2). An
+               engine_disagreement or a cover_not_reached routes to formal
+               (fix_dispatch.DOMAINS['formal']): widen the induction depth
+               or fix the property, never loosen it to make the gate
+               pass."
+
+  # -------------------------------------------------------------------------
   mutate:
     summary: Score the visible testbench against yosys-mutated variants of
       the current RTL - a kill rate and survivors by class, never a
       pass/fail verdict on the design itself.
-    doc: null
+    doc: skills/vde/reference/recipes/mutate.md
     workspace: required
     gates: [mutate]
     human_hold: 0
@@ -73,3 +306,108 @@ verbs:
       - note: "Below 0.9, or any survivor in reset_removed/output_stuck/
                condition_inverted: the finding routes to the tb-writer, not
                the rtl-writer - this gate scores the TEST, not the design."
+
+  # -------------------------------------------------------------------------
+  harden:
+    summary: Start the harden job (LibreLane -> GDS/LEF/netlist/SDF/
+      metrics) and poll it to completion - never blocks synchronously,
+      it can run the better part of an hour.
+    doc: skills/vde/reference/recipes/harden.md
+    workspace: required
+    gates: []
+    human_hold: 1
+    preconditions: [workspace, gates_fresh:synth]
+    match:
+      any: ['\bharden\b', '\bto gds\b', '\brun librelane\b',
+            '\bhardening (job|run)\b']
+    steps:
+      - do: "scripts/state.py resume --workspace {ws}"
+        why: "synth must already be fresh-pass - harden's own inputs are
+              rtl + harden/config.json + harden/info.yaml"
+      - do: "scripts/jobs.py start --gate harden --workspace {ws} --skill {skill}"
+        why: "detached (docs/design.md 1.7); records {pid, log} in
+              state.jobs and returns at once"
+      - do: "scripts/jobs.py status --workspace {ws} --all"
+        why: "poll rather than block; a session that ends with the job
+              still running picks it back up here on resume"
+      - note: "A job reported dead restarts with jobs.py start - LibreLane
+               resumes from its own last completed step, never from
+               scratch. This gate is a stub (check_stub.py) until M4
+               lands: expect exit 2 'not built' today."
+
+  # -------------------------------------------------------------------------
+  fix-timing:
+    summary: Close a timing violation - unlike the generic fix-finding
+      loop, this verb also knows a timing fix (an SDC/config edit, or an
+      RTL restructure) invalidates the hardened netlist itself, so it
+      re-hardens before re-checking timing rather than re-checking a
+      now-stale one.
+    doc: skills/vde/reference/recipes/fix-timing.md
+    workspace: required
+    gates: []
+    human_hold: 0
+    args:
+      findings:
+        kind: path
+        required: true
+        question: "Which report holds the timing findings? (reports/gate-timing.json)"
+      edit_class:
+        kind: text
+        required: true
+        extract: none
+        question: "Did the fix land in rtl/ (rtl_edit) or harden/config.json|info.yaml (harden_config_edit)?"
+    preconditions: [workspace]
+    match:
+      any: ['\btiming (fails?|failed|failing|violation)\b',
+            '\bslack (is )?negative\b', '\bfix timing\b', '\bsetup violation\b',
+            '\bhold violation\b']
+    steps:
+      - do: "scripts/state.py budget --workspace {ws} --path fix_loops.timing --consume"
+        why: "exit 2 = budget exhausted -> escalate, never loop again"
+      - do: "scripts/state.py snapshot --workspace {ws} --label pre-fix-timing"
+        why: "rollback point before the fixer touches anything"
+      - do: "scripts/fix_dispatch.py --input {findings} --workspace {ws} --state {state}"
+        why: "clusters by (file, module, kind), writes one work order per
+              cluster, registers open issues"
+      - agent: fixer
+        tier: opus/high
+        why: "one per work order; the harden fixer domain edits
+              harden/config.json|info.yaml, the rtl domain edits rtl/"
+      - do: "scripts/state.py edit --workspace {ws} --class {edit_class} --note \"fix timing\""
+        why: "declares what actually changed - harden_config_edit marks
+              harden onward stale, rtl_edit marks everything from lint
+              onward"
+      - do: "scripts/jobs.py start --gate harden --workspace {ws} --skill {skill}"
+        why: "timing is computed on the HARDENED netlist - a config or RTL
+              edit does not retroactively change it; harden must re-run
+              before timing means anything again"
+      - do: "scripts/jobs.py status --workspace {ws} --all"
+        why: "poll to done/dead rather than block"
+      - gate: timing
+        why: "re-run against the freshly re-hardened netlist"
+
+  # -------------------------------------------------------------------------
+  optimise:
+    summary: Placeholder verb - optimise.py (docs/design.md section 4) is
+      M7's build. Until then this records intent and the current
+      synth/timing baseline and stops; it never spawns the optimiser role.
+    doc: skills/vde/reference/recipes/optimise.md
+    workspace: required
+    gates: []
+    human_hold: 0
+    preconditions: [workspace, gates_fresh:synth]
+    match:
+      any: ['\boptimi[sz]e\b', '\bimprove (the )?(area|slack|power|timing)\b',
+            '\bmake it (smaller|faster|lower power)\b', '\breduce area\b']
+    steps:
+      - do: "scripts/state.py resume --workspace {ws}"
+        why: "the current synth (and, once M4 lands, timing) result is the
+              baseline any future optimise.py trial would score against"
+      - do: "scripts/state.py decision --workspace {ws} --what \"optimise requested\" --why \"optimise.py lands in M7 (docs/design.md, section 4 and ### M7.) - recording intent now rather than fabricating a loop this milestone does not own\""
+        why: "the record a real optimise run will reference once M7 lands"
+      - note: "Stop here. Do not hand-roll a one-off area/power edit
+               outside optimise.py's frozen-evaluator loop - that is
+               exactly the metric-gaming section 4 is written to prevent
+               (a fixed synth script, a locked clock period and port list,
+               must_keep checked after synth, the evaluator itself
+               hashed)."
