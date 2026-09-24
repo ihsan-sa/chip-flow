@@ -82,6 +82,8 @@
 
 set -euo pipefail
 
+EDA_SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+
 T="${EDA_TOOLCHAIN:-$HOME/.cc/toolchains/iic-osic-tools-2026.09}"
 if [ ! -d "$T" ]; then
   echo "eda: no toolchain tree at '$T' (set EDA_TOOLCHAIN)" >&2
@@ -111,8 +113,47 @@ if [ $# -lt 1 ]; then
 fi
 TOOL="$1"; shift
 
-SHIM="$(mktemp -d "${TMPDIR:-/tmp}/eda-shim.XXXXXX")"
-trap 'rm -rf "$SHIM"' EXIT
+# The shim directory used to be `mktemp -d`, rebuilt from scratch on every
+# invocation and cleaned up by an EXIT trap. Two problems with that once a
+# whole flow is calling `eda` per step, thousands of times a run: the trap
+# never actually fires, because every case below ends in `exec` -- that
+# replaces the process, so bash's own EXIT handling never runs, and each of
+# those temp dirs is left behind for good (dozens of them were already
+# sitting in /tmp). And rebuilding it every time re-does real work each
+# call: a gcc invocation to compile the fakeexe.so shim, a copy of
+# verilator's driver script, a handful of small files.
+#
+# So it's a cache instead: one shim directory per (toolchain path, image
+# version, this script's own content) under
+# ${XDG_CACHE_HOME:-~/.cache}/chip-flow/shims/<hash>, built once and then
+# just reused -- reading $SHIM/<name> costs nothing close to writing it.
+# Editing this script or pointing at a different image produces a
+# different hash, so nothing stale is ever read back; nothing here deletes
+# an old hash's directory, but nothing reads one either, so an orphaned
+# entry is inert, not wrong. Built atomically for the case where two `eda`
+# calls race on the very first, cold invocation: each builds its own
+# private temp directory under the same cache root (same filesystem, so
+# the rename below is a real rename, not a copy) and only one of the two
+# `mv -T` calls can win, because POSIX rename() onto an existing
+# *non-empty* directory fails rather than merging -- the loser just
+# deletes its own copy and uses the winner's.
+CACHE_ROOT="${XDG_CACHE_HOME:-$HOME/.cache}/chip-flow/shims"
+mkdir -p "$CACHE_ROOT"
+cache_key() {
+  {
+    realpath "$T" 2>/dev/null || echo "$T"
+    [ -f "$T/.image-env.json" ] && cat "$T/.image-env.json"
+    sha256sum "$EDA_SELF" 2>/dev/null
+  } | sha256sum | cut -d' ' -f1
+}
+SHIM="$CACHE_ROOT/$(cache_key)"
+if [ ! -d "$SHIM" ]; then
+  BUILD="$(mktemp -d "$CACHE_ROOT/.build.XXXXXX")"
+  SHIM="$BUILD"
+  populate_shim_cache_later=1
+else
+  populate_shim_cache_later=0
+fi
 
 # fakeexe_so -- compile (once per run, into $SHIM) a tiny LD_PRELOAD shared
 # object and print its path. Running a target as `ld.so --library-path X
@@ -129,6 +170,14 @@ FAKEEXE_SO=""
 fakeexe_so() {
   [ -n "$FAKEEXE_SO" ] && { echo "$FAKEEXE_SO"; return; }
   local src="$SHIM/.fakeexe.c" so="$SHIM/.fakeexe.so"
+  if [ -e "$so" ]; then
+    # already built into the cache by an earlier eda run (or earlier in this
+    # one's own build pass) -- the whole point of caching is not repeating
+    # this compile on every single invocation.
+    FAKEEXE_SO="$so"
+    echo "$so"
+    return
+  fi
   cat > "$src" <<'EOF'
 #define _GNU_SOURCE
 #include <unistd.h>
@@ -203,6 +252,22 @@ EOF
 # reached by a bare PATH lookup (a tool spawning another tool by name).
 wrap() {
   wrap_at "$SHIM/$1" "$2"
+}
+
+# wrap_recurse <name> [eda-tool-name] -- a shim that just calls back into
+# this same eda script (`eda <name> "$@"`), for a tool whose correct
+# invocation is more than "exec one binary" (magic and netgen both need
+# specific env plus extra flags, not just a loader wrapper) so the case
+# dispatch below is the one place that logic lives, used whether eda was
+# asked for the tool directly or something else found it by name on PATH.
+wrap_recurse() {
+  local name="$1" tool="${2:-$1}"
+  mkdir -p "$SHIM"
+  cat > "$SHIM/$name" <<EOF
+#!/bin/sh
+exec "$EDA_SELF" "$tool" "\$@"
+EOF
+  chmod +x "$SHIM/$name"
 }
 
 # wrap_iverilog_vvp -- shim both, the way the top-level iverilog/vvp cases
@@ -295,26 +360,37 @@ netgen_tcl_shim() {
   echo "$patched"
 }
 
-# magic_bootstrap -- print the stdin preamble that loads magic's Tcl
-# extension directly (see header). This gets magic::* commands registered
-# and PDK_ROOT-based tech switching available; the one piece it does *not*
-# solve is this image shipping no default/minimum technology for magic's own
-# mandatory first-technology bootstrap (see check.sh's magic case, which
-# reports this honestly rather than pretending it works).
-magic_tcl_load_line() {
-  echo "load $T/foss/tools/magic/lib/magic/tcl/tclmagic.so"
+# populate_shim_cache -- build everything the cases below rely on finding
+# already in $SHIM, once, on a cache miss. "python3" is here (not just the
+# obviously-Python cases) for the same reason PYTHONHOME is exported
+# globally above: yosys's *embedded* interpreter needs it to agree with a
+# spawned one, and anything that spawns a plain "python3" subprocess
+# (verilator's own build does, for a codegen step) needs to find our
+# wrapper and not the host's, which PYTHONHOME would otherwise break.
+populate_shim_cache() {
+  wrap python3 "$PYBIN"
+  wrap_iverilog_vvp
+  wrap yosys "$T/foss/tools/yosys/bin/yosys"
+  wrap yosys-abc "$T/foss/tools/yosys/bin/yosys-abc"
+  for s in yices yices-sat yices-smt yices-smt2; do
+    local real="$T/foss/tools/yosys/bin/$s"
+    [ -e "$real" ] && wrap "$s" "$real"
+  done
+  gcc_shims
+  verilator_entry >/dev/null
+  netgen_tcl_shim >/dev/null
 }
 
-# $SHIM is on PATH, and a "python3" shim is always there, for every case
-# below -- not just the ones that obviously touch Python. PYTHONHOME is
-# exported globally (see above) so that yosys's *embedded* interpreter
-# resolves correctly; the flip side is that anything which spawns a plain
-# "python3" subprocess (verilator's own build spawns one for a codegen
-# step) MUST find our wrapper and not the host's python3, because the host
-# interpreter, handed the image's PYTHONHOME, cannot find its own stdlib
-# either. Keeping this in one place beats re-adding it per case and missing
-# one.
-wrap python3 "$PYBIN"
+if [ "$populate_shim_cache_later" = "1" ]; then
+  populate_shim_cache
+  FINAL="$CACHE_ROOT/$(cache_key)"
+  if mv -T "$SHIM" "$FINAL" 2>/dev/null; then
+    SHIM="$FINAL"
+  else
+    rm -rf "$SHIM"
+    SHIM="$FINAL"
+  fi
+fi
 export PATH="$SHIM:$PATH"
 
 case "$TOOL" in
@@ -325,7 +401,6 @@ case "$TOOL" in
   # vvp also needs iverilog's lib/ dir on the library path for libvvp.so.1,
   # which lives there rather than under the usual lib/x86_64-linux-gnu.
   iverilog|vvp)
-    wrap_iverilog_vvp
     exec "$SHIM/$TOOL" "$@"
     ;;
 
@@ -336,37 +411,24 @@ case "$TOOL" in
     ;;
 
   verilator|verilator_coverage|verilator_gantt)
-    gcc_shims
-    entry="$(verilator_entry)"
-    entry_dir="$(dirname "$entry")"
-    export PATH="$SHIM:$entry_dir:$PATH"
+    entry="$SHIM/.verilator-root/bin/verilator"
+    export PATH="$SHIM:$SHIM/.verilator-root/bin:$PATH"
     export VERILATOR_ROOT="$T/foss/tools/verilator/share/verilator"
     exec "$entry" "$@"
     ;;
 
   # ---- synthesis / formal --------------------------------------------------
   yosys)
-    wrap yosys-abc "$T/foss/tools/yosys/bin/yosys-abc"
-    export PATH="$SHIM:$PATH"
     run_elf "$T/foss/tools/yosys/bin/yosys" "$@"
     ;;
 
   # sby and yosys-smtbmc are `#!/usr/bin/env python3` scripts (no absolute-
   # shebang problem), so they're run from their real location, left to find
-  # "python3" via PATH like they would in the real container -- only the
-  # things *they* spawn by name need shimming: yosys and its solvers (yices
-  # is the one solver this image actually ships; smtbmc's own --solver
-  # default already happens to be yices).
+  # "python3" via PATH like they would in the real container -- yosys and
+  # the solvers they spawn by name (yices is the one this image ships;
+  # smtbmc's own --solver default already happens to be yices) are shimmed
+  # once into the cache, not here.
   sby|yosys-smtbmc|yosys-config|yosys-filterlib|yosys-witness)
-    wrap yosys "$T/foss/tools/yosys/bin/yosys"
-    wrap yosys-abc "$T/foss/tools/yosys/bin/yosys-abc"
-    # yices' binaries are real files directly under foss/tools/bin (not a
-    # per-tool bin/ subdirectory, and not the dead symlinks most of that
-    # directory is made of).
-    for s in yices yices-sat yices-smt yices-smt2; do
-      real="$T/foss/tools/bin/$s"
-      [ -e "$real" ] && [ ! -L "$real" ] && wrap "$s" "$real"
-    done
     export PATH="$SHIM:$T/foss/tools/yosys/bin:$PATH"
     export PYTHONPATH="$PY_SITE${PYTHONPATH:+:$PYTHONPATH}"
     exec "$T/foss/tools/yosys/bin/$TOOL" "$@"
@@ -374,7 +436,6 @@ case "$TOOL" in
 
   # ---- cocotb / python -----------------------------------------------------
   python3|python)
-    wrap_iverilog_vvp
     run_py "$@"
     ;;
 
@@ -400,30 +461,36 @@ case "$TOOL" in
       "$T/foss/tools/klayout/klayout" "$@"
     ;;
 
+  # magic's own C-level bootstrap always loads a technology named exactly
+  # "minimum" first, unconditionally -- true even with -T, even with the
+  # PDK's tech file sitting right next to it. -T just names one of magic's
+  # *own* bundled techs to switch to afterward (scmos, minimum, ...), so it
+  # can't be used to select a PDK tech directly. That was the whole
+  # earlier problem: an image whose magic/sys had been dropped had no
+  # "minimum" to find, so the bootstrap died before any script ran. It's
+  # back now, so the fix is to route the PDK's own tech through the
+  # channel magic actually reads *during* that bootstrap: -rcfile,
+  # processed by magic.tcl before the "minimum" load ever happens, so
+  # "minimum" itself is never loaded, and scratch structures sized during
+  # bootstrap (a DRC yank buffer among them) are sized for the real PDK
+  # tech from the start. Loading them for "minimum" and switching
+  # technology afterward via `tech load` leaves those undersized -- that
+  # is what a `gds read` under the real tech used to segfault on
+  # (DBBoundPlane on a NULL plane, confirmed under gdb). CAD_ROOT has to
+  # be set for magic.tcl's own sibling-file lookups (wrapper.tcl etc.) to
+  # resolve; magic/tcl sits under lib/magic/tcl, not tcl/ directly.
   magic)
-    cadroot="$SHIM/.cadroot"
-    mkdir -p "$cadroot/magic"
-    ln -sfn "$T/foss/tools/magic/lib/magic/tcl" "$cadroot/magic/tcl"
-    export CAD_ROOT="$cadroot"
     export TCL_LIBRARY="$T/usr/share/tcltk/tcl8.6"
-    export TCL_MAG_DIR="$T/foss/tools/magic/lib/magic/tcl"
+    export CAD_ROOT="$T/foss/tools/magic/lib"
     export PDK_ROOT="${PDK_ROOT:-$T/foss/pdks}"
-    {
-      magic_tcl_load_line
-      echo 'if {[catch {magic::initialize -noconsole -nowindow} initerr]} {'
-      # shellcheck disable=SC2016  # this is Tcl source, not bash -- $initerr
-      # is meant to expand when Tcl reads it, not now.
-      echo '  puts stderr "eda: magic bootstrap failed: $initerr"'
-      echo '  exit 1'
-      echo '}'
-      cat
-    } | run_elf "$T/foss/tools/magic/lib/magic/tcl/magicdnull" -nowrapper -dnull -noconsole "$@"
+    run_elf "$T/foss/tools/magic/lib/magic/tcl/magicdnull" -dnull -noconsole \
+      -rcfile "$PDK_ROOT/gf180mcuD/libs.tech/magic/gf180mcuD.magicrc" "$@"
     ;;
 
   netgen)
     export TCL_LIBRARY="$T/usr/share/tcltk/tcl8.6"
     export PDK_ROOT="${PDK_ROOT:-$T/foss/pdks}"
-    patched="$(netgen_tcl_shim)"
+    patched="$SHIM/netgen.tcl"
     if [ "${1:-}" = "-batch" ]; then
       shift
       { echo "source $patched"; echo "$*"; echo "::netgen::quit"; } \
@@ -443,20 +510,16 @@ case "$TOOL" in
   librelane)
     # Best effort: LibreLane's default flow drives yosys, verilator (lint),
     # openroad/sta, klayout and (magic or netgen for DRC/LVS) all by bare
-    # name. The first three are shimmed the same way their own top-level
-    # `eda` cases are; magic is wrapped too even though it will fail for
-    # the reason documented at the magic case below -- that failure should
-    # surface as one failed LibreLane step, not silently skip DRC.
-    gcc_shims
-    wrap yosys "$T/foss/tools/yosys/bin/yosys"
-    wrap yosys-abc "$T/foss/tools/yosys/bin/yosys-abc"
-    entry="$(verilator_entry)"
-    entry_dir="$(dirname "$entry")"
-    wrap magic "$T/foss/tools/magic/bin/magic" # best effort, see magic case
+    # name. magic and netgen recurse back into this same script (see
+    # wrap_recurse) rather than a plain loader wrapper, because their
+    # correct invocation is more than "exec one binary" -- that logic
+    # stays in one place, their own case below, however they're reached.
+    wrap_recurse magic
+    wrap_recurse netgen
     wrap klayout "$T/foss/tools/klayout/klayout"
     wrap openroad "$T/foss/tools/openroad-librelane/bin/openroad"
     wrap sta "$T/foss/tools/openroad-librelane/bin/sta"
-    export PATH="$SHIM:$entry_dir:$T/foss/tools/openroad-librelane/bin:$PATH"
+    export PATH="$SHIM:$SHIM/.verilator-root/bin:$T/foss/tools/openroad-librelane/bin:$PATH"
     export VERILATOR_ROOT="$T/foss/tools/verilator/share/verilator"
     export TOOLS="$T/foss/tools"
     export PDK_ROOT="${PDK_ROOT:-$T/foss/pdks}"

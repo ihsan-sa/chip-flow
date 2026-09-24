@@ -221,15 +221,7 @@ else
   report "ngspice-nfet-dc" false "$(echo "$out" | tail -c 300)"
 fi
 
-# --------------------------------------------------------------------------- magic
-out="$(timeout 30 "$EDA" magic -dnull -noconsole 2>&1 < /dev/null)"
-if echo "$out" | grep -q "Cannot load technology"; then
-  report "magic-drc" false "this magic build ships no default/minimum technology (no magic/sys dir anywhere in the image); its mandatory first-technology bootstrap always tries to load one named exactly 'minimum' and fails before any script runs, regardless of -T/-rcfile. Needs either a hand-authored minimal tech file or an upstream fix; not solvable from the launcher side alone."
-else
-  report "magic-drc" true "magic bootstrap unexpectedly succeeded: $(echo "$out" | tail -c 200)"
-fi
-
-# -------------------------------------------------------------------------- klayout
+# a tiny one-box GDS, shared by the magic and klayout DRC smokes below
 cat > tiny.rb <<'EOF'
 layout = RBA::Layout.new
 layout.dbu = 0.001
@@ -239,6 +231,28 @@ top.shapes(m1).insert(RBA::Box.new(0, 0, 2000, 2000))
 layout.write("tiny.gds")
 EOF
 "$EDA" klayout -b -r tiny.rb >/dev/null 2>&1
+
+# --------------------------------------------------------------------------- magic
+# magic's own bootstrap always loads a technology named exactly "minimum"
+# first; -rcfile is what routes the PDK's own tech through that same
+# bootstrap instead (see the comment on the "magic" case in bin/eda for why
+# this -- not -T, not a `tech load` after the fact -- is the form that
+# doesn't segfault on a real gds read).
+cat > magic_drc.tcl <<'EOF'
+gds read tiny.gds
+select top cell
+drc check
+drc catchup
+quit
+EOF
+if [ -f tiny.gds ] && out="$(timeout 60 "$EDA" magic magic_drc.tcl < /dev/null 2>&1)" \
+   && echo "$out" | grep -q "Total DRC errors found:"; then
+  report "magic-drc" true "$(echo "$out" | grep -m1 'Total DRC errors found:')"
+else
+  report "magic-drc" false "$(echo "$out" | tail -c 300)"
+fi
+
+# -------------------------------------------------------------------------- klayout
 DRC_DECK="$PDK/libs.tech/klayout/tech/drc/gf180mcu.drc"
 if [ -f tiny.gds ] && out="$(timeout 240 "$EDA" klayout -b -r "$DRC_DECK" \
      -rd input=tiny.gds -rd topcell=TOP -rd report=tiny.lyrdb -rd run_mode=flat \
