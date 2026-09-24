@@ -275,69 +275,83 @@ def run(argv=None):
     state_path = Path(args.state) if args.state else (
         workspace / "state.json" if (workspace / "state.json").is_file()
         else None)
-    if state_path is not None:
-        import state as state_mod
-        st = state_mod.State.load(state_path)
-        skill = st.data.get("skill")
 
-    out_dir = Path(args.out_dir) if args.out_dir else workspace / "log" / "workorders"
+    # Hold the writer lock across load -> open_issue -> save, same as
+    # jobs.py's start()/status() and gate.py's record_gate_result: a
+    # dispatch can run while a `harden` job (jobs.py, detached, can run the
+    # better part of an hour) is still writing this same workspace's
+    # state.json, and State.save()'s compare-and-swap would otherwise raise
+    # StaleWriteError on a perfectly good dispatch. No-op lock when there is
+    # no state.json to guard.
+    import contextlib
+    import safelib
+    lock_cm = (safelib.writer_lock(state_path, what="state.json")
+              if state_path is not None else contextlib.nullcontext())
+    with lock_cm:
+        if state_path is not None:
+            import state as state_mod
+            st = state_mod.State.load(state_path)
+            skill = st.data.get("skill")
 
-    artifacts = {"workspace": str(workspace).replace("\\", "/")}
-    for name in SIDECARS:
-        f = workspace / name
-        if f.exists():
-            artifacts[Path(name).stem] = str(f).replace("\\", "/")
+        out_dir = Path(args.out_dir) if args.out_dir else workspace / "log" / "workorders"
 
-    rem_dir = None
-    if state_path is not None:
-        # repo root: two levels above engine/scripts (engine/ -> repo root)
-        repo_root = ENGINE.parent
-        rem_dir = remediation_dir(repo_root, skill)
+        artifacts = {"workspace": str(workspace).replace("\\", "/")}
+        for name in SIDECARS:
+            f = workspace / name
+            if f.exists():
+                artifacts[Path(name).stem] = str(f).replace("\\", "/")
 
-    orders: list[dict] = []
-    ts = time.strftime("%Y-%m-%dT%H:%M:%S")
-    for c in clusters:
-        domain = DOMAINS.get(c["fixer"], DOMAINS["review"])
-        if st is not None:
-            rec = st.open_issue({
+        rem_dir = None
+        if state_path is not None:
+            # repo root: two levels above engine/scripts (engine/ -> repo root)
+            repo_root = ENGINE.parent
+            rem_dir = remediation_dir(repo_root, skill)
+
+        orders: list[dict] = []
+        ts = time.strftime("%Y-%m-%dT%H:%M:%S")
+        for c in clusters:
+            domain = DOMAINS.get(c["fixer"], DOMAINS["review"])
+            if st is not None:
+                rec = st.open_issue({
+                    "gate": meta.get("gate"), "phase": meta.get("phase"),
+                    "fixer": c["fixer"], "kinds": c.get("kinds"),
+                    "severity": c.get("severity"), "count": c.get("count"),
+                    "work_order": None,
+                })
+                oid = rec["id"]
+            else:
+                oid = len(orders) + 1
+            remediations = remediation_paths(c.get("kinds"), rem_dir)
+            guidance = list(domain["guidance"])
+            if remediations:
+                guidance.insert(0, REMEDIATION_GUIDANCE)
+            order = {
+                "id": oid, "created": ts,
                 "gate": meta.get("gate"), "phase": meta.get("phase"),
-                "fixer": c["fixer"], "kinds": c.get("kinds"),
-                "severity": c.get("severity"), "count": c.get("count"),
-                "work_order": None,
-            })
-            oid = rec["id"]
-        else:
-            oid = len(orders) + 1
-        remediations = remediation_paths(c.get("kinds"), rem_dir)
-        guidance = list(domain["guidance"])
-        if remediations:
-            guidance.insert(0, REMEDIATION_GUIDANCE)
-        order = {
-            "id": oid, "created": ts,
-            "gate": meta.get("gate"), "phase": meta.get("phase"),
-            "workspace": artifacts["workspace"], "fixer": c["fixer"],
-            "role_prompt": (f"skills/{skill}/agents/fixer.md" if skill
-                            else None),
-            "allowed_scripts": domain["scripts"],
-            "guidance": guidance,
-            "remediations": remediations,
-            "cluster": {k: c[k] for k in ("file", "module", "kinds", "checks",
-                                          "severity", "count", "violations")},
-            "artifacts": artifacts,
-            "scope": "fix ONLY these findings; do not touch unrelated "
-                     "files; re-run the failed gate when done",
-        }
-        out_dir.mkdir(parents=True, exist_ok=True)
-        wo_path = out_dir / f"wo-{oid}.json"
-        wo_path.write_text(json.dumps(order, indent=1), encoding="utf-8")
-        if st is not None:
-            for rec in st.data["open_issues"]:
-                if rec["id"] == oid:
-                    rec["work_order"] = str(wo_path).replace("\\", "/")
-        orders.append(order)
+                "workspace": artifacts["workspace"], "fixer": c["fixer"],
+                "role_prompt": (f"skills/{skill}/agents/fixer.md" if skill
+                                else None),
+                "allowed_scripts": domain["scripts"],
+                "guidance": guidance,
+                "remediations": remediations,
+                "cluster": {k: c[k] for k in ("file", "module", "kinds",
+                                              "checks", "severity", "count",
+                                              "violations")},
+                "artifacts": artifacts,
+                "scope": "fix ONLY these findings; do not touch unrelated "
+                         "files; re-run the failed gate when done",
+            }
+            out_dir.mkdir(parents=True, exist_ok=True)
+            wo_path = out_dir / f"wo-{oid}.json"
+            wo_path.write_text(json.dumps(order, indent=1), encoding="utf-8")
+            if st is not None:
+                for rec in st.data["open_issues"]:
+                    if rec["id"] == oid:
+                        rec["work_order"] = str(wo_path).replace("\\", "/")
+            orders.append(order)
 
-    if st is not None:
-        st.save()
+        if st is not None:
+            st.save()
 
     by_domain: dict[str, int] = {}
     for o in orders:

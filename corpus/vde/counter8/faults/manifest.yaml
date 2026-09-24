@@ -1,0 +1,27 @@
+# faults manifest (docs/design.md section 3, "### M2."): one entry per gate
+# this rung demonstrates. faults.py copies the rung into a scratch
+# workspace, imports plant.py's `plant(ws)` and runs it, then runs `gate`
+# and checks the result against `expect` - `status` is gate.py's own
+# pass|fail vocabulary, `kind` is a kind from the failing findings list.
+version: 1
+faults:
+  - name: spec_lint_requirement_no_check
+    gate: spec_lint
+    plant: plant_spec_lint.py
+    expect: {status: fail, kind: requirement_no_check}
+  - name: lint_latch
+    gate: lint
+    plant: plant_lint.py
+    expect: {status: fail, kind: LATCH}
+  - name: sim_wraps_one_early
+    gate: sim
+    plant: plant_sim.py
+    expect: {status: fail, kind: test_failed}
+  - name: holdout_delayed_reset
+    gate: holdout
+    plant: plant_holdout.py
+    expect: {status: fail, kind: holdout_failed}
+  - name: mutate_asserts_nothing
+    gate: mutate
+    plant: plant_mutate.py
+    expect: {status: fail, kind: kill_rate_below_threshold}

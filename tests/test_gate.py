@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import json
 import sys
+import threading
+import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -108,11 +110,36 @@ def test_evaluate_pass_and_fail_thresholds():
     assert gate.evaluate("lint", g, report3)["status"] == "pass"
 
 
+def test_evaluate_surfaces_check_specific_facts():
+    # a check script's own extra facts (mutate's kill_rate/survivors_by_
+    # class, sim's tests_run, lint's top) must reach the gate's own result,
+    # not be dropped along with the rest of the report envelope - docs/
+    # design.md "### M2.": "gate.py --gate mutate ... reports a kill rate
+    # and survivors by class".
+    g = {"fail_severities": ["error"], "max_count": 0, "phase": "P4",
+        "tool": "mutate"}
+    report = {"violations": [], "counts": {"total": 0}, "status": "pass",
+             "script": "check_mutate", "report_schema": 1, "input": "x",
+             "kill_rate": 0.95, "survivors_by_class": {}, "wall_s": 12.3}
+    r = gate.evaluate("mutate", g, report)
+    assert r["facts"] == {"kill_rate": 0.95, "survivors_by_class": {},
+                          "wall_s": 12.3}
+
+
+def test_evaluate_no_facts_key_when_report_has_no_extras():
+    g = {"fail_severities": ["error"], "max_count": 0}
+    report = {"violations": [], "counts": {"total": 0}}
+    assert "facts" not in gate.evaluate("lint", g, report)
+
+
 # ------------------------------------------------------------------ stub
 
 def test_stub_gate_is_always_exit_2(tmp_path, capsys):
+    # `lint` (M2) is a real gate now - `formal` is still an M1 stub
+    # (docs/design.md "### M3."), so it is what still proves this row's
+    # own point: a gate whose tool is not built is exit 2, never a pass.
     ws = make_ws(tmp_path)
-    code = gate.main(["--gate", "lint", "--workspace", str(ws)])
+    code = gate.main(["--gate", "formal", "--workspace", str(ws)])
     assert code == 2
     out = json.loads(capsys.readouterr().out)
     assert out["status"] == "error"
@@ -229,3 +256,58 @@ def test_report_mode_accepts_a_well_formed_report(tmp_path, capsys):
     code = gate.main(["--gate", "lint", "--workspace", str(ws),
                       "--gates", str(gates_yaml), "--report", str(rp)])
     assert code == 0
+
+
+# ------------------------------------------------------- concurrent writers
+
+def test_record_gate_result_concurrent_writers_do_not_race(tmp_path, monkeypatch):
+    """Two jobs recording into the SAME workspace at once (jobs.py: two
+    detached gates finishing close together) must both land, not have the
+    second lose a StaleWriteError to the first. record_gate_result used to
+    call State.load()/record_gate()/save() with no lock spanning the three -
+    only save() itself took the writer lock, around just the write - so two
+    callers could both load the same bytes, both mutate, and have the loser's
+    save() see a file that changed since ITS load and refuse (exactly
+    state.py's own CLI already avoids by holding one lock across load ->
+    mutate -> save, docs at state.py's module docstring "Writer safety").
+
+    A patched State.load sleeps AFTER doing the real read, with no
+    barrier/lock of its own: two threads started together race straight
+    into that window. Against the unfixed code (lock only inside save())
+    both loads land in the open window and one thread's save() raises
+    StaleWriteError. Against the fix (the whole load -> mutate -> save span
+    under one writer_lock) the second thread blocks for the lock before it
+    can even call load, so it always reloads fresh and this passes."""
+    ws = make_ws(tmp_path)
+    gate_row = {"phase": "P4"}  # record_gate_result only reads .get("phase")
+
+    orig_load = state_mod.State.load
+
+    def slow_load(path):
+        st = orig_load(path)
+        time.sleep(0.2)
+        return st
+
+    monkeypatch.setattr(state_mod.State, "load", staticmethod(slow_load))
+
+    outcomes: list[dict] = [None, None]  # type: ignore[list-item]
+
+    def writer(i):
+        result = {"status": "pass", "failing_count": 0, "counts": {"total": 0}}
+        outcomes[i] = gate.record_gate_result("vde", "lint", gate_row, result, ws)
+
+    threads = [threading.Thread(target=writer, args=(i,)) for i in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=10)
+        assert not t.is_alive(), "writer thread hung"
+
+    for outcome in outcomes:
+        assert outcome is not None
+        assert outcome["ok"] is True, outcome
+        assert outcome["recorded"] is True, outcome
+
+    data = json.loads((ws / "state.json").read_text(encoding="utf-8"))
+    assert data["gates"]["lint"]["attempts"] == 2
+    assert data["gates"]["lint"]["status"] == "pass"

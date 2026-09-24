@@ -154,39 +154,47 @@ def _job_status(job: dict) -> tuple[str, dict | None]:
 
 def status(workspace: Path, job_id: str | None, all_jobs: bool,
           kill_if_dead: bool = False) -> dict:
+    import safelib
     import state as state_mod
     ws = Path(workspace)
     state_path = ws / "state.json"
-    st = state_mod.State.load(state_path)
-    ids = list(st.data["jobs"]) if all_jobs else [job_id]
-    out = {}
-    changed = False
-    for jid in ids:
-        job = st.data["jobs"].get(jid)
-        if job is None:
-            raise CheckError(f"no job {jid!r}")
-        cur_status = job["status"]
-        if cur_status == "running":
-            new_status, extra = _job_status(job)
-            if new_status != "running":
-                st.update_job(jid, status=new_status, result=extra)
-                changed = True
-            cur_status = new_status
-        if kill_if_dead and cur_status == "dead":
-            # Best-effort cleanup, not a status source: a dead-looking job
-            # (a missing/corrupt exit sidecar, say) can still have a
-            # lingering process, and a caller about to restart the gate on
-            # this workspace should not race it. ProcessLookupError (already
-            # gone) and PermissionError (not this process's to kill) are
-            # both fine outcomes here, never a reason to refuse the status
-            # report itself.
-            try:
-                os.kill(st.data["jobs"][jid]["pid"], signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                pass
-        out[jid] = st.data["jobs"][jid]
-    if changed:
-        st.save()
+    # Hold the writer lock across load -> update_job -> save, same as
+    # start() above and gate.py's record_gate_result: State.save() is only
+    # a compare-and-swap at the write, so an unlocked load here could race
+    # a detached gate.py (or a concurrent status --all-if-dead) landing its
+    # own write in between, and this call's save() would raise
+    # StaleWriteError on a perfectly good status poll.
+    with safelib.writer_lock(state_path, what="state.json"):
+        st = state_mod.State.load(state_path)
+        ids = list(st.data["jobs"]) if all_jobs else [job_id]
+        out = {}
+        changed = False
+        for jid in ids:
+            job = st.data["jobs"].get(jid)
+            if job is None:
+                raise CheckError(f"no job {jid!r}")
+            cur_status = job["status"]
+            if cur_status == "running":
+                new_status, extra = _job_status(job)
+                if new_status != "running":
+                    st.update_job(jid, status=new_status, result=extra)
+                    changed = True
+                cur_status = new_status
+            if kill_if_dead and cur_status == "dead":
+                # Best-effort cleanup, not a status source: a dead-looking
+                # job (a missing/corrupt exit sidecar, say) can still have a
+                # lingering process, and a caller about to restart the gate
+                # on this workspace should not race it. ProcessLookupError
+                # (already gone) and PermissionError (not this process's to
+                # kill) are both fine outcomes here, never a reason to
+                # refuse the status report itself.
+                try:
+                    os.kill(st.data["jobs"][jid]["pid"], signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+            out[jid] = st.data["jobs"][jid]
+        if changed:
+            st.save()
     return out
 
 

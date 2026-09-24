@@ -80,10 +80,15 @@ artifact_kinds:
 gate_inputs:
   vde:
     spec_lint: [spec_yaml]
-    lint:      [rtl]
-    sim:       [rtl, tb]
-    holdout:   [rtl, holdout]
-    mutate:    [rtl, tb]
+    # lint/sim/holdout/mutate (M2) all read spec.yaml's `top` module name
+    # (speclib.py) before touching rtl/tb/holdout, so spec_yaml is a real
+    # input of each - a `top` rename with no RTL edit must still invalidate
+    # them, and lint's rtl/lint_allow.yaml lives inside rtl/ so the `rtl`
+    # dir_text hash already covers it.
+    lint:      [rtl, spec_yaml]
+    sim:       [rtl, tb, spec_yaml]
+    holdout:   [rtl, holdout, spec_yaml]
+    mutate:    [rtl, tb, spec_yaml]
     formal:    [rtl, formal]
     cover:     [rtl, tb]
     synth:     [rtl]
