@@ -75,6 +75,18 @@ FIXER_DOMAINS = frozenset({
 #   - `release`'s own `gate_not_ready` is attest.py's coverage refusal, not
 #     a design defect - "review" (the human/orchestrator reads which gate
 #     is missing and re-enters the right phase; no script fixes this).
+#   - `harden`/`timing`/`drc`/`lvs`/`glsim`/`precheck` (M4, docs/design.md
+#     "### M4.") all findings on the ALREADY-hardened design (a LibreLane
+#     flow step failing outright, a timing corner in violation, a DRC/LVS
+#     mismatch, precheck) - "harden", matching fix_dispatch.DOMAINS'
+#     existing "harden" guidance ("adjust harden/config.json or the RTL,
+#     then re-run the harden job"); never routed straight to "rtl" the way
+#     synth's own findings are, because the fix is as often a harden
+#     constraint (floorplan, clock period, pin order) as it is the design.
+#     glsim's own `test_failed`/`test_skipped` are the one exception -
+#     shared with sim/holdout above, since a functional bug that only
+#     shows up gate-level is still a design defect ("harden" is silent
+#     bystander there, not the domain to route it to).
 FIXER_HINTS: dict[str, str] = {
     # lint (engine/scripts/check_lint.py) - verilator rule kinds, plus the
     # rule-less fallbacks the script itself uses.
@@ -132,6 +144,26 @@ FIXER_HINTS: dict[str, str] = {
 
     # release (check_release.py, via attest.py build())
     "gate_not_ready": "review",
+
+    # harden (check_harden.py)
+    "flow_step_failed": "harden",
+    "harden_missing_artifact": "harden",
+
+    # timing (check_timing.py)
+    "setup_violation": "harden",
+    "hold_violation": "harden",
+    "slew_or_cap_or_fanout_violation": "harden",
+
+    # drc (check_drc.py)
+    "magic_drc_violation": "harden",
+    "klayout_drc_violation": "harden",
+
+    # lvs (check_lvs.py)
+    "netlist_mismatch": "harden",
+
+    # precheck (check_precheck.py) - glsim's own kinds (test_failed/
+    # test_skipped) are shared with sim/holdout above.
+    "precheck_failed": "harden",
 }
 
 
