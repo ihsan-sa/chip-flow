@@ -53,6 +53,20 @@ def test_fixer_domains_matches_the_hint_table_universe():
     assert cluster_violations.FIXER_DOMAINS >= set(cluster_violations.FIXER_HINTS.values())
 
 
+def test_fixer_hints_populated_at_m5():
+    # M1/M2/M3 left this empty on purpose (docs/design.md: "each milestone
+    # that lands a real check_<gate>.py adds its finding kinds here"); M5
+    # is where /vde's own kinds finally land - tests/test_vde_skill.py
+    # additionally proves every corpus fault kind is covered.
+    assert len(cluster_violations.FIXER_HINTS) > 20
+
+
+def test_mutate_kinds_route_to_testbench_never_rtl():
+    clusters = cluster_violations.cluster(
+        [_v("kill_rate_below_threshold"), _v("survivor_reset_removed")])
+    assert {c["fixer"] for c in clusters} == {"testbench"}
+
+
 def test_cluster_accepts_and_ignores_legacy_radius_arg():
     # a caller written against the PCB-era cluster(violations, radius)
     # signature still works - the radius is accepted and ignored.

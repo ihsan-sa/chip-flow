@@ -23,8 +23,13 @@ Work order shape (log/workorders/wo-<id>.json):
     {"id", "gate", "phase", "workspace", "fixer", "role_prompt",
      "allowed_scripts": [...], "guidance": [...], "remediations": [...],
      "cluster": {file, module, kinds, checks, severity, count, violations[]},
+     "info_context": [{same shape as cluster, below the gate's own
+       fail_severities}, ...] - context only, never its own issue or order
+       (see run()'s failing_clusters/info_clusters split: an issue closes
+       by re-running the gate, and a below-fail-severity finding never made
+       it fail in the first place),
      "artifacts": {name: path...}, "scope":
-     "fix ONLY these findings; do not touch unrelated files"}
+     "fix ONLY the findings in `cluster`; do not touch unrelated files"}
 """
 from __future__ import annotations
 
@@ -68,9 +73,13 @@ DOMAINS: dict[str, dict] = {
     "formal": {
         "scripts": ["engine/scripts/gate.py", "engine/scripts/state.py"],
         "guidance": [
-            "Edit formal/ only; a bounded-not-proven result names the depth "
-            "reached - widen the induction depth or fix the property, "
-            "never loosen it to make the gate pass.",
+            "Edit formal/*.sv, or spec/spec.yaml's own 'formal: {depth}' "
+            "key ONLY (M5: 'widen the induction depth' has to mean editing "
+            "this field - depth is not a property-file concept - so this "
+            "domain's scope explicitly includes it; nothing else in "
+            "spec.yaml). A bounded-not-proven or cover_not_reached result "
+            "names the depth reached - widen it, or fix the property "
+            "itself, never loosen either to make the gate pass.",
         ],
     },
     "synth": {
@@ -150,15 +159,33 @@ def remediation_paths(kinds, rem_dir: Path | None = None) -> list[str]:
 
 
 def load_input(path: Path) -> tuple[list[dict], dict]:
-    """Accept a gate.py result (failing[]), a check_<gate>.py report
-    (violations[]), or a cluster_violations payload (clusters[] -
-    reclustered from their violations)."""
+    """Accept a gate.py result (violations[], every severity, since M5 -
+    failing[] before it, the fail_severities-only subset), a
+    check_<gate>.py report (violations[]), or a cluster_violations payload
+    (clusters[] - reclustered from their violations).
+
+    `violations` is preferred over `failing` when a gate.py result carries
+    both (M5, found running the fix loop for real on /vde's own `mutate`
+    gate: most survivor_* findings are severity "info" - gates.yaml's
+    fail_severities is [error] - so `failing` alone showed a fixer 1 of 12
+    real survivors; the fuller `violations` list is what a fixer actually
+    needs to raise a kill rate). An info-severity finding is NOT harmless
+    to dispatch as its own cluster though (M5, found the hard way): the
+    gate's own pass/fail comes from `failing_count` alone, never from an
+    info finding, so an issue opened for one can never be closed by
+    re-running the gate - `run()` below only ever opens an issue/order for
+    a cluster at the gate's own failing severity (`criteria.
+    fail_severities`, carried through as `meta["fail_severities"]` here),
+    and folds same-gate info clusters into those orders as context
+    instead."""
     data = checklib.load_json(path, "input report")
-    meta = {"gate": data.get("gate"), "phase": data.get("phase")}
-    if "failing" in data:
-        return data["failing"], meta
+    meta = {"gate": data.get("gate"), "phase": data.get("phase"),
+            "fail_severities": (data.get("criteria") or {}).get(
+                "fail_severities")}
     if "violations" in data and isinstance(data["violations"], list):
         return data["violations"], meta
+    if "failing" in data:
+        return data["failing"], meta
     if "clusters" in data:
         vs = [v for c in data["clusters"] for v in c.get("violations", [])]
         return vs, meta
@@ -270,6 +297,24 @@ def run(argv=None):
     clusters = cluster_violations.cluster(violations)
     clusters = merge_small_clusters(clusters)
 
+    # Only a cluster at the gate's OWN failing severity (gate.py's
+    # `criteria.fail_severities`, default {"error"} exactly matching
+    # gate.py's own evaluate() default) becomes an issue/work order: that is
+    # the one thing a fixer re-running the gate can actually close. A
+    # same-gate finding below that severity (a `mutate` survivor detail, a
+    # `formal` bounded-not-proven depth, a `cover` line-not-covered) never
+    # made the gate fail, so an issue opened for it alone could never close
+    # by re-running the gate - it rides along as CONTEXT on the
+    # failing-severity orders below instead (`info_context`), never as its
+    # own issue.
+    fail_sev = set(meta.get("fail_severities") or ["error"])
+    failing_clusters = [c for c in clusters if c["severity"] in fail_sev]
+    info_clusters = [c for c in clusters if c["severity"] not in fail_sev]
+    info_context = [
+        {k: c[k] for k in ("file", "module", "kinds", "checks", "severity",
+                           "count", "violations")}
+        for c in info_clusters]
+
     st = None
     skill = None
     state_path = Path(args.state) if args.state else (
@@ -309,7 +354,7 @@ def run(argv=None):
 
         orders: list[dict] = []
         ts = time.strftime("%Y-%m-%dT%H:%M:%S")
-        for c in clusters:
+        for c in failing_clusters:
             domain = DOMAINS.get(c["fixer"], DOMAINS["review"])
             if st is not None:
                 rec = st.open_issue({
@@ -337,9 +382,13 @@ def run(argv=None):
                 "cluster": {k: c[k] for k in ("file", "module", "kinds",
                                               "checks", "severity", "count",
                                               "violations")},
+                "info_context": info_context,
                 "artifacts": artifacts,
-                "scope": "fix ONLY these findings; do not touch unrelated "
-                         "files; re-run the failed gate when done",
+                "scope": "fix ONLY the findings in `cluster`; `info_context` "
+                         "(same gate, below its failing severity) is "
+                         "background only, never its own fix target; do "
+                         "not touch unrelated files; re-run the failed "
+                         "gate when done",
             }
             out_dir.mkdir(parents=True, exist_ok=True)
             wo_path = out_dir / f"wo-{oid}.json"
@@ -363,12 +412,19 @@ def run(argv=None):
         "counts": {"orders": len(orders), "violations": len(violations),
                    "by_domain": by_domain,
                    "with_remediation": sum(1 for o in orders
-                                           if o["remediations"])},
+                                           if o["remediations"]),
+                   # below the gate's own fail_severities - never an issue
+                   # on their own (see the comment above failing_clusters),
+                   # attached as info_context on every order instead
+                   "info_only_clusters": len(info_clusters),
+                   "info_only_violations": sum(c["count"]
+                                               for c in info_clusters)},
         "orders": [{"id": o["id"], "fixer": o["fixer"],
                     "severity": o["cluster"]["severity"],
                     "file": o["cluster"]["file"], "kinds": o["cluster"]["kinds"],
                     "count": o["cluster"]["count"],
                     "remediations": o["remediations"],
+                    "info_context_clusters": len(o["info_context"]),
                     "work_order": str(out_dir / f"wo-{o['id']}.json")
                     .replace("\\", "/")}
                    for o in orders],

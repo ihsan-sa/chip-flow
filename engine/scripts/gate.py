@@ -202,6 +202,17 @@ def evaluate(gate_name: str, gate: dict, report: dict) -> dict:
         "counts": report.get("counts", {}),
         "failing_count": len(failing),
         "failing": failing,
+        # The check's FULL violations list, every severity - not just the
+        # fail_severities-matching subset above (M5, found running the fix
+        # loop for real on /vde's own mutate gate: most survivor_* findings
+        # are severity "info" by design, gates.yaml's fail_severities is
+        # [error], so `failing` alone showed a fixer 1 of 12 real survivors
+        # - the other 11 existed only in the check script's own raw report,
+        # which nothing downstream of gate.py ever saw again). Pass/fail
+        # and recording both still key off `failing`/`failing_count` alone,
+        # unchanged; this is purely additional diagnostic fidelity for a
+        # fixer or fix_dispatch.py to cluster against.
+        "violations": violations,
     }
     # Whatever the check script reported beyond the standard envelope - a
     # kill rate and survivors by class (mutate), tests_run (sim/holdout), a

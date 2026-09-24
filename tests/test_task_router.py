@@ -48,11 +48,16 @@ def test_shared_verb_set_is_exactly_the_six_named():
         ["full-run", "review", "fix-finding", "resume", "release", "learn"])
 
 
-def test_vde_adds_its_own_m2_verbs():
+def test_vde_adds_its_own_verbs():
+    # M2 landed add-test/mutate; M5 (docs/design.md, "### M5.") landed the
+    # rest of section 1.8's /vde list plus a real full-run override - see
+    # tests/test_vde_skill.py's test_vde_verb_set_after_m5 for the M5-era
+    # assertion this one now matches.
     tasks = tr.load_tasks("vde")
     assert sorted(tasks["verbs"]) == sorted(
         ["full-run", "review", "fix-finding", "resume", "release", "learn",
-         "add-test", "mutate"])
+         "add-test", "mutate", "spec", "prove", "harden", "fix-timing",
+         "optimise"])
 
 
 def test_gates_and_holds_are_never_restated_in_the_recipe():
@@ -169,7 +174,61 @@ def test_release_gate_step_is_skill_scoped(tmp_path):
     assert "--skill ade" in gate_steps[0]["command"]
 
 
+def test_resume_view_and_no_open_issues_precondition_treat_escalated_as_open():
+    """Same rule as state.py's own resume_summary and attest.py's build()
+    (M5, found running the fix loop for real): a `no_open_issues`
+    precondition must not wave an escalated (human-decision-pending) issue
+    through as if it were closed - only fixed/waived are genuinely done."""
+    data = {"open_issues": [
+        {"id": 1, "status": "escalated"},
+        {"id": 2, "status": "fixed"},
+        {"id": 3, "status": "waived"},
+        {"id": 4, "status": "open"},
+    ], "gates": {}}
+    ctx = {"workspace": ".", "state": data}
+    view = tr.resume_view(ctx)
+    assert sorted(view["open_issues"]) == [1, 4]
+    problems = tr.check_preconditions({"preconditions": ["no_open_issues"]},
+                                      {"exists": True}, view)
+    assert problems[0]["name"] == "no_open_issues"
+    assert problems[0]["ok"] is False
+
+
 def test_list_shows_all_six_verbs():
     payload, _ = tr.run(["--skill", "msde", "--list"])
     assert {v["verb"] for v in payload["verbs"]} == {
         "full-run", "review", "fix-finding", "resume", "release", "learn"}
+
+
+# --------------------------------------------------- CHIP_FLOW_HOME binding
+
+def test_render_binds_scripts_to_chip_flow_home_from_a_different_cwd(
+        tmp_path, monkeypatch):
+    """docs/design.md 1.1: a skill reaches the engine only through
+    $CHIP_FLOW_HOME, never a path relative to cwd or a repo checkout - a
+    read-only skill checkout has no `engine/` sibling to resolve
+    `scripts/<name>.py` against. Prove a rendered plan's own commands
+    resolve to real files even when this process's cwd is nowhere near the
+    repo."""
+    monkeypatch.setenv("CHIP_FLOW_HOME", str(REPO))
+    monkeypatch.chdir(tmp_path)
+    ws = ws_empty(tmp_path)
+    state_mod.State.init(ws, "vde", "counter8")
+    payload, _ = tr.run(["--skill", "vde", "--verb", "resume",
+                        "--workspace", str(ws)])
+    assert payload["status"] == "planned"
+    cmds = [s["command"] for s in payload["recipe"]["steps"]
+           if s.get("kind") == "script"]
+    assert cmds, "resume should render at least one script step"
+    prefix = str(REPO / "engine" / "scripts") + "/"
+    for c in cmds:
+        assert c.startswith(prefix), c
+        script_path = Path(c.split()[0])
+        assert script_path.is_file(), f"rendered command names a script " \
+                                      f"that does not exist: {script_path}"
+
+
+def test_chip_flow_home_defaults_when_env_unset(monkeypatch):
+    monkeypatch.delenv("CHIP_FLOW_HOME", raising=False)
+    assert tr.chip_flow_home() == Path(
+        "~/.claude/skills/chip-flow").expanduser()

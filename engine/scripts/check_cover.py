@@ -230,7 +230,14 @@ def run(argv=None):
     ap.add_argument("--out", help="write result JSON here instead of stdout")
     args = ap.parse_args(argv)
 
-    ws = Path(args.workspace)
+    # Resolved to absolute FIRST (M5, found by actually running this gate
+    # against a relative --workspace): write_coverage_info's own `cwd=
+    # str(ws)` combined with an unresolved-relative `info_path`/
+    # `coverage_dat` (both built from this same `ws`) doubles the
+    # workspace's own relative prefix under the subprocess's cwd and the
+    # file is never found there. Absolute throughout sidesteps this
+    # regardless of what the caller passed.
+    ws = Path(args.workspace).resolve()
     spec = speclib.load_spec(ws / "spec" / "spec.yaml")
     top = spec.get("top")
     if not isinstance(top, str) or not top.strip():

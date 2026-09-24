@@ -1,0 +1,35 @@
+# Copy into spec/spec.yaml and edit - see skills/vde/agents/spec-writer.md
+# for how to pick a `check` kind, and engine/lib/speclib.py for the full
+# schema. One requirement of each check kind shown; delete the ones you
+# don't need, add as many `sim`/`both` ones as the spec actually implies.
+
+top: <top_module_name>
+
+requirements:
+  - id: REQ-<SHORT-NAME>
+    text: <one sentence, testable, matching spec.md's own prose>
+    check: sim
+
+  - id: REQ-<SHORT-NAME-FORMAL>
+    text: <a property that must hold for ALL time, not just what a test tries>
+    check: formal
+    property: REQ_<SHORT_NAME_FORMAL>   # legal Verilog label - no dashes
+
+  # - id: REQ-<SHORT-NAME-MEASURE>       # rare in /vde; common in /ade
+  #   text: <a numeric bound a testbench measures>
+  #   check: measure
+  #   bounds: {min: 0, max: 0}
+
+ports:
+  clk: {dir: input, width: 1}
+  # ...
+
+clock:
+  period_ns: 10
+  domains: [clk]
+
+# must_keep: [<cell_or_signal_name>]   # optional - M7's optimiser may not
+#                                        remove these
+
+# mutate: {size: 24, seed: 1}          # optional - defaults live in
+# formal: {depth: 20}                  # check_mutate.py / check_formal.py

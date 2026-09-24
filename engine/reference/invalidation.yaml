@@ -89,7 +89,13 @@ gate_inputs:
     sim:       [rtl, tb, spec_yaml]
     holdout:   [rtl, holdout, spec_yaml]
     mutate:    [rtl, tb, spec_yaml]
-    formal:    [rtl, formal]
+    # spec_yaml (M5, added): check_formal.py also reads `top` and this
+    # block's own `formal: {depth}` from spec.yaml - a depth-only edit
+    # (the fix loop's own sanctioned way to close a bounded-not-proven or
+    # cover_not_reached finding, fix_dispatch.DOMAINS["formal"]) touches no
+    # file under formal/ or rtl/ at all, and without this a stale recorded
+    # PASS from before the depth changed would still read as fresh.
+    formal:    [rtl, formal, spec_yaml]
     cover:     [rtl, tb]
     synth:     [rtl]
     harden:    [rtl, harden_config, harden_info]

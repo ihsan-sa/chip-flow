@@ -66,6 +66,51 @@ def test_build_refuses_with_an_open_issue_even_if_gates_pass(tmp_path):
     assert any("open issue" in p for p in problems)
 
 
+def test_build_treats_an_underdocumented_waiver_as_still_open(tmp_path):
+    """state.py's own CLI refuses `issue --status waived` without --note
+    and --approved-by (tests/test_state.py), but attest.py must not trust
+    the status LABEL alone either - a hand-edited state.json (or a waiver
+    written before that requirement landed) with `status: waived` and
+    neither field must still block release, exactly like an open issue."""
+    ws = make_ws(tmp_path)
+    pass_every_gate(ws, "msde")
+    st = state_mod.State.load(ws / "state.json")
+    rec = st.open_issue({"gate": "cosim", "fixer": "review"})
+    rec["status"] = "waived"          # bypasses update_issue's own guard
+    st.save()
+    att, problems = attest_mod.build(ws)
+    assert att is None
+    assert any("open issue" in p for p in problems)
+
+
+def test_build_accepts_a_properly_documented_waiver(tmp_path):
+    ws = make_ws(tmp_path)
+    pass_every_gate(ws, "msde")
+    st = state_mod.State.load(ws / "state.json")
+    rec = st.open_issue({"gate": "cosim", "fixer": "review"})
+    st.update_issue(rec["id"], status="waived",
+                    note="proven equivalent mutant", approved_by="alice")
+    st.save()
+    att, problems = attest_mod.build(ws)
+    assert problems == []
+    assert att is not None
+
+
+def test_build_refuses_with_an_escalated_issue(tmp_path):
+    """"escalated" is the fix loop's own outcome for a finding a human has
+    to decide on - never resolved by build() alongside "open"/"fixing"
+    (M5, found running the fix loop for real)."""
+    ws = make_ws(tmp_path)
+    pass_every_gate(ws, "msde")
+    st = state_mod.State.load(ws / "state.json")
+    rec = st.open_issue({"gate": "cosim", "fixer": "review"})
+    st.update_issue(rec["id"], status="escalated")
+    st.save()
+    att, problems = attest_mod.build(ws)
+    assert att is None
+    assert any("open issue" in p for p in problems)
+
+
 def test_build_refuses_when_a_gate_edit_marks_it_stale(tmp_path):
     ws = make_ws(tmp_path)
     pass_every_gate(ws, "msde")

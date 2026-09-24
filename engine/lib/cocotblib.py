@@ -106,8 +106,25 @@ def run_cocotb(build_dir: Path, test_dir: Path, sources: list[Path],
     land on that fd ahead of the JSON, so a consumer that runs gate.py as a
     subprocess and expects pure JSON on stdout gets unparsable noise instead
     (nothing here breaks: results are already read back from results_xml,
-    never from this log)."""
+    never from this log).
+
+    Every path handed to cocotb_tools.runner is resolved to absolute FIRST
+    (found the hard way, M5): the runner's own Simulator._execute changes
+    the real OS working directory before it spawns iverilog/vvp, so a
+    caller's RELATIVE `results_xml` (or build_dir/test_dir) is no longer
+    relative to the caller's own cwd by the time it is actually opened - it
+    lands nested one more copy of the workspace's own relative prefix
+    beneath test_dir (e.g. `tb/blocks/x/log/results.xml` instead of
+    `blocks/x/log/results.xml`). That silently writes INSIDE `tb/` itself,
+    a `dir_text`-hashed gate input, and staled every gate that reads `tb`
+    on the very next hash check with no RTL/tb edit involved. Absolute
+    paths make every one of these calls independent of whatever directory
+    the runner is standing in at the moment it opens them."""
     from cocotb_tools.runner import get_runner
+    build_dir = Path(build_dir).resolve()
+    test_dir = Path(test_dir).resolve()
+    sources = [Path(s).resolve() for s in sources]
+    results_xml = Path(results_xml).resolve()
     runner = get_runner("icarus")
     log_file = str(build_dir / "sim.log")
     runner.build(sources=[str(s) for s in sources], hdl_toplevel=hdl_toplevel,

@@ -110,6 +110,32 @@ def test_evaluate_pass_and_fail_thresholds():
     assert gate.evaluate("lint", g, report3)["status"] == "pass"
 
 
+def test_evaluate_keeps_full_violations_list_not_just_failing():
+    """M5 fix (docs/design.md, commit '10431ee gate.py/fix_dispatch: keep
+    every severity, not just failing'): `failing`/`failing_count` still key
+    pass/fail off fail_severities alone, but `violations` must carry EVERY
+    severity the check reported. fix_dispatch.py reads `violations` in
+    preference to `failing` precisely because most `mutate` survivor
+    findings are severity info (gates.yaml's fail_severities is [error]) -
+    a gate result that dropped back to `failing`-only would starve
+    fix_dispatch of most of what a fixer actually needs."""
+    g = {"fail_severities": ["error"], "max_count": 0, "phase": "P4",
+        "tool": "mutate"}
+    report = {"violations": [
+        {"severity": "error", "kind": "kill_rate_below_threshold"},
+        {"severity": "info", "kind": "survivor_reset_removed"},
+        {"severity": "info", "kind": "survivor_other"},
+    ], "counts": {"total": 3}}
+    r = gate.evaluate("mutate", g, report)
+    assert r["status"] == "fail"
+    assert r["failing_count"] == 1
+    assert len(r["failing"]) == 1
+    assert len(r["violations"]) == 3   # every severity, not just failing
+    assert {v["kind"] for v in r["violations"]} == {
+        "kill_rate_below_threshold", "survivor_reset_removed",
+        "survivor_other"}
+
+
 def test_evaluate_surfaces_check_specific_facts():
     # a check script's own extra facts (mutate's kill_rate/survivors_by_
     # class, sim's tests_run, lint's top) must reach the gate's own result,

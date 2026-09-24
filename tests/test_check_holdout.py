@@ -149,3 +149,26 @@ def test_no_holdout_modules_is_an_error(tmp_path, capsys):
     out = json.loads(capsys.readouterr().out)
     assert code == 2
     assert "no test_*.py modules" in out["remediation"]
+
+
+@pytest.mark.slow
+def test_relative_workspace_does_not_pollute_holdout(tmp_path, capsys,
+                                                     monkeypatch):
+    """M5 regression - same root cause as test_check_sim.py's own
+    test_relative_workspace_does_not_pollute_tb: cocotblib.run_cocotb (also
+    used here for holdout/) used to hand cocotb_tools.runner unresolved
+    relative paths that landed doubled under the test dir, this time inside
+    `holdout/` (also a dir_text-hashed gate input)."""
+    ws = make_ws(tmp_path, RTL_GOOD, HOLDOUT_TB)
+    monkeypatch.chdir(tmp_path)
+    code = check_holdout.main(["--workspace", "ws"])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0, out
+    assert out["status"] == "pass"
+    # __pycache__ is ordinary Python bytecode caching from importing the
+    # test module - present regardless of relative/absolute --workspace,
+    # not the bug this test targets.
+    leftover = [p for p in (ws / "holdout").iterdir()
+               if p.name not in ("test_holdout.py", "__pycache__")]
+    assert leftover == [], \
+        f"a relative --workspace polluted holdout/ with: {leftover}"
