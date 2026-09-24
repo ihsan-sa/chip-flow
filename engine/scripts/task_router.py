@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -50,6 +51,36 @@ STEP_KINDS = ("do", "gate", "agent", "human", "recipe", "note")
 PRECONDITIONS = ("workspace", "no_open_issues")  # plus "gates_fresh:<gate>"
 
 _PLACEHOLDER = re.compile(r"\{([a-z_]+)\}")
+
+
+def chip_flow_home() -> Path:
+    """The engine's real root: `$CHIP_FLOW_HOME`, or
+    `~/.claude/skills/chip-flow` by default - docs/design.md 1.1's own
+    env-var contract ("Every script under skills/ resolves it as
+    Path(os.environ.get('CHIP_FLOW_HOME', ...))"). A rendered plan step
+    binds the `scripts/<name>.py` convention (below) to THIS, never to
+    this process's own cwd or `__file__` - a read-only skill checkout
+    binds `skills/vde` alone, with no `engine/` sibling reachable by a
+    relative path, and the session reading a rendered plan may not even
+    share this process's cwd."""
+    return Path(os.environ.get(
+        "CHIP_FLOW_HOME", "~/.claude/skills/chip-flow")).expanduser()
+
+
+# Only the bare, leading `scripts/` token - never `engine/scripts/` (already
+# resolved) or a coincidental `myscripts/` inside some other path.
+_SCRIPTS_PREFIX_RE = re.compile(r"(?<![\w/])scripts/")
+
+
+def _resolve_scripts(cmd: str) -> str:
+    """Bind the docs/design.md 1.1 `scripts/<name>.py` short form (what
+    tasks.yaml/gates.yaml are written against, and what --validate below
+    still checks unresolved) to the real, resolved engine/scripts directory
+    - applied once, here, to every rendered step's own command text, so a
+    session never has to reconstruct that path itself relative to a repo
+    root it may not be sitting in."""
+    real = (chip_flow_home() / "engine" / "scripts").as_posix()
+    return _SCRIPTS_PREFIX_RE.sub(real + "/", cmd)
 
 
 # ---------------------------------------------------------------------------
@@ -527,8 +558,9 @@ def build_plan(verb: str, spec: dict, tasks: dict, text: str, args: dict,
                 step[k] = raw[k]
         if "do" in raw:
             cmd, free = _bind(raw["do"], slots, args, required, needs)
-            step.update(kind="script", command=cmd,
-                        script=cmd.split()[0].split("/")[-1])
+            script = cmd.split()[0].split("/")[-1]
+            step.update(kind="script", command=_resolve_scripts(cmd),
+                        script=script)
             if free:
                 step["free_slots"] = sorted(set(free))
         elif "gate" in raw:
@@ -575,13 +607,14 @@ def _gate_step(gate: str, slots: dict, skill: str) -> dict:
     ws = slots.get("ws", "<ws>")
     if "{" in gate:
         return {"gate": gate,
-                "command": (f"scripts/gate.py --gate {gate} "
-                            f"--workspace {ws}")}
+                "command": _resolve_scripts(f"scripts/gate.py --gate {gate} "
+                                            f"--workspace {ws}")}
     return {"gate": gate,
-            "command": (f"scripts/gate.py --gate {gate} --skill {skill} "
-                        f"--workspace {ws} "
-                        f"--out {slots.get('reports', '<reports>')}/"
-                        f"gate-{gate}.json")}
+            "command": _resolve_scripts(
+                f"scripts/gate.py --gate {gate} --skill {skill} "
+                f"--workspace {ws} "
+                f"--out {slots.get('reports', '<reports>')}/"
+                f"gate-{gate}.json")}
 
 
 # ---------------------------------------------------------------------------
