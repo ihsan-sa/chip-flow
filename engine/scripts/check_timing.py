@@ -24,9 +24,10 @@ Failure classification (the same three-way split check_harden.py uses):
   - no `harden/runs/run/final/` at all -> CheckError (harden has not run;
     never a pass masquerading as "nothing to check").
   - `eda sta` for a corner times out, crashes, or exits with no parseable
-    "worst slack" line -> CheckError (a launcher/tool failure is a refusal,
-    never recorded as a plain slack violation the fix loop could waive as
-    "just timing").
+    "worst slack" line, or with no slew/cap/fanout counts line ->
+    CheckError (a launcher/tool failure is a refusal, never recorded as a
+    plain slack violation the fix loop could waive as "just timing", and
+    never a pass on a check that did not run).
   - every corner's STA completes and reports a negative slack or a
     reported violator -> a `violations` finding, exit 1.
 """
@@ -51,8 +52,45 @@ SCRIPT = "check_timing"
 EDA_BIN = REPO / "bin" / "eda"
 TIMEOUT_S = 120.0
 SLACK_RE = re.compile(r"worst slack (max|min)\s+(-?[0-9.]+(?:e-?[0-9]+)?)")
-VIOLATOR_RE = re.compile(
-    r"^(max slew|max capacitance|max fanout) violation", re.IGNORECASE)
+# OpenSTA 3.1.0's `report_check_types -violators` prints a bare section
+# header ("max slew", "max capacitance", "max fanout"), a column header and
+# a dashed rule, then one row per violating pin ending "(VIOLATED)" - never
+# the word "violation" (tests/fixtures/opensta/check_types_violators.txt is
+# its real output). The rows are only the finding's detail: the pass/fail
+# decision rests on sta's own per-check counters (the same ones LibreLane's
+# corner.tcl reads), printed on one marker line the gate insists on seeing.
+CHECK_KINDS = {"max slew": "slew", "max capacitance": "cap",
+               "max fanout": "fanout"}
+COUNTS_MARK = "chipflow_violation_counts"
+COUNTS_RE = re.compile(
+    rf"^{COUNTS_MARK} slew (\d+) cap (\d+) fanout (\d+)\s*$", re.MULTILINE)
+VIOLATED_ROW_RE = re.compile(r"^(\S+)\s.*\(VIOLATED\)\s*$")
+COUNTS_TCL = (f'puts "{COUNTS_MARK} slew [sta::max_slew_violation_count] '
+              "cap [sta::max_capacitance_violation_count] "
+              'fanout [sta::max_fanout_violation_count]"\n')
+
+
+def parse_check_types(output: str) -> dict:
+    """{"slew"|"cap"|"fanout": {"count": n, "pins": [...]}} from one sta
+    run's output. `count` is sta's own counter; `pins` the "(VIOLATED)"
+    rows listed under that check's section header. No counts line at all
+    is a CheckError: a run that never reached it proves nothing clean."""
+    m = COUNTS_RE.search(output)
+    if not m:
+        raise CheckError(f"eda sta printed no {COUNTS_MARK} line - the "
+                         "slew/cap/fanout check never ran")
+    result = {kind: {"count": int(n), "pins": []}
+              for kind, n in zip(("slew", "cap", "fanout"), m.groups())}
+    current = None
+    for line in output.splitlines():
+        stripped = line.strip()
+        if stripped.lower() in CHECK_KINDS:
+            current = CHECK_KINDS[stripped.lower()]
+            continue
+        row = VIOLATED_ROW_RE.match(stripped)
+        if row and current:
+            result[current]["pins"].append(row.group(1))
+    return result
 
 
 def _pdk_root() -> Path:
@@ -93,7 +131,7 @@ def run_corner(final_dir: Path, top: str, corner: str, pdk_root: Path,
         "report_worst_slack -max\n"
         "report_worst_slack -min\n"
         "report_check_types -max_slew -max_capacitance -max_fanout -violators\n"
-        "exit\n", encoding="utf-8")
+        + COUNTS_TCL + "exit\n", encoding="utf-8")
     try:
         proc = subprocess.run([str(EDA_BIN), "sta", str(tcl)], stdin=subprocess.DEVNULL,
                               capture_output=True, text=True, encoding="utf-8",
@@ -107,8 +145,18 @@ def run_corner(final_dir: Path, top: str, corner: str, pdk_root: Path,
         raise CheckError(
             f"corner {corner!r}: eda sta produced no parseable worst-slack "
             f"line (exit {proc.returncode}): {output[-2000:]}")
-    violators = [ln.strip() for ln in output.splitlines()
-                if VIOLATOR_RE.match(ln.strip())]
+    try:
+        checks = parse_check_types(output)
+    except CheckError as exc:
+        raise CheckError(f"corner {corner!r}: {exc} (exit {proc.returncode}): "
+                         f"{output[-2000:]}") from exc
+    violators = []
+    for kind, found in checks.items():
+        if found["count"] or found["pins"]:
+            pins = found["pins"]
+            shown = ", ".join(pins[:5]) + (" ..." if len(pins) > 5 else "")
+            violators.append(f"max {kind}: {max(found['count'], len(pins))} "
+                             f"violating pin(s){': ' + shown if shown else ''}")
     return {"corner": corner, "setup_ws": slacks["max"], "hold_ws": slacks["min"],
            "violators": violators}
 
