@@ -1,6 +1,6 @@
 {
   "measures": {
-    "v(iref)": {"min": 0.9, "max": 1.5},
-    "v(iout)": {"min": 2.3, "max": 3.1}
+    "v(iout)": {"min": 2.7, "max": 3.0},
+    "f3db": {"min": 5.0e8, "max": 1.0e9}
   }
 }

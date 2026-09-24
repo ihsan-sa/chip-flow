@@ -1,39 +1,33 @@
 """gen_r2r_dac.py - layout generator for the ade/r2r_dac corpus rung
 (docs/design.md 5, "### M9."; docs/spikes/glayout.md's fallback).
 
-The N=1 base case of an R-2R ladder: two matched "2R" poly resistors
-(GF180's own draw_npolyf_res()) forming a 2:1 divider, VOUT = VIN/2
-unloaded - R_A between VIN and VOUT, R_B between VOUT and GND. Extending to
-more bits is the same R_B-continues-into-R_A-of-the-next-stage pattern
-repeated; kept to one stage here so the hand-routing stays small enough to
-verify by hand against the real signoff deck in one sitting (M9's own
-boundary: prove the fallback route works before building the skill on it).
+Draws M8's own 2-bit ladder (netlist/r2r_dac.cir): four rm1 metal1
+resistors, pins bmsb/blsb/vout, and the ladder's foot on ground (node 0 in
+M8's subckt):
 
-Both resistors are draw_npolyf_res(l_res=4.0, w_res=0.6) - w_res>=0.564 is
-required for the vendor generator's own built-in substrate tap to clear
-DF.9 (min COMP area) after the 5nm grid-snap it applies internally (below
-that, snap-to-nearest can round the tap's already-marginal area below the
-DRC minimum - verified empirically, docs/spikes/glayout.md's own class of
-finding). Local pad boxes for these exact parameters, un-transformed:
-    sub tap   (-1.38, 0.11, -1.00, 0.49)
-    R0 (left) (-0.30, 0.11,  0.08, 0.49)
-    R1 (right) (3.92, 0.11,  4.30, 0.49)
-    bbox      (-1.53, -0.30, 4.59, 0.90)
+  xrmsb   bmsb -> vout   R   (row 0, left)
+  xr2lsb  vout -> n0     2R  (row 0, middle)
+  xr2msb  n0   -> 0      2R  (row 0, right)
+  xrlsb   blsb -> n0     R   (standing on n0's pad)
 
-Both instances' substrate taps tie into the same GND bus as R_B's own GND
-terminal (a floating poly-resistor tap is not connected to anything a real
-LVS schematic would name, and GF180's own rules treat it as a P+
-tap-to-substrate tie, so grounding it is the correct, not just convenient,
-choice).
+Lengths and the shared width are the rung's current sizing
+(sizing/sizing.yaml and the subckt's defaults: a 1:1 ratio that
+`optimise.py numeric` is meant to correct). They are typed in here by the
+layout-writer rather than read from the sizing file, so when the sizing
+moves LVS reports this layout as out of date instead of silently
+following it.
 
-VOUT (R_A.R1 to R_B.R0) cannot be a straight metal1 run: R_B's own
-substrate-tap pad sits at local x:(-1.38,-1.0), which lands INSIDE that
-run's x-span once R_B is placed - a first version routed it in metal1 and
-magic's extraction reported "Ports GND and VOUT are electrically shorted"
-(the GND drop to that tap crossed straight through the VOUT wire on the
-same layer). Fixed by jumping VOUT over the tap on metal2 (GF180's own
-via_stack(), also from the pymacros tree) instead of moving the tap, which
-is standard practice, not a workaround.
+Each resistor is the PDK's draw_metal_res(res_type="rm1"): a metal1 bar
+with the metal1_res marker (110/11) over its body. Magic only recognises
+rm1 where the RESDEF marker (any 110/* datatype, res_mk 110/5 in the
+klayout layer table) is present as well, so `resistor()` adds res_mk over
+the same body. Terminals meet end to end on short, full-width pads: rm1 is
+0.09 ohm/sq, so every square of routing is a fifth of a 5-square resistor
+and would show up in pex_sim.
+
+Ground is a metal1 label "0" on the drawing layer (34/0), not a pin label:
+magic names the net 0 without making it a port, which is exactly M8's
+subckt (0 is ngspice's global ground, not one of its pins).
 """
 from __future__ import annotations
 
@@ -46,49 +40,80 @@ import layoutlib  # noqa: E402
 L1 = layoutlib.GF180_LAYER["metal1"]
 L1LBL = layoutlib.GF180_LAYER["metal1_label"]
 
-RES_L = 4.0
-RES_W = 0.6
-DAC_DX = 8.0
+CELL = "r2r_dac"
+PINS = ["bmsb", "blsb", "vout"]
+TAP_SIZE = 1.0
+R_WIDTH = 2.0     # um, r_width=2e-6
+R_LENGTH = 10.0   # um, r_length=1e-5
+R2_LENGTH = 10.0  # um, r2_length=1e-5
+GAP = 1.0         # um of metal1 pad between two resistor bodies
+STUB = 0.28       # draw_metal_res's own metal1 extension past the marker
+
+
+def resistor(top, length, x, y, vertical=False):
+    """One rm1 with its body's lower-left corner at (x, y)."""
+    _draw_fet, draw_res = layoutlib.gf180_cells()
+    ref = top.add_ref(draw_res.draw_metal_res(
+        l_res=length, w_res=R_WIDTH, res_type="rm1"))
+    if vertical:
+        ref.rotate(90)
+        ref.move((x + R_WIDTH, y))
+        body = (x, y, x + R_WIDTH, y + length)
+    else:
+        ref.move((x, y))
+        body = (x, y, x + length, y + R_WIDTH)
+    layoutlib.rect(top, *body, layoutlib.GF180_LAYER["res_mk"])
+    return body
 
 
 def generate():
     import gdsfactory as gf
 
-    _draw_fet, draw_res = layoutlib.gf180_cells()
+    layoutlib.gf180_cells()
     top = gf.Component()
-
-    ra = top.add_ref(draw_res.draw_npolyf_res(l_res=RES_L, w_res=RES_W))
-    rb = top.add_ref(draw_res.draw_npolyf_res(l_res=RES_L, w_res=RES_W))
-    rb.move((DAC_DX, 0.0))
-
     labels = []
+    w = R_WIDTH
 
-    # VIN: R_A's own left (R0) pad, labeled in place
-    labels.append(("VIN", -0.11, 0.30, L1LBL))
+    rmsb = resistor(top, R_LENGTH, 0.0, 0.0)
+    x = rmsb[2] + GAP
+    r2lsb = resistor(top, R2_LENGTH, x, 0.0)
+    # n0's pad is as wide as a resistor, so xrlsb stands on it whole and
+    # xr2msb starts right of it. With xrlsb's foot over xr2msb's body
+    # instead, magic couples that body - a node no SPICE element reaches -
+    # to n0, and ngspice finds a floating node.
+    x = r2lsb[2] + w
+    r2msb = resistor(top, R2_LENGTH, x, 0.0)
+    n0_x = r2lsb[2]
+    rlsb = resistor(top, R_LENGTH, n0_x, w + GAP, vertical=True)
 
-    # VOUT: R_A.R1 -- R_B.R0, jumped onto metal2 (see module docstring: a
-    # metal1 run here would cross straight through R_B's own substrate tap)
-    from cells.via_generator import via_stack  # noqa: E402  (gf180_cells() put it on sys.path)
-    top.add_ref(via_stack(x_range=(3.92, 4.30), y_range=(0.11, 0.49),
-                          metal_level=2, base_layer=L1))
-    top.add_ref(via_stack(x_range=(DAC_DX - 0.30, DAC_DX + 0.08),
-                          y_range=(0.11, 0.49), metal_level=2, base_layer=L1))
-    layoutlib.rect(top, 3.92, 0.11, DAC_DX + 0.08, 0.49,
-                  layoutlib.GF180_LAYER["metal2"])
-    # VOUT's own wire at this x,y is metal2, not metal1 - a metal1_label
-    # here would name an empty spot (this cost one broken LVS net: magic
-    # invented a floating "VOUT" port instead of tagging R_A/R_B's shared
-    # node, because no metal1_label may claim metal2 geometry).
-    labels.append(("VOUT", 6.0, 0.30, layoutlib.GF180_LAYER["metal2_label"]))
+    # bmsb: a pad left of xrmsb
+    layoutlib.rect(top, -1.0, 0.0, 0.0, w, L1)
+    labels.append(("bmsb", -0.5, w / 2, L1LBL))
 
-    # GND: R_B.R1 + both substrate taps
-    layoutlib.rect(top, DAC_DX + 3.92, -0.9, DAC_DX + 4.30, 0.15, L1)  # R_B.R1 drop
-    layoutlib.rect(top, -1.38, -0.9, -1.00, 0.15, L1)                 # SUB_A drop
-    layoutlib.rect(top, DAC_DX - 1.38, -0.9, DAC_DX - 1.00, 0.15, L1)  # SUB_B drop
-    layoutlib.rect(top, -1.38, -0.9, DAC_DX + 4.30, -0.6, L1)         # GND bus
-    labels.append(("GND", 2.0, -0.75, L1LBL))
+    # vout: the pad between xrmsb and xr2lsb
+    layoutlib.rect(top, rmsb[2], 0.0, r2lsb[0], w, L1)
+    labels.append(("vout", (rmsb[2] + r2lsb[0]) / 2, w / 2, L1LBL))
 
-    return layoutlib.finalize(top, "r2r_dac", labels)
+    # n0: the pad between xr2lsb and xr2msb, extended up under xrlsb's foot
+    layoutlib.rect(top, r2lsb[2], 0.0, r2msb[0], rlsb[1], L1)
+
+    # blsb: a pad on top of xrlsb
+    layoutlib.rect(top, rlsb[0], rlsb[3], rlsb[2], rlsb[3] + 1.0, L1)
+    labels.append(("blsb", (rlsb[0] + rlsb[2]) / 2, rlsb[3] + 0.5, L1LBL))
+
+    # ground: a pad right of xr2msb, named 0 but not a pin, running on to
+    # a P+ substrate tap so the substrate the extracted capacitors land on
+    # is ground and not a floating node
+    tap_x = r2msb[2] + 2.0
+    layoutlib.rect(top, r2msb[2], 0.0, tap_x + 0.8, w, L1)
+    labels.append(("0", r2msb[2] + 0.5, w / 2, L1))
+    tap = top.add_ref(layoutlib.psub_tap(TAP_SIZE))
+    tap.move((tap_x, w / 2 - TAP_SIZE / 2))
+
+    # magic numbers a cell's ports in the order their labels were written,
+    # and a bench instantiates the extracted cell positionally: M8's order.
+    labels.sort(key=lambda lbl: PINS.index(lbl[0]) if lbl[0] in PINS else 99)
+    return layoutlib.finalize(top, CELL, labels)
 
 
 if __name__ == "__main__":

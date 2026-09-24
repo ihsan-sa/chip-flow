@@ -15,7 +15,7 @@ from pathlib import Path
 
 TAP_LINES = (
     '    tap = top.add_ref(layoutlib.psub_tap(TAP_SIZE))\n'
-    '    tap.move((TAP_X, TAP_Y))\n'
+    '    tap.move((tap_x, tap_y))\n'
 )
 
 

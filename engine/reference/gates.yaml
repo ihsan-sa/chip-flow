@@ -230,12 +230,14 @@ gates:
       description: "Yield at or above the spec."
     drc:
       # M9 (docs/design.md, "### M9."): klayout's real GF180 signoff deck
-      # only - docs/spikes/glayout.md found magic re-snaps a GDS to the
-      # manufacturing grid on load, hiding off-grid shapes klayout reports,
-      # so magic is not run here (would only recreate that false
-      # confidence). `analog_drc`, not `drc`, so this row's tool never
-      # collides with vde's own check_drc.py (M4, magic+klayout on a
-      # hardened digital GDS - a different check entirely).
+      # only, with the PDK's own signoff deck selection (every FEOL, metal,
+      # via and guard-ring rule; density and antenna off, see
+      # layoutlib.DRC_DECKS). docs/spikes/glayout.md found magic re-snaps a
+      # GDS to the manufacturing grid on load, hiding off-grid shapes
+      # klayout reports, so magic is not run here. `analog_drc`, not
+      # `drc`, so this row's tool never collides with vde's drc row above,
+      # still a stub whose future_tool is magic+klayout on a hardened
+      # digital GDS (M4, "### M4.") - a different check entirely.
       phase: P5
       tool: analog_drc
       fail_severities: [error]
@@ -243,10 +245,11 @@ gates:
       fault: "a planted spacing violation (also: an off-grid shape, a missing guard ring)"
       description: "0, from klayout's GF180 signoff deck."
     lvs:
-      # M9: netgen against a real schematic (docs/spikes/glayout.md: the
-      # spike's own LVS only compared gLayout's output with itself).
-      # `analog_lvs`, not `lvs` - see drc's own note above; vde's `lvs`
-      # (M4) is netgen against a hardened digital netlist, a different tool.
+      # M9: netgen under the PDK's own setup (<pdk>_setup.tcl) against
+      # M8's own netlist/<block>.cir at the block's sizing
+      # (docs/spikes/glayout.md: the spike's own LVS only compared
+      # gLayout's output with itself). `analog_lvs`, not `lvs` - see drc's
+      # own note above.
       phase: P5
       tool: analog_lvs
       fail_severities: [error]
@@ -254,10 +257,12 @@ gates:
       fault: "a device sized differently in the generator than in the netlist (also: a swapped net)"
       description: "Match."
     pex_sim:
-      # M9: magic ext2spice with parasitics (extract + extresist), then the
-      # bench at typical. klayout_pex as a second extractor and the worst-
-      # corner sweep are not wired up yet - out of scope until the /ade
-      # skill session (docs/design.md 1.9) lands on this.
+      # M9: magic's extraction with every capacitor and extresist's wire
+      # resistance (a netlist with neither is refused), then the block's
+      # post-layout bench at typical, measuring what parasitics move (the
+      # mirror's output pole). klayout_pex as a second extractor and the
+      # worst-corner sweep are not wired up yet - out of scope until the
+      # /ade skill session (docs/design.md 1.9) lands on this.
       phase: P5
       tool: pex_sim
       fail_severities: [error]

@@ -1,28 +1,28 @@
-* pex_sim bench for r2r_dac - typical corner (docs/design.md 1.5's ade
-* pex_sim row). Lives under layout_ref/, not tb/: this bench runs against
-* the magic-extracted, parasitic-annotated netlist of THIS rung's own
-* layout, not against netlist/r2r_dac.cir - M8 (docs/design.md "### M8.")
-* never added one of these, post-layout is entirely M9's own artifact
-* kind. {pdk} and {extracted} are substituted by check_pex_sim.py at run
-* time.
+* r2r_dac_pex_tb.cir - the post-layout bench for the 2-bit ladder, typical
+* corner (docs/design.md 1.5's ade pex_sim row). It runs on the
+* magic-extracted, parasitic-annotated netlist of this run's own GDS;
+* check_pex_sim.py fills in {pdk} and {extracted}.
 *
-* `res_typical` (not `typical`) is the corner-selector section this PDK's
-* own sm141064.spice uses for its resistor models (rsh_npolyf_s and its
-* matched mc_* parameters) - the fet-only `typical` section does not
-* define them, and npolyf_s's own subcircuit body references them
-* unconditionally. GND is wired straight to node 0 rather than through
-* its own 0V source: naming a net "GND" and tying it to 0 via a source
-* hit ngspice's "shorted VSRC" check.
+* The same three codes as tb/r2r_dac_tb.cir, over one transient: blsb alone
+* at 15n, bmsb alone at 25n, both at 35n. rm1 needs the res_<corner>
+* section for its sheet resistance as well as the transistor one.
+*
+* Bounds are the ladder at the rung's current sizing (1:1, what
+* sizing/sizing.yaml and the layout both carry; M8's spec wants 2:1 once
+* optimise has run): 0.66V, 1.98V, 2.64V unloaded, +-3%.
 .include '{pdk}/libs.tech/ngspice/design.spice'
+.lib '{pdk}/libs.tech/ngspice/sm141064.spice' typical
 .lib '{pdk}/libs.tech/ngspice/sm141064.spice' res_typical
 .include '{extracted}'
 
-vin VIN 0 dc 1.8
-xdut VIN 0 VOUT r2r_dac
+vbmsb bmsb 0 PWL(0 0 19.9n 0 20n 3.3 40n 3.3)
+vblsb blsb 0 PWL(0 0 9.9n 0 10n 3.3 19.9n 3.3 20n 0 29.9n 0 30n 3.3 40n 3.3)
+xdut bmsb blsb vout r2r_dac
 
 .control
-op
-print v(vin)
-print v(vout)
+tran 0.1n 40n
+meas tran vout_lsb find v(vout) at=15n
+meas tran vout_msb find v(vout) at=25n
+meas tran vout_both find v(vout) at=35n
 .endc
 .end

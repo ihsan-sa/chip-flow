@@ -4,8 +4,9 @@ final `return layoutlib.finalize(...)` line to add one extra shape AFTER
 finalize()'s own 5nm grid-snap (pcell_utilities.snap_to_grid) has already
 run - the only way an off-grid shape can survive to the written GDS, since
 every generator's own geometry goes through that snap. Placed far from any
-real geometry (x=20) so ONLY klayout's own *_OFFGRID rule fires, not a
-spacing rule - reproducing docs/spikes/glayout.md's own finding that this
+real geometry (x=20), and 0.6um square so it clears metal1's minimum
+width and area: ONLY klayout's own *_OFFGRID rule fires, not a width,
+area or spacing rule - reproducing docs/spikes/glayout.md's own finding that this
 class of bug is invisible to magic (which silently re-snaps on load) and
 caught only by klayout's real GF180 deck.
 """
@@ -13,14 +14,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-OLD = '    return layoutlib.finalize(top, "r2r_dac", labels)\n'
+OLD = '    return layoutlib.finalize(top, CELL, labels)\n'
 NEW = (
-    '    comp = layoutlib.finalize(top, "r2r_dac", labels)\n'
+    '    comp = layoutlib.finalize(top, CELL, labels)\n'
     '    # off-grid on purpose (20.1233 is not a multiple of 0.005) - added\n'
     '    # AFTER finalize()\'s own grid-snap, isolated far from real\n'
     '    # geometry so no other rule fires alongside *_OFFGRID.\n'
-    '    comp.add_polygon([(20.1233, 20.1233), (20.1733, 20.1233),\n'
-    '                      (20.1733, 20.1733), (20.1233, 20.1733)], layer=L1)\n'
+    '    comp.add_polygon([(20.1233, 20.1233), (20.7233, 20.1233),\n'
+    '                      (20.7233, 20.7233), (20.1233, 20.7233)], layer=L1)\n'
     '    return comp\n'
 )
 

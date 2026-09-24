@@ -86,15 +86,17 @@ def test_load_generator_refuses_generator_with_no_generate_function(tmp_path):
 
 
 @pytest.mark.slow
-@pytest.mark.parametrize("block,pins", [
-    ("mirror", {"IREF", "IOUT", "VSS"}),
-    ("r2r_dac", {"VIN", "VOUT", "GND"}),
+@pytest.mark.parametrize("block,cell,pins", [
+    # M8's own subckt names and pins (netlist/<block>.cir); the DAC's
+    # ground is node 0, a named net but not a pin
+    ("mirror", "current_mirror", {"iref_node", "iout", "vdd", "vss"}),
+    ("r2r_dac", "r2r_dac", {"bmsb", "blsb", "vout"}),
 ])
-def test_build_writes_gds_and_abstract(tmp_path, block, pins):
+def test_build_writes_gds_and_abstract(tmp_path, block, cell, pins):
     ws = make_ws(tmp_path, block)
     gds_path, topcell, abstract_path, abstract = layout_gen.build(ws)
     assert gds_path.is_file()
-    assert topcell == block
+    assert topcell == cell
     assert abstract_path.is_file()
     assert {p["name"] for p in abstract["pins"]} == pins
     on_disk = json.loads(abstract_path.read_text(encoding="utf-8"))
@@ -114,4 +116,4 @@ def test_run_cli_reports_pins(tmp_path):
     out = json.loads(out_path.read_text(encoding="utf-8"))
     assert code == 0, out
     assert out["status"] == "pass"
-    assert set(out["pins"]) == {"IREF", "IOUT", "VSS"}
+    assert set(out["pins"]) == {"iref_node", "iout", "vdd", "vss"}

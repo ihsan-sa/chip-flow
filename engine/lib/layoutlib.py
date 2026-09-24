@@ -56,13 +56,20 @@ GF180_LAYER = {
     "metal2": (36, 0),
     "metal1_label": (34, 10),
     "metal2_label": (36, 10),
+    "res_mk": (110, 5),
+    "metal1_res": (110, 11),
 }
 
 DRC_DECK_REL = "libs.tech/klayout/tech/drc/gf180mcu.drc"
-# Same deck subset tests/check.sh's own klayout-drc-gf180mcu smoke uses
-# (M0): beol/density/antenna are chip-level decks that a single hand-placed
-# cell with no floorplan around it cannot meaningfully pass or fail.
-DRC_DECKS = "all,-beol,-density,-antenna"
+# The PDK's own signoff selection (libs.tech/librelane/config.tcl:
+# KLAYOUT_DRC_OPTIONS decks "all,-antenna,-density", variant $PDK): every
+# FEOL, metal, via and guard-ring rule. Only density and antenna are off,
+# because both judge a whole chip's metal fill and gate-to-metal ratios,
+# which a lone block with no floorplan around it cannot pass or fail. The
+# variant is the PDK's name (gf180mcuD: 5 metals, 11K top), never a fixed
+# letter: variant A is a 3-metal stack, and its mslot deck dies on
+# metal4_drawn.
+DRC_DECKS = "all,-density,-antenna"
 
 
 class LayoutError(RuntimeError):
@@ -209,6 +216,39 @@ def finalize(top, name: str, labels: list[tuple[str, float, float, tuple]]):
     return snapped
 
 
+def layer_boxes(comp, layer: tuple[int, int]) -> list[tuple[float, ...]]:
+    """The merged shapes of `comp` on `layer`, as (x0, y0, x1, y1) boxes in
+    um, in comp's own frame. Generators read a primitive cell's pads off
+    its geometry with this instead of copying coordinates in by hand, so a
+    device drawn at another W/L still gets wired to its own pads."""
+    import klayout.db as kdb
+
+    li = comp.kcl.layer(*layer)
+    dbu = comp.kcl.dbu
+    region = kdb.Region(comp.kdb_cell.begin_shapes_rec(li)).merged()
+    boxes = []
+    for poly in region.each():
+        b = poly.bbox()
+        boxes.append((round(b.left * dbu, 4), round(b.bottom * dbu, 4),
+                      round(b.right * dbu, 4), round(b.top * dbu, 4)))
+    return sorted(boxes)
+
+
+def fet_pads(fet) -> dict[str, tuple[float, ...]]:
+    """The four metal1 pads of a single-finger draw_nfet()/draw_pfet():
+    gate contacts above and below the channel, the two diffusion contacts
+    left ("s") and right ("d") of it. Refuses any other shape, because a
+    wrong guess here would wire a net to the wrong terminal."""
+    boxes = layer_boxes(fet, GF180_LAYER["metal1"])
+    if len(boxes) != 4:
+        raise LayoutError(
+            f"expected 4 metal1 pads on a one-finger FET, found {len(boxes)}")
+    by_y = sorted(boxes, key=lambda b: (b[1] + b[3]) / 2)
+    gate_bot, gate_top = by_y[0], by_y[-1]
+    s, d = sorted(by_y[1:3], key=lambda b: b[0])
+    return {"s": s, "d": d, "gate_top": gate_top, "gate_bot": gate_bot}
+
+
 def rect(top, x0: float, y0: float, x1: float, y1: float,
         layer: tuple[int, int]) -> None:
     """Add one axis-aligned metal (or other) rectangle directly onto `top`'s
@@ -220,18 +260,39 @@ def rect(top, x0: float, y0: float, x1: float, y1: float,
 
 # --------------------------------------------------------------------- DRC
 
+def fresh(*paths) -> None:
+    """Delete a tool's output before the tool runs, so a file left by an
+    earlier run can never be read as this run's result. Every gate's work
+    dir lives under the workspace's persistent log/."""
+    for p in paths:
+        Path(p).unlink(missing_ok=True)
+
+
+def require_ok(proc, what: str) -> str:
+    """stdout+stderr of a finished tool run, or LayoutError if it exited
+    non-zero. A launch that failed outright never gets this far: run_eda
+    raises on OSError and timeout."""
+    out = (proc.stdout or "") + (proc.stderr or "")
+    if proc.returncode != 0:
+        raise LayoutError(
+            f"{what} exited {proc.returncode} - the run did not complete: "
+            f"{out[-2000:]}")
+    return out
+
+
 def run_klayout_drc(gds_path, topcell: str, out_rdb, timeout: float = 240.0) -> str:
     deck = pdk_root() / DRC_DECK_REL
     if not deck.is_file():
         raise LayoutError(f"no klayout GF180 DRC deck at {deck}")
+    fresh(out_rdb)
     proc = run_eda(
         ["klayout", "-b", "-r", str(deck),
          "-rd", f"input={gds_path}", "-rd", f"topcell={topcell}",
          "-rd", f"report={out_rdb}", "-rd", "run_mode=flat",
-         "-rd", "verbose=false", "-rd", "variant=A",
+         "-rd", "verbose=false", "-rd", f"variant={pdk_root().name}",
          "-rd", f"decks={DRC_DECKS}", "-rd", "threads=2", "-rd", "workers=1"],
         cwd=Path(out_rdb).parent, timeout=timeout)
-    out = (proc.stdout or "") + (proc.stderr or "")
+    out = require_ok(proc, "klayout DRC")
     if "DRC RESULT" not in out:
         raise LayoutError(
             "klayout DRC did not complete - no 'DRC RESULT' line (no rules "
@@ -289,27 +350,68 @@ def parse_drc_rdb(path) -> list[dict]:
 
 # --------------------------------------------------------------------- LVS
 
+# The PDK's magic tech reads GDS 110/11 (klayout's metal1_res, the marker
+# draw_metal_res() puts on an rm1 body) as MET2RES - a typo beside the
+# 110/12 line that really is MET2RES - so MET1RES is never set on input and
+# magic sees an rm1 resistor as a plain metal1 short. Proved on a lone
+# draw_metal_res(): stock tech, "Ports A and B are electrically shorted";
+# with this one line fixed, "X0 A B rm1 r_width=2u r_length=10u".
+_RM1_TYPO = " calma MET2RES 110 11\n"
+_RM1_FIX = " calma MET1RES 110 11\n"
+
+
+def magic_tech(work_dir) -> Path | None:
+    """A copy of the PDK's magic tech with the rm1 input typo fixed, written
+    into work_dir, or None when the PDK already maps 110/11 to MET1RES.
+    Refuses a tech file that has neither line, rather than guess."""
+    src = pdk_root() / "libs.tech" / "magic" / f"{pdk_root().name}.tech"
+    if not src.is_file():
+        raise LayoutError(f"no magic tech file at {src}")
+    text = src.read_text(encoding="utf-8", errors="replace")
+    if _RM1_FIX in text:
+        return None
+    if text.count(_RM1_TYPO) != 1:
+        raise LayoutError(
+            f"{src} maps GDS 110/11 neither to MET1RES nor through the one "
+            "known MET2RES typo - check how this PDK reads rm1 before "
+            "trusting an extraction")
+    out = Path(work_dir) / src.name
+    out.write_text(text.replace(_RM1_TYPO, _RM1_FIX), encoding="utf-8")
+    return out
+
+
 def run_magic_extract(work_dir, gds_path, topcell: str, *, parasitics: bool,
                       timeout: float = 180.0) -> tuple[Path, str]:
-    """extract the GDS to SPICE via magic (same recipe docs/spikes/glayout.md
-    proved on the inverter: "extract all; ext2spice"). `parasitics=True`
-    additionally forces R/C extraction (cthresh/rthresh 0) for pex_sim - the
-    LVS gate never needs it and skips it to stay fast."""
-    lines = [
-        f"gds read {gds_path}",
-        f"load {topcell}",
-        "select top cell",
-        "extract all",
-    ]
+    """Extract the GDS to SPICE with magic. Without parasitics this is the
+    LVS netlist (`<topcell>.spice`, docs/spikes/glayout.md's "extract all;
+    ext2spice"). With parasitics (`<topcell>.pex.spice`) it adds every
+    coupling and substrate capacitor (cthresh 0) and splits each net that
+    reaches a transistor into its real wire resistances (extresist).
+
+    Order matters: `ext2spice lvs` resets cthresh and rthresh to infinity,
+    so it must come before the thresholds, never after them."""
+    work_dir = Path(work_dir)
+    base = work_dir / topcell
+    out_path = work_dir / (f"{topcell}.pex.spice" if parasitics
+                           else f"{topcell}.spice")
+    fresh(out_path, *(base.with_suffix(s) for s in
+                      (".ext", ".res.ext", ".sim", ".nodes")))
+    tech = magic_tech(work_dir)
+    lines = [f"tech load {tech}"] if tech else []
+    lines += [f"gds read {gds_path}", f"load {topcell}", "select top cell"]
     if parasitics:
-        lines += ["extract do all", "extract all",
-                 "ext2spice cthresh 0", "ext2spice rthresh 0"]
-    lines += ["ext2spice lvs", "ext2spice", "quit -noprompt"]
-    tcl = "\n".join(lines) + "\n"
+        lines += ["extract do resistance", "extract all",
+                  "ext2sim labels on", "ext2sim",
+                  "extresist tolerance 0.01", "extresist simplify off",
+                  "extresist all",
+                  "ext2spice lvs", "ext2spice cthresh 0",
+                  "ext2spice extresist on"]
+    else:
+        lines += ["extract all", "ext2spice lvs"]
+    lines += [f"ext2spice -o {out_path.name}", "quit -noprompt"]
     proc = run_eda(["magic", "-noconsole", "-dnull"], cwd=work_dir,
-                   timeout=timeout, stdin_text=tcl)
-    out = (proc.stdout or "") + (proc.stderr or "")
-    out_path = Path(work_dir) / f"{topcell}.spice"
+                   timeout=timeout, stdin_text="\n".join(lines) + "\n")
+    out = require_ok(proc, "magic extraction")
     if not out_path.is_file():
         raise LayoutError(
             f"magic extraction produced no {out_path.name} - the run did "
@@ -317,28 +419,60 @@ def run_magic_extract(work_dir, gds_path, topcell: str, *, parasitics: bool,
     return out_path, out
 
 
+def count_parasitics(spice_text: str) -> dict[str, int]:
+    """How many wire resistors (R...) and capacitors (C...) an extracted
+    netlist carries. Devices are X lines, so a netlist with neither is one
+    nobody extracted parasitics into."""
+    counts = {"r": 0, "c": 0}
+    for line in spice_text.splitlines():
+        head = line.lstrip()[:1].lower()
+        if head in counts:
+            counts[head] += 1
+    return counts
+
+
+def netgen_setup() -> Path:
+    setup = (pdk_root() / "libs.tech" / "netgen" /
+             f"{pdk_root().name}_setup.tcl")
+    if not setup.is_file():
+        raise LayoutError(
+            f"no netgen setup at {setup} - without it netgen compares "
+            "every extracted area/perimeter property as a mismatch and "
+            "knows none of the PDK's device classes")
+    return setup
+
+
+_FINAL_RE = re.compile(r"^Final result:\s*(.*)$", re.MULTILINE)
+
+
 def run_netgen_lvs(work_dir, extracted_spice, extracted_cell: str,
                    ref_spice, ref_cell: str, out_log,
                    timeout: float = 120.0) -> tuple[bool, str]:
-    cmd = (f"lvs {{{extracted_spice} {extracted_cell}}} "
-          f"{{{ref_spice} {ref_cell}}} {{}} {out_log}")
-    proc = run_eda(["netgen", "-batch", cmd], cwd=work_dir, timeout=timeout)
-    out = (proc.stdout or "") + (proc.stderr or "")
+    """netgen LVS under the PDK's own setup (device classes, pin
+    permutations, which properties to compare and which - ad/pd/as/ps, nf -
+    to drop). A match is the top cell's last "Final result:" line reading
+    "Circuits match uniquely." with no property error anywhere in the log."""
+    setup = netgen_setup()
     # netgen writes out_log relative to its own cwd (work_dir) - resolve it
-    # there regardless of the caller's own cwd, or a relative `out_log`
-    # would be checked against the wrong directory.
+    # there regardless of the caller's own cwd.
     log_path = Path(work_dir) / out_log
+    fresh(log_path)
+    cmd = (f"lvs {{{extracted_spice} {extracted_cell}}} "
+           f"{{{ref_spice} {ref_cell}}} {setup} {out_log}")
+    proc = run_eda(["netgen", "-batch", cmd], cwd=work_dir, timeout=timeout)
+    out = require_ok(proc, "netgen LVS")
     if not log_path.is_file():
         raise LayoutError(
             f"netgen LVS produced no log at {out_log} - the run did not "
             f"complete: {out[-2000:]}")
     text = log_path.read_text(encoding="utf-8", errors="replace")
-    if not text.strip():
-        raise LayoutError("netgen LVS log is empty - nothing was compared")
-    fail_markers = ("Property errors were found", "do not match",
-                    "Netlists do not match", "uncertain")
-    matched = "Circuits match uniquely" in text
-    failed = any(m in text for m in fail_markers)
+    finals = _FINAL_RE.findall(text)
+    if not finals:
+        raise LayoutError(
+            "netgen LVS log has no 'Final result:' line - nothing was "
+            f"compared: {text[-2000:]}")
+    matched = finals[-1].strip().startswith("Circuits match uniquely")
+    failed = "property error" in text.lower() or "do not match" in text
     return (matched and not failed), text
 
 
@@ -349,16 +483,24 @@ _MEASURE_RE = re.compile(
 
 
 def run_ngspice(cir_path, cwd=None, timeout: float = 120.0) -> str:
+    """ngspice -b on a bench. A non-zero exit is a refusal, and so is a
+    zero exit whose text shows an engine failure (simlib's own list: a
+    singular matrix, failed stepping, an unknown subckt ...), because batch
+    ngspice exits 0 after some of those (engine/lib/simlib.py)."""
+    import simlib
+
     proc = run_eda(["ngspice", "-b", str(cir_path)], cwd=cwd, timeout=timeout)
-    out = (proc.stdout or "") + (proc.stderr or "")
-    if re.search(r"^Error", out, re.MULTILINE) and "measure" not in out.lower():
-        raise LayoutError(f"ngspice reported an error: {out[-2000:]}")
+    out = require_ok(proc, "ngspice")
+    kinds = simlib.detect_engine_errors(out)
+    if kinds:
+        raise LayoutError(
+            f"ngspice reported {', '.join(kinds)}: {out[-2000:]}")
     return out
 
 
 def parse_ngspice_prints(output: str) -> dict[str, float]:
     """Parse simple `NAME = VALUE` lines ngspice's `.control ... print ...`
-    (or `.measure`) emits into a name->float map. The last occurrence of a
+    (or `meas`) emits into a name->float map. The last occurrence of a
     name wins (a re-print after a further .control step is the final
     value)."""
     values: dict[str, float] = {}

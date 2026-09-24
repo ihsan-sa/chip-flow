@@ -104,7 +104,7 @@ def make_scratch_workspace(tmp_root: Path, rung_dir: Path, skill: str,
         if not src_dir.is_dir():
             continue
         # state.py init's own SUBDIRS scaffold does not include "layout_ref"
-        # (M9's own stand-in dir, not one of docs/design.md 1.4's named
+        # (M9's post-layout benches, not one of docs/design.md 1.4's named
         # workspace dirs) - mkdir here rather than teach state.py a
         # corpus-only subdir.
         (ws / sub).mkdir(parents=True, exist_ok=True)

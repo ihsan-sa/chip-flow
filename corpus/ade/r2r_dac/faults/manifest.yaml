@@ -1,5 +1,5 @@
 # faults manifest (docs/design.md section 3, "### M8."/"### M9."). Only
-# spec_lint and drc here on purpose - this rung's own untouched sim_tt is
+# spec_lint, drc and lvs here on purpose - this rung's own untouched sim_tt is
 # EXPECTED to fail (see netlist/r2r_dac.cir's own comment: the ratio is
 # deliberately wrong until optimise.py numeric corrects it), so it is not
 # a fault DEMONSTRATION and does not belong in this manifest;
@@ -18,3 +18,9 @@ faults:
     expect:
       status: fail
       kind: metal1_OFFGRID
+  - name: leg_sized_differently
+    gate: lvs
+    plant: plant_lvs_sized_differently.py
+    expect:
+      status: fail
+      kind: lvs_mismatch

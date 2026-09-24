@@ -1,6 +1,7 @@
 {
   "measures": {
-    "v(vin)": {"min": 1.7, "max": 1.9},
-    "v(vout)": {"min": 0.85, "max": 0.95}
+    "vout_lsb": {"min": 0.64, "max": 0.68},
+    "vout_msb": {"min": 1.92, "max": 2.04},
+    "vout_both": {"min": 2.56, "max": 2.72}
   }
 }

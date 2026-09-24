@@ -1,35 +1,23 @@
 """gen_mirror.py - layout generator for the ade/mirror corpus rung
 (docs/design.md 5, "### M9."; docs/spikes/glayout.md's fallback).
 
-A 2-NMOS current mirror: M1 diode-connected (drain tied to gate), M2's gate
-tied to M1's, both sources to VSS. Both transistors are GF180's own
-draw_nfet() at its declared defaults (l_gate=0.28um, w_gate=0.22um, nf=1) -
-verified against the real klayout GF180 signoff deck to be one violation
-(DF.14, "substrate tap must be within 20um of any NCOMP") away from clean
-in isolation; layoutlib.psub_tap() supplies that tap, tied to the same VSS
-net the two sources use.
+Draws M8's own `current_mirror` (netlist/mirror.cir): xmref diode-connected
+at W=4u, xmout at W=8u, both L=0.5u, sources and bulk on vss, pins
+iref_node/iout/vdd/vss. vdd is a pin of M8's subckt that no device uses, so
+here it is a labelled pad on its own.
 
-All coordinates below are the DEFAULT draw_nfet() cell's own pad centers,
-measured once (see docs/design.md 5's spike) and reused as constants -
-changing l_gate/w_gate/nf from these exact values would move the pads and
-invalidate the routing geometry, so this generator does not parametrize
-them. Local pad boxes (x0, y0, x1, y1), un-transformed:
-    gate (top)    (0.14, 0.51, 0.52, 0.89)   - used as the gate connection
-    gate (bottom) (0.14, -0.67, 0.52, -0.29) - unused; still live (same net)
-    source        (-0.40, -0.08, -0.02, 0.30)
-    drain         (0.68, -0.08, 1.06, 0.30)
-    device bbox   (-0.59, -0.67, 1.25, 0.89)
+Both devices are GF180's draw_nfet(). Their pads are read off the drawn
+cell (layoutlib.fet_pads), so the wiring follows whatever W/L the constants
+below say. The sizes are this generator's own, typed in by the
+layout-writer; LVS is what checks them against netlist/mirror.cir.
 
-Net layout (M1 at x-offset 0, M2 at x-offset MIRROR_DX):
-  IREF/VG  gate bus across both tops, plus M1's own drain-to-gate diode drop
-  IOUT     M2's drain pad (labeled in place, no extra routing)
-  VSS      both sources dropped below the gate geometry to a bus that also
-           reaches one shared psub_tap()
-
-The "missing guard ring" DRC fault (faults/plant_drc_missing_guard_ring.py)
-removes just the two psub_tap placement lines below, leaving the rest of
-the VSS wiring (both source drops and the bus) intact - a real missing
-guard ring, not a disconnected VSS net.
+Wiring, xmref at x=0 and xmout at x=MIRROR_DX, channels vertical:
+  iref_node  a bus joining both bottom gate pads, plus xmref's drain
+             dropped onto it (the diode connection)
+  iout       xmout's drain pad, labelled in place
+  vss        both source pads run up to a bus above the devices that also
+             lands on one P+ substrate tap (DF.14 wants a tap within 20um)
+  vdd        a lone pad right of the tap
 """
 from __future__ import annotations
 
@@ -42,10 +30,17 @@ import layoutlib  # noqa: E402
 L1 = layoutlib.GF180_LAYER["metal1"]
 L1LBL = layoutlib.GF180_LAYER["metal1_label"]
 
+CELL = "current_mirror"
+PINS = ["iref_node", "iout", "vdd", "vss"]
+MREF_W = 4.0
+MOUT_W = 8.0
+GATE_L = 0.5
 MIRROR_DX = 3.0
-TAP_X = 6.75
-TAP_Y = -1.6
 TAP_SIZE = 1.0
+
+
+def shifted(box, dx):
+    return (box[0] + dx, box[1], box[2] + dx, box[3])
 
 
 def generate():
@@ -54,37 +49,52 @@ def generate():
     draw_fet, _draw_res = layoutlib.gf180_cells()
     top = gf.Component()
 
-    m1 = top.add_ref(draw_fet.draw_nfet())
-    m2 = top.add_ref(draw_fet.draw_nfet())
-    m2.move((MIRROR_DX, 0.0))
+    ref_cell = draw_fet.draw_nfet(l_gate=GATE_L, w_gate=MREF_W)
+    out_cell = draw_fet.draw_nfet(l_gate=GATE_L, w_gate=MOUT_W)
+    top.add_ref(ref_cell)
+    top.add_ref(out_cell).move((MIRROR_DX, 0.0))
+    ref = layoutlib.fet_pads(ref_cell)
+    out = {k: shifted(v, MIRROR_DX) for k, v in layoutlib.fet_pads(out_cell).items()}
 
     labels = []
 
-    # --- IREF/VG: gate bus (both tops) + M1's own drain-to-gate diode drop
-    layoutlib.rect(top, 0.14, 0.51, MIRROR_DX + 0.52, 0.89, L1)   # gate bus
-    layoutlib.rect(top, 0.14, 0.0, 0.52, 0.55, L1)                # vertical drop
-    layoutlib.rect(top, 0.14, 0.0, 1.06, 0.30, L1)                # to M1 drain
-    labels.append(("IREF", 1.5, 0.7, L1LBL))
+    # --- iref_node: bottom gate pads joined, xmref's drain dropped onto them
+    g0, g1 = ref["gate_bot"], out["gate_bot"]
+    layoutlib.rect(top, g0[0], g0[1], g1[2], g0[3], L1)
+    d = ref["d"]
+    layoutlib.rect(top, d[0], g0[1], d[2], d[1] + 0.2, L1)
+    labels.append(("iref_node", (d[2] + g1[0]) / 2, (g0[1] + g0[3]) / 2, L1LBL))
 
-    # --- IOUT: M2's own drain pad, no extra routing needed
-    labels.append(("IOUT", MIRROR_DX + 0.87, 0.11, L1LBL))
+    # --- iout: xmout's own drain pad
+    d = out["d"]
+    labels.append(("iout", (d[0] + d[2]) / 2, (d[1] + d[3]) / 2, L1LBL))
 
-    # --- VSS: source drops, the bus, and the shared substrate tap.
-    # plant_drc_missing_guard_ring.py deletes only the two `tap = ...` /
-    # `tap.move(...)` lines just below, leaving the rest of this section
-    # (both source drops, the bus) intact.
-    layoutlib.rect(top, -0.40, -0.95, -0.02, 0.0, L1)             # M1 source drop
-    layoutlib.rect(top, MIRROR_DX - 0.40, -0.95, MIRROR_DX - 0.02, 0.0, L1)  # M2
+    # --- vss: both sources up to a bus above the taller device, and a tap
+    bus_y0 = max(ref["gate_top"][3], out["gate_top"][3]) + 0.6
+    bus_y1 = bus_y0 + 0.5
+    for s in (ref["s"], out["s"]):
+        layoutlib.rect(top, s[0], s[3] - 0.2, s[2], bus_y1, L1)
+    tap_x = out["d"][2] + 2.0
+    tap_y = (bus_y0 + bus_y1) / 2 - TAP_SIZE / 2
     tap = top.add_ref(layoutlib.psub_tap(TAP_SIZE))
-    tap.move((TAP_X, TAP_Y))
-    layoutlib.rect(top, -0.40, -1.2, TAP_X + 0.8, -0.95, L1)      # VSS bus + tap
-    labels.append(("VSS", 2.0, -1.075, L1LBL))
+    tap.move((tap_x, tap_y))
+    layoutlib.rect(top, ref["s"][0], bus_y0, tap_x + 0.8, bus_y1, L1)
+    labels.append(("vss", (ref["s"][2] + out["s"][0]) / 2,
+                   (bus_y0 + bus_y1) / 2, L1LBL))
 
-    return layoutlib.finalize(top, "mirror", labels)
+    # --- vdd: M8's pin with nothing on it inside the mirror
+    vdd_x = tap_x + TAP_SIZE + 1.0
+    layoutlib.rect(top, vdd_x, bus_y0, vdd_x + 1.0, bus_y1, L1)
+    labels.append(("vdd", vdd_x + 0.5, (bus_y0 + bus_y1) / 2, L1LBL))
+
+    # magic numbers a cell's ports in the order their labels were written,
+    # and a bench instantiates the extracted cell positionally: M8's order.
+    labels.sort(key=lambda lbl: PINS.index(lbl[0]))
+    return layoutlib.finalize(top, CELL, labels)
 
 
 if __name__ == "__main__":
     comp = generate()
-    out = sys.argv[1] if len(sys.argv) > 1 else "mirror.gds"
-    comp.write_gds(out)
-    print(f"wrote {out}")
+    out_path = sys.argv[1] if len(sys.argv) > 1 else "mirror.gds"
+    comp.write_gds(out_path)
+    print(f"wrote {out_path}")
