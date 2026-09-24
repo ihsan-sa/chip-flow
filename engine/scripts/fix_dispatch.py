@@ -68,9 +68,13 @@ DOMAINS: dict[str, dict] = {
     "formal": {
         "scripts": ["engine/scripts/gate.py", "engine/scripts/state.py"],
         "guidance": [
-            "Edit formal/ only; a bounded-not-proven result names the depth "
-            "reached - widen the induction depth or fix the property, "
-            "never loosen it to make the gate pass.",
+            "Edit formal/*.sv, or spec/spec.yaml's own 'formal: {depth}' "
+            "key ONLY (M5: 'widen the induction depth' has to mean editing "
+            "this field - depth is not a property-file concept - so this "
+            "domain's scope explicitly includes it; nothing else in "
+            "spec.yaml). A bounded-not-proven or cover_not_reached result "
+            "names the depth reached - widen it, or fix the property "
+            "itself, never loosen either to make the gate pass.",
         ],
     },
     "synth": {
@@ -150,15 +154,25 @@ def remediation_paths(kinds, rem_dir: Path | None = None) -> list[str]:
 
 
 def load_input(path: Path) -> tuple[list[dict], dict]:
-    """Accept a gate.py result (failing[]), a check_<gate>.py report
-    (violations[]), or a cluster_violations payload (clusters[] -
-    reclustered from their violations)."""
+    """Accept a gate.py result (violations[], every severity, since M5 -
+    failing[] before it, the fail_severities-only subset), a
+    check_<gate>.py report (violations[]), or a cluster_violations payload
+    (clusters[] - reclustered from their violations).
+
+    `violations` is preferred over `failing` when a gate.py result carries
+    both (M5, found running the fix loop for real on /vde's own `mutate`
+    gate: most survivor_* findings are severity "info" - gates.yaml's
+    fail_severities is [error] - so `failing` alone showed a fixer 1 of 12
+    real survivors; the fuller `violations` list is what a fixer actually
+    needs to raise a kill rate, and dispatching a cluster for an info-
+    severity finding is harmless - the gate's own pass/fail already came
+    from `failing_count`, never re-derived here)."""
     data = checklib.load_json(path, "input report")
     meta = {"gate": data.get("gate"), "phase": data.get("phase")}
-    if "failing" in data:
-        return data["failing"], meta
     if "violations" in data and isinstance(data["violations"], list):
         return data["violations"], meta
+    if "failing" in data:
+        return data["failing"], meta
     if "clusters" in data:
         vs = [v for c in data["clusters"] for v in c.get("violations", [])]
         return vs, meta
