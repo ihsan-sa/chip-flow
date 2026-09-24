@@ -200,3 +200,29 @@ def test_gate_sim_stdout_is_pure_json_not_polluted_by_sim_log(tmp_path):
     assert out["gate"] == "sim"
     assert out["status"] == "pass", (out, proc.stderr)
     assert proc.returncode == 0, proc.stderr
+
+
+@pytest.mark.slow
+def test_relative_workspace_does_not_pollute_tb(tmp_path, capsys, monkeypatch):
+    """M5 regression (found running the real /vde skill end to end on
+    counter8): cocotb_tools.runner's own Simulator._execute changes the
+    real OS cwd before spawning iverilog/vvp, so an unresolved RELATIVE
+    results_xml/build_dir/test_dir (cocotblib.run_cocotb, before the M5
+    fix) landed doubled one level under tb/ itself - `tb/<ws again>/log/
+    sim_results.xml` - silently rewriting a dir_text-hashed gate input
+    (`tb`) on every relative-workspace sim run, staling mutate/cover with
+    no RTL/tb edit involved. A relative --workspace must both pass AND
+    leave tb/ untouched."""
+    ws = make_ws(tmp_path, RTL_GOOD, SPEC_ONE_REQ, TB_WRAP)
+    monkeypatch.chdir(tmp_path)
+    code = check_sim.main(["--workspace", "ws"])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0, out
+    assert out["status"] == "pass"
+    # __pycache__ is ordinary Python bytecode caching from importing the
+    # test module - present regardless of relative/absolute --workspace,
+    # not the bug this test targets.
+    leftover = [p for p in (ws / "tb").iterdir()
+               if p.name not in ("test_top.py", "__pycache__")]
+    assert leftover == [], \
+        f"a relative --workspace polluted tb/ with: {leftover}"
