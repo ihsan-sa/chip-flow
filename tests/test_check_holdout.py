@@ -7,6 +7,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[1]
 ENGINE = REPO / "engine"
 SCRIPTS = ENGINE / "scripts"
@@ -90,6 +92,7 @@ def make_ws(tmp_path: Path, rtl_text: str, holdout_text: str) -> Path:
     return ws
 
 
+@pytest.mark.slow
 def test_clean_design_passes(tmp_path, capsys):
     ws = make_ws(tmp_path, RTL_GOOD, HOLDOUT_TB)
     code = check_holdout.main(["--workspace", str(ws)])
@@ -99,6 +102,7 @@ def test_clean_design_passes(tmp_path, capsys):
     assert out["tests_passed"] == 1
 
 
+@pytest.mark.slow
 def test_held_out_bug_reported_by_requirement_id_only(tmp_path, capsys):
     ws = make_ws(tmp_path, RTL_BUGGY_RESET, HOLDOUT_TB)
     code = check_holdout.main(["--workspace", str(ws)])
@@ -113,6 +117,7 @@ def test_held_out_bug_reported_by_requirement_id_only(tmp_path, capsys):
     assert "test_reset_is_zero" not in v["msg"]
 
 
+@pytest.mark.slow
 def test_untagged_holdout_test_is_flagged(tmp_path, capsys):
     ws = make_ws(tmp_path, RTL_GOOD, UNTAGGED_TB)
     code = check_holdout.main(["--workspace", str(ws)])
@@ -122,6 +127,7 @@ def test_untagged_holdout_test_is_flagged(tmp_path, capsys):
     assert "untagged_holdout_test" in kinds
 
 
+@pytest.mark.slow
 def test_skipped_holdout_test_is_not_passed_and_not_named(tmp_path, capsys):
     ws = make_ws(tmp_path, RTL_GOOD, SKIPPED_TB)
     code = check_holdout.main(["--workspace", str(ws)])

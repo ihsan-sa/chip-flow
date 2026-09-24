@@ -9,6 +9,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[1]
 ENGINE = REPO / "engine"
 SCRIPTS = ENGINE / "scripts"
@@ -105,6 +107,7 @@ def make_ws(tmp_path: Path, tb_text: str) -> Path:
     return ws
 
 
+@pytest.mark.slow
 def test_strong_testbench_kills_most_mutants(tmp_path, capsys):
     ws = make_ws(tmp_path, TB_STRONG)
     code = check_mutate.main(["--workspace", str(ws), "--size", str(SMALL_SIZE),
@@ -116,6 +119,7 @@ def test_strong_testbench_kills_most_mutants(tmp_path, capsys):
     assert code in (0, 1)   # a real seed may or may not clear 0.9 at size=6
 
 
+@pytest.mark.slow
 def test_testbench_that_asserts_nothing_fails_mutate(tmp_path, capsys):
     ws = make_ws(tmp_path, TB_ASSERTS_NOTHING)
     code = check_mutate.main(["--workspace", str(ws), "--size", str(SMALL_SIZE),
@@ -127,6 +131,7 @@ def test_testbench_that_asserts_nothing_fails_mutate(tmp_path, capsys):
     assert "kill_rate_below_threshold" in kinds
 
 
+@pytest.mark.slow
 def test_tb_that_does_not_import_fails_via_the_baseline(tmp_path, capsys):
     # every crashed run counts as a "kill" under mcy's own [logic] block -
     # without check_baseline(), this passed at kill_rate 1.0.
