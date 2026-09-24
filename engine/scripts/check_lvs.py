@@ -116,8 +116,16 @@ def run(argv=None):
         if not m.is_file():
             raise CheckError(f"no PDK spice model at {m}")
 
-    report_path = final_dir / f".lvs_check_{top}.rpt"
-    lvs_script = final_dir / f".lvs_check_{top}.lvs"
+    # work_dir is a scratch dir under ws/log/, never final_dir: final_dir
+    # sits inside harden/, the exact directory tree the "harden" artifact
+    # kind hashes for freshness (invalidation.yaml) - a scratch file dropped
+    # there would change that hash on every lvs run and falsely stale every
+    # OTHER gate that also reads "harden" (timing, drc, glsim, precheck,
+    # release), including lvs's own last-recorded pass.
+    work_dir = ws / "log" / "lvs_work"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    report_path = work_dir / f".lvs_check_{top}.rpt"
+    lvs_script = work_dir / f".lvs_check_{top}.lvs"
     lines = [
         f"set circuit1 [readnet spice {spice}]",
         "set circuit2 [readnet verilog /dev/null]",

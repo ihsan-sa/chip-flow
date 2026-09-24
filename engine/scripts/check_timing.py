@@ -65,7 +65,8 @@ def _pdk_root() -> Path:
     return Path(proc.stdout.strip()) / "foss" / "pdks"
 
 
-def run_corner(final_dir: Path, top: str, corner: str, pdk_root: Path) -> dict:
+def run_corner(final_dir: Path, top: str, corner: str, pdk_root: Path,
+              work_dir: Path) -> dict:
     bucket = corner.split("_", 1)[0]
     lib = ttlib.stdcell_liberty_path(corner, pdk_root)
     netlist = final_dir / "nl" / f"{top}.nl.v"
@@ -76,7 +77,13 @@ def run_corner(final_dir: Path, top: str, corner: str, pdk_root: Path) -> dict:
         if not p.is_file():
             raise CheckError(f"corner {corner!r}: no {label} at {p}")
 
-    tcl = final_dir / f".sta_{corner}.tcl"
+    # written under work_dir (log/timing_work/), never final_dir: final_dir
+    # sits inside harden/, the exact directory tree the "harden" artifact
+    # kind hashes for freshness (invalidation.yaml) - a scratch file dropped
+    # there would change that hash on every timing run and falsely stale
+    # every OTHER gate that also reads "harden" (drc, lvs, glsim, precheck,
+    # release), including timing's own last-recorded pass.
+    tcl = work_dir / f".sta_{corner}.tcl"
     tcl.write_text(
         f"read_liberty {lib}\n"
         f"read_verilog {netlist}\n"
@@ -125,7 +132,10 @@ def run(argv=None):
         raise CheckError(f"{lib_dir} has no corner subdirectories")
 
     pdk_root = _pdk_root()
-    results = [run_corner(final_dir, top, corner, pdk_root) for corner in corners]
+    work_dir = ws / "log" / "timing_work"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    results = [run_corner(final_dir, top, corner, pdk_root, work_dir)
+              for corner in corners]
 
     violations = []
     for r in results:

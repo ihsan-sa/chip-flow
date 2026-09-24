@@ -64,6 +64,13 @@ def run_magic_drc(gds: Path, top: str, workdir: Path) -> int:
     # top cell; drc check; drc catchup" script (tests/check.sh's own smoke,
     # a one-box synthetic GDS) never prints a "Total DRC errors found:"
     # line on a real, thousand-instance hardened design; this does.
+    #
+    # `workdir` is a scratch dir under ws/log/, never final_dir: final_dir
+    # sits inside harden/, the exact directory tree the "harden" artifact
+    # kind hashes for freshness (invalidation.yaml) - a scratch file dropped
+    # there would change that hash on every drc run and falsely stale every
+    # OTHER gate that also reads "harden" (timing, lvs, glsim, precheck,
+    # release), including drc's own last-recorded pass.
     script = workdir / ".magic_drc.tcl"
     report = workdir / ".magic_drc.rpt"
     script.write_text(
@@ -147,8 +154,10 @@ def run(argv=None):
         raise CheckError(f"no hardened GDS at {gds} - has the harden gate run?")
 
     pdk_root = _pdk_root()
-    magic_count = run_magic_drc(gds, top, final_dir)
-    klayout_count = run_klayout_drc(gds, top, pdk_root, final_dir)
+    work_dir = ws / "log" / "drc_work"
+    work_dir.mkdir(parents=True, exist_ok=True)
+    magic_count = run_magic_drc(gds, top, work_dir)
+    klayout_count = run_klayout_drc(gds, top, pdk_root, work_dir)
 
     violations = []
     if magic_count:
