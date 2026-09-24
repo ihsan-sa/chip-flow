@@ -3,7 +3,10 @@
 # bridge work in this box's image? Section 1 reproduces the answer (no,
 # with the exact evidence). Section 2 runs the first fallback from
 # design.md section 5 (cocotbext-ams, already in the image) end to end
-# and checks the digital side really drove the analog computation.
+# and checks the digital side really drove the analog computation. Section
+# 3 (M10) resolves the spike's open issue: the same gf180 transistor-level
+# two-inverter pair, converging through cocotbext-ams, with a real
+# assertion on the digitized readback, not exit 0.
 #
 # Everything runs through bin/eda; nothing is written under the toolchain.
 set -uo pipefail
@@ -78,12 +81,42 @@ export LD_LIBRARY_PATH="$T/foss/tools/ngspice/lib"
 export LIBNGSPICE_PATH="$T/foss/tools/ngspice/lib/libngspice.so.0"
 out="$("$EDA" python3 run_cocotb.py 2>&1)"
 echo "$out" | grep "cocotb.two_inv_top" # the three in_pin -> out_pin lines
+section2_ok=0
 if echo "$out" | grep -q "TESTS=1 PASS=1 FAIL=0"; then
   echo "PASS: cocotbext-ams bridge round-tripped the digital pin through a"
   echo "  real ngspice analog computation and back, correctly, 3/3 times."
-  exit 0
+  section2_ok=1
 else
   echo "FAIL: fallback did not pass -- see output below"
   echo "$out" | tail -40
+fi
+
+echo
+echo "== 3. M10: the gf180 transistor-level pair, through the same bridge =="
+echo "   (the open issue this spike left - see two_inv_gf180.sp's own"
+echo "   comment and dcosim.md's 'Resolved for M10' section for the fix)"
+
+cp "$HERE"/two_inv_gf180.sp "$HERE"/test_two_inv_gf180.py "$HERE"/run_gf180_cocotb.py "$WORK/"
+
+export GF180_NGSPICE_DIR="$T/foss/pdks/gf180mcuD/libs.tech/ngspice"
+out="$("$EDA" python3 run_gf180_cocotb.py 2>&1)"
+echo "$out" | grep -E "cocotb\.two_inv_top|Timestep too small"
+section3_ok=0
+if echo "$out" | grep -q "TESTS=1 PASS=1 FAIL=0"; then
+  echo "PASS: the gf180 transistor-level two-inverter pair converged through"
+  echo "  cocotbext-ams and the digital side read back a real transition"
+  echo "  (asserted, not just exit 0)."
+  section3_ok=1
+else
+  echo "FAIL: the gf180 case did not pass -- see output below"
+  echo "$out" | tail -40
+fi
+
+echo
+if [ "$section2_ok" -eq 1 ] && [ "$section3_ok" -eq 1 ]; then
+  echo "ALL PASS"
+  exit 0
+else
+  echo "FAIL: section2_ok=$section2_ok section3_ok=$section3_ok"
   exit 1
 fi
