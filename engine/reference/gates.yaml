@@ -110,8 +110,7 @@ gates:
       description: "No latches, unmapped cells or combinational loops."
     harden:
       phase: P6
-      tool: stub
-      future_tool: "LibreLane 3, TT config, gf180mcuD"
+      tool: harden
       job: true
       fail_severities: [error]
       max_count: 0
@@ -121,8 +120,7 @@ gates:
         netlist, SDF, metrics.
     timing:
       phase: P6
-      tool: stub
-      future_tool: "OpenSTA on the hardened netlist at LibreLane's corners"
+      tool: timing
       fail_severities: [error]
       max_count: 0
       fault: "a chain that misses the spec's clock"
@@ -131,24 +129,21 @@ gates:
         slew violations.
     drc:
       phase: P6
-      tool: stub
-      future_tool: "magic DRC and klayout DRC, PDK decks"
+      tool: drc
       fail_severities: [error]
       max_count: 0
       fault: "a metal spacing violation planted in the GDS"
       description: "0 violations from both."
     lvs:
       phase: P6
-      tool: stub
-      future_tool: "netgen, magic-extracted layout versus the hardened netlist"
+      tool: lvs
       fail_severities: [error]
       max_count: 0
       fault: "one via removed from the GDS"
       description: "Match."
     glsim:
       phase: P6
-      tool: stub
-      future_tool: "the sim suite on the gate-level netlist, then with SDF"
+      tool: glsim
       fail_severities: [error]
       max_count: 0
       fault: >-
@@ -157,8 +152,7 @@ gates:
       description: "Every test passes both ways."
     precheck:
       phase: P6
-      tool: stub
-      future_tool: "tt-support-tools precheck, pinned"
+      tool: precheck
       fail_severities: [error]
       max_count: 0
       fault: "a wrong top module name in info.yaml"
