@@ -38,3 +38,7 @@ faults:
     gate: synth
     plant: plant_synth.py
     expect: {status: fail, kind: combinational_loop}
+  - name: release_rtl_changed_after_sim
+    gate: release
+    plant: plant_release.py
+    expect: {status: fail, kind: gate_not_ready}

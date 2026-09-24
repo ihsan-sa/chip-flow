@@ -134,9 +134,17 @@ def run_rung(tmp_root: Path, rung_dir: Path, skill: str, gates: dict) -> dict:
     problems: list[str] = []
     gate_timings: dict[str, float] = {}
 
-    # the untouched reference must pass every gate this manifest exercises.
+    # the untouched reference must pass every gate this manifest exercises -
+    # except `release`, whose own "untouched" story is fabricated entirely
+    # inside its own plant script (record a full pipeline pass against the
+    # CURRENT files, then edit the RTL so it goes stale - the same trick
+    # tests/test_check_release.py's pass_every_gate uses). A bare scratch
+    # copy with nothing recorded in state.json yet can never pass `release`
+    # (every OTHER gate reads as "no recorded result" there too), so
+    # requiring that here would refuse every release fault regardless of
+    # what it actually plants.
     clean_ws = make_scratch_workspace(tmp_root, rung_dir, skill, rung)
-    gate_names = sorted({f["gate"] for f in manifest["faults"]})
+    gate_names = sorted({f["gate"] for f in manifest["faults"]} - {"release"})
     for gname in gate_names:
         t0 = time.monotonic()
         _report, result = run_gate(clean_ws, gname, gates, skill)
