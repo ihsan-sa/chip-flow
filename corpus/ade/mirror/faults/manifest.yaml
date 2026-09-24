@@ -1,0 +1,30 @@
+# faults manifest (docs/design.md section 3, "### M8."): one entry per ade
+# gate this rung demonstrates. Same contract as corpus/vde's own manifests -
+# faults.py copies the rung into a scratch workspace, imports plant.py's
+# `plant(ws)` and runs it, then runs `gate` and checks the result against
+# `expect` (`status` is gate.py's own pass|fail vocabulary, `kind` is a kind
+# from the failing findings list). `mc` has no entry here - gates.yaml's own
+# fault for it is "not applicable by default" (this rung's spec.yaml has no
+# `mc` block).
+version: 1
+faults:
+  - name: spec_lint_measure_no_bounds
+    gate: spec_lint
+    plant: plant_spec_lint.py
+    expect: {status: fail, kind: measure_no_bounds}
+  - name: netlist_lint_model_not_in_pdk
+    gate: netlist_lint
+    plant: plant_netlist_lint.py
+    expect: {status: fail, kind: model_not_in_pdk}
+  - name: sim_tt_w_and_l_swapped
+    gate: sim_tt
+    plant: plant_sim_tt.py
+    expect: {status: fail, kind: sim_bound_fail}
+  - name: sim_pvt_meets_typical_loses_headroom
+    gate: sim_pvt
+    plant: plant_sim_pvt.py
+    expect: {status: fail, kind: sim_bound_fail}
+  - name: bench_strength_bounds_too_wide
+    gate: bench_strength
+    plant: plant_bench_strength.py
+    expect: {status: fail, kind: survivor_size_doubled}

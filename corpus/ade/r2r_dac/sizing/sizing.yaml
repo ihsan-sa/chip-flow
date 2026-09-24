@@ -1,0 +1,26 @@
+# sizing.yaml (docs/design.md section 4, "### M8.") - this rung's OWN
+# deliberately wrong starting point: a 1:1 R:2R ratio (netlist/r2r_dac.cir's
+# own subckt defaults match this exactly, so a bare run with no override at
+# all lands on the same wrong state). `optimise.py numeric` against this
+# file is what corrects the ratio to 2:1 - see that file's own docstring
+# and netlist/r2r_dac.cir's comment on why sim_tt is not in this rung's own
+# faults/manifest.yaml.
+#
+# r_length/r2_length are the "R"/"2R" leg lengths (meters) at rm1's shared,
+# fixed r_width (netlist/r2r_dac.cir: 2e-6) - not resistor VALUES in ohms
+# (this rung's own netlist used to be plain ngspice R elements sized that
+# way; it is rm1, this PDK's real poly resistor, now - see that file's
+# comment on why). The R:2R RATIO the ladder's transfer function actually
+# depends on is exactly the LENGTH ratio (rsh0 cancels - r2r_ladder.sp's
+# own header has the math), so bounds here are drawn from that template's
+# own SIZING BOUNDS comment (r_length 2e-6 to 2e-5); r2_length's own upper
+# bound is widened to 2x that so the correct 2:1 point stays reachable
+# from every r_length this range allows.
+r_length:
+  value: 1.0e-5
+  min: 2.0e-6
+  max: 2.0e-5
+r2_length:
+  value: 1.0e-5
+  min: 2.0e-6
+  max: 4.0e-5

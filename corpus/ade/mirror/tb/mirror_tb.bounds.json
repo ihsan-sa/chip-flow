@@ -1,0 +1,4 @@
+[
+  {"measure": "iout_raw", "min": 18e-6, "max": 32e-6, "severity": "error",
+   "msg": "expect ~24uA (10uA ref * Wout/Wref=2) across the default PVT set"}
+]

@@ -1,0 +1,8 @@
+[
+  {"measure": "vout_lsb", "min": 0.55, "max": 0.65, "severity": "error",
+   "msg": "LSB alone should read ~0.6V at the correct 2:1 R:2R ratio, VDD=3.3V"},
+  {"measure": "vout_msb", "min": 2.3, "max": 2.5, "severity": "error",
+   "msg": "MSB alone should read ~2.4V at the correct 2:1 ratio"},
+  {"measure": "vout_both", "min": 2.9, "max": 3.1, "severity": "error",
+   "msg": "both bits high should read ~3.0V at the correct 2:1 ratio"}
+]

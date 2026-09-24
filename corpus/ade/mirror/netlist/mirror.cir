@@ -1,0 +1,8 @@
+* mirror.cir - the current_mirror subcircuit (docs/design.md section 5's
+* current_mirror.sp topology, this rung's own concrete sizing). A subckt
+* LIBRARY, never directly runnable (see engine/scripts/check_netlist_lint.py's
+* own docstring) - tb/mirror_tb.cir instantiates and biases it.
+.subckt current_mirror iref_node iout vdd vss
+xmref iref_node iref_node vss vss nfet_03v3 w=4e-6 l=5e-7
+xmout iout      iref_node vss vss nfet_03v3 w=8e-6 l=5e-7
+.ends current_mirror

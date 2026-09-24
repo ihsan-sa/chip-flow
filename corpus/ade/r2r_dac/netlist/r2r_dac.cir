@@ -1,0 +1,57 @@
+* r2r_dac.cir - a 2-bit R2R ladder DAC (docs/design.md section 5's
+* r2r_ladder.sp topology, section 4's optimise loop target, "### M8.").
+* bmsb is the MSB input, blsb the LSB input (nearest-to-vout carries more
+* weight - confirmed empirically while building this rung, not assumed:
+* bmsb driven alone measures 2.4V at vout, blsb driven alone 0.6V, both
+* together 3.0V, all at the correct 2:1 R:2R ratio and VDD=3.3V). vout is
+* the ladder's own output node, unloaded (no output buffer at this
+* milestone - a real design would add one before driving anything else).
+*
+* This PDK's own `rm1` resistor subcircuit (libs.tech/ngspice/sm141064.spice)
+* - not a plain ngspice `R` element with a numeric value - matching
+* skills/ade/reference/topologies/r2r_ladder.sp's own choice: a review of
+* this rung found the prior plain-R netlist declaring `devices: [rmsb,
+* rlsb]` in spec.yaml for refs that were never `x`-prefixed PDK
+* instantiations at all - netlist_lint's own declared_device_missing check
+* fails on that today (confirmed: `check_netlist_lint.py --workspace
+* <this rung>` reports both as missing), and `corners: default` claimed a
+* 5-corner PVT sweep for a device with no corner-dependent model at all. An
+* earlier comment here claimed rm1's own `r_rsh0=rsh_rm1` default never
+* resolved "in practice on this box" - that turned out to be incomplete,
+* not wrong in principle: rsh_rm1 lives in a SEPARATE `.lib res_<corner>`
+* block from the transistor `.lib <corner>` block the bench template
+* already selects (sim_run.py's own RES_LIB_SECTION/{{RES_CORNER}}, added
+* for exactly this and never wired into a bench until now) - entering
+* BOTH resolves it cleanly (confirmed empirically: `eda ngspice -b` on a
+* standalone rm1-based deck at every one of typical/ss/ff/sf/fs with its
+* matching {{RES_CORNER}} reports v(vout) = 2.4V at every one of them, MSB
+* alone, bit-identical to the plain-R result - rm1's own r_rsh0 cancels in
+* the R:2R RATIO regardless of corner, same reasoning r2r_ladder.sp's own
+* header already gives for why this topology is corner-robust by
+* construction; corners: default is no longer a hollow claim, it is a
+* genuine corner-dependent device model whose ratio-based design happens
+* to reject that dependence, which is the point of building it this way).
+*
+* r_length/r2_length are the "R" and "2R" leg lengths (meters) at a shared
+* r_width - the tunable sizing target (docs/design.md section 4: "two
+* searchers write the same TSV"), NOT hardcoded to a 2x ratio the way
+* r2r_ladder.sp's own template subckt bakes in (this rung's whole point is
+* a wrong ratio optimise.py numeric must correct, so r2_length stays an
+* independent parameter, never derived from r_length here).
+*
+* The defaults below (1e-5/1e-5, a 1:1 ratio) are this rung's OWN
+* deliberately wrong starting point - sizing/sizing.yaml ships the same
+* wrong values, and `optimise.py numeric` against them (docs/design.md
+* section 4, this rung's own done criterion) is what corrects the ratio to
+* 2:1. This rung's faults/manifest.yaml deliberately does NOT exercise
+* sim_tt - the untouched reference is SUPPOSED to fail sim_tt until the
+* sizing loop runs, same as a corpus rung whose "row may stay red" until
+* its own later milestone (docs/design.md "### M6."/"### M9." both do this
+* for a harder rung); it is not a fault demonstration, it is this block's
+* actual, currently-unmet spec.
+.subckt r2r_dac bmsb blsb vout r_width=2e-6 r_length=1e-5 r2_length=1e-5
+xrmsb  bmsb vout rm1 r_width={r_width} r_length={r_length}
+xr2lsb vout n0   rm1 r_width={r_width} r_length={r2_length}
+xrlsb  blsb n0   rm1 r_width={r_width} r_length={r_length}
+xr2msb n0   0    rm1 r_width={r_width} r_length={r2_length}
+.ends r2r_dac
