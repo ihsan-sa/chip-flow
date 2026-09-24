@@ -475,6 +475,21 @@ def harden_config(spec: dict, rtl_files: list[Path], wrapper_path: Path,
         "GND_PIN": "VGND",
         "RT_MAX_LAYER": tech.project_top_metal_layer,
         "PDK_ROOT": str(pdk_root),
+        # GF180's own PDK default (TIMING_VIOLATION_CORNERS: ["*tt*"])
+        # makes LibreLane's OWN Checker.SetupViolations/MaxCap/MaxSlew
+        # steps raise a deferred FlowError (harden exits 2) the moment the
+        # NOMINAL corner alone misses timing - found running a shrunk-
+        # clock-period fault (M4, docs/design.md "### M4."): a design that
+        # cannot meet a bad period is not a placement/routing failure, and
+        # docs/design.md's own M4 done-criteria list `harden` and `timing`
+        # as six SEPARATE gates - `timing` (check_timing.py) is the real,
+        # complete signoff, checking EVERY corner in STA_CORNERS, not just
+        # the wildcarded nominal one. `[""]` is TimingViolations' own
+        # documented "match no corners" convention - it turns LibreLane's
+        # internal checker informational (still visible as a WARN in
+        # flow.log) instead of flow-ending, so `harden` passing means "a
+        # valid GDS came out", exactly what it is meant to mean.
+        "TIMING_VIOLATION_CORNERS": [""],
     })
     if isinstance(period, (int, float)):
         config["CLOCK_PERIOD"] = float(period)
