@@ -156,6 +156,20 @@ def run_rung(tmp_root: Path, rung_dir: Path, skill: str, gates: dict) -> dict:
                 (_report or {}).get("wall_s", 0.0), 2))
         problems.extend(check_expect(f"{rung}/{name}", result,
                                      entry.get("expect", {})))
+        # A holdout fault must be invisible to the visible tb/ suite - that
+        # is the whole point of the `holdout` gate (gates.yaml: "... which
+        # the visible tests do not look"). Without this, a fault that also
+        # breaks sim (like an earlier version of plant_holdout.py's own
+        # delayed-reset fault, docs/design.md section 3) would still satisfy
+        # check_expect above and never be caught: it demonstrates the wrong
+        # thing, not "holdout catches what tb/ misses".
+        if gname == "holdout":
+            _sim_report, sim_result = run_gate(ws, "sim", gates, skill)
+            if sim_result["status"] != "pass":
+                problems.append(
+                    f"{rung}/{name}: a holdout fault must leave the sim "
+                    "gate passing (it must be invisible to tb/), but sim "
+                    f"failed too: {sim_result.get('failing')}")
 
     return {"rung": rung, "problems": problems, "gate_wall_s": gate_timings}
 

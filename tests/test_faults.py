@@ -130,3 +130,89 @@ def test_import_plant_calls_the_real_function(tmp_path):
     plant = faults.import_plant(rung, "good.py")
     plant(tmp_path)
     assert (tmp_path / "marker.txt").read_text() == "planted"
+
+
+HOLDOUT_MANIFEST = """\
+version: 1
+faults:
+  - name: h
+    gate: holdout
+    plant: plant_h.py
+    expect: {status: fail, kind: holdout_failed}
+"""
+
+
+def make_holdout_rung(tmp_path: Path) -> Path:
+    rung = make_rung(tmp_path, HOLDOUT_MANIFEST)
+    (rung / "holdout").mkdir()
+    (rung / "holdout" / "test_widget_holdout.py").write_text(
+        "# a holdout module\n", encoding="utf-8")
+    (rung / "faults" / "plant_h.py").write_text(
+        "def plant(ws):\n    pass\n", encoding="utf-8")
+    return rung
+
+
+def test_run_rung_flags_a_holdout_fault_that_also_breaks_sim(tmp_path, monkeypatch):
+    # a holdout fault must be invisible to tb/ - that is the whole point of
+    # the gate (gates.yaml: "... which the visible tests do not look"). One
+    # that also fails sim demonstrates the wrong thing and must be flagged,
+    # even though its own `expect` (holdout/holdout_failed) is satisfied.
+    rung = make_holdout_rung(tmp_path)
+    calls: list[str] = []
+
+    def fake_run_gate(ws, gate_name, gates, skill):
+        calls.append(gate_name)
+        if gate_name == "holdout" and calls.count("holdout") == 1:
+            return {}, {"status": "pass", "failing": []}   # clean reference
+        if gate_name == "holdout":
+            return {}, {"status": "fail",
+                       "failing": [{"kind": "holdout_failed"}]}
+        assert gate_name == "sim"
+        return {}, {"status": "fail", "failing": [{"kind": "test_failed"}]}
+
+    monkeypatch.setattr(faults, "run_gate", fake_run_gate)
+    tmp_root = tmp_path / "scratch"
+    tmp_root.mkdir()
+    result = faults.run_rung(tmp_root, rung, "vde", gates={})
+    assert calls == ["holdout", "holdout", "sim"]
+    assert any("must leave the sim gate passing" in p for p in result["problems"])
+
+
+def test_run_rung_does_not_flag_a_holdout_fault_that_leaves_sim_passing(
+        tmp_path, monkeypatch):
+    rung = make_holdout_rung(tmp_path)
+    calls: list[str] = []
+
+    def fake_run_gate(ws, gate_name, gates, skill):
+        calls.append(gate_name)
+        if gate_name == "holdout" and calls.count("holdout") == 1:
+            return {}, {"status": "pass", "failing": []}
+        if gate_name == "holdout":
+            return {}, {"status": "fail",
+                       "failing": [{"kind": "holdout_failed"}]}
+        assert gate_name == "sim"
+        return {}, {"status": "pass", "failing": []}
+
+    monkeypatch.setattr(faults, "run_gate", fake_run_gate)
+    tmp_root = tmp_path / "scratch"
+    tmp_root.mkdir()
+    result = faults.run_rung(tmp_root, rung, "vde", gates={})
+    assert calls == ["holdout", "holdout", "sim"]
+    assert result["problems"] == []
+
+
+def test_run_rung_does_not_check_sim_for_a_non_holdout_fault(tmp_path, monkeypatch):
+    rung = make_rung(tmp_path, MANIFEST)   # MANIFEST's own fault is a `lint` gate
+    (rung / "faults" / "plant_a.py").write_text(
+        "def plant(ws):\n    pass\n", encoding="utf-8")
+    calls: list[str] = []
+
+    def fake_run_gate(ws, gate_name, gates, skill):
+        calls.append(gate_name)
+        return {}, {"status": "fail", "failing": [{"kind": "LATCH"}]}
+
+    monkeypatch.setattr(faults, "run_gate", fake_run_gate)
+    tmp_root = tmp_path / "scratch"
+    tmp_root.mkdir()
+    faults.run_rung(tmp_root, rung, "vde", gates={})
+    assert "sim" not in calls
