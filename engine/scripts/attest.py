@@ -164,9 +164,15 @@ def applicable_gates(skill: str, imap: dict | None = None) -> list[str]:
     built yet is not "not applicable", it is simply not fresh-passed, and
     build() below refuses on it like any other unbuilt/unrun gate - the one
     way past that for a SPECIFIC, reviewed exception is a durable waiver,
-    never a blanket applicability carve-out)."""
+    never a blanket applicability carve-out).
+
+    The one gate left out is `release` itself: check_release.py calls
+    build() to decide release, so counting release among the gates it owes
+    would make its first pass demand an earlier one, and it could never
+    pass."""
     imap = imap or statelib.load_map()
-    return sorted((imap["gate_inputs"].get(skill) or {}))
+    return sorted(g for g in (imap["gate_inputs"].get(skill) or {})
+                  if g != "release")
 
 
 def gate_check(ws: Path, skill: str, gate: str, data: dict,

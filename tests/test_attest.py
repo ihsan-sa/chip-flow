@@ -38,7 +38,7 @@ def test_build_refuses_on_a_fresh_workspace(tmp_path):
     ws = make_ws(tmp_path)
     att, problems = attest_mod.build(ws)
     assert att is None
-    assert len(problems) == len(statelib.load_map()["gate_inputs"]["msde"])
+    assert len(problems) == len(attest_mod.applicable_gates("msde"))
     assert not (ws / "reports" / "checks.json").exists()
 
 
@@ -48,11 +48,50 @@ def test_build_succeeds_when_every_gate_is_fresh_pass(tmp_path):
     att, problems = attest_mod.build(ws)
     assert problems == []
     assert att["skill"] == "msde"
-    assert len(att["checks"]) == len(statelib.load_map()["gate_inputs"]["msde"])
+    assert len(att["checks"]) == len(attest_mod.applicable_gates("msde"))
     path = attest_mod.write_attestation(ws, att)
     assert path.is_file()
     written = json.loads(path.read_text(encoding="utf-8"))
     assert written["attestation_sha256"] == att["attestation_sha256"]
+
+
+def pass_every_gate_but_release(ws: Path, skill: str) -> None:
+    st = state_mod.State.load(ws / "state.json")
+    for g in statelib.load_map()["gate_inputs"][skill]:
+        if g != "release":
+            st.record_gate(g, {"status": "pass"})
+    st.save()
+
+
+def test_release_is_not_among_the_gates_it_owes():
+    for skill in ("vde", "ade", "msde"):
+        assert "release" in statelib.load_map()["gate_inputs"][skill]
+        assert "release" not in attest_mod.applicable_gates(skill)
+
+
+def test_first_release_passes_without_an_earlier_release(tmp_path):
+    """release calls build(); if build() owed release too, the first release
+    could never pass."""
+    ws = make_ws(tmp_path)
+    pass_every_gate_but_release(ws, "msde")
+    att, problems = attest_mod.build(ws)
+    assert problems == []
+    assert att is not None
+    assert "release" not in [c["gate"] for c in att["checks"]]
+
+
+def test_release_still_refuses_a_stale_sibling(tmp_path):
+    """Leaving release out must not loosen it: a sibling gate gone stale
+    still blocks, even with an earlier release pass on record."""
+    ws = make_ws(tmp_path)
+    pass_every_gate(ws, "msde")
+    st = state_mod.State.load(ws / "state.json")
+    st.apply_edit("interface_edit")
+    st.save()
+    att, problems = attest_mod.build(ws)
+    assert att is None
+    assert any("stale" in p for p in problems)
+    assert not any(p.startswith("release:") for p in problems)
 
 
 def test_build_refuses_with_an_open_issue_even_if_gates_pass(tmp_path):
