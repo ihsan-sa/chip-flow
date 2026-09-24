@@ -1,0 +1,31 @@
+* mirror_pex_tb.cir - the post-layout bench for the mirror, typical corner
+* (docs/design.md 1.5's ade pex_sim row). It runs on the magic-extracted,
+* parasitic-annotated netlist of this run's own GDS; check_pex_sim.py fills
+* in {pdk} and {extracted}, never a path typed by hand.
+*
+* The same bias as tb/mirror_tb.cir (10uA into iref_node), with iout loaded
+* by 20k to vdd. Two things are measured:
+*   v(iout)  the operating point: the mirror still sinks about 2 x 10uA
+*   f3db     the output pole: a 1A AC current into iout sees
+*            20k || ro || the capacitance on iout, so every fF the layout
+*            hangs on the output moves it down. The schematic alone has only
+*            the devices' own junction and overlap capacitance there.
+.include '{pdk}/libs.tech/ngspice/design.spice'
+.lib '{pdk}/libs.tech/ngspice/sm141064.spice' typical
+.include '{extracted}'
+
+vdd vdd 0 dc 3.3
+iref_src vdd iref_node dc 10u
+rload vdd iout 20k
+iprobe vdd iout dc 0 ac 1
+xdut iref_node iout vdd 0 current_mirror
+
+.control
+op
+print v(iout)
+ac dec 100 1e6 1e11
+let zdc = vdb(iout)[0]
+let target = zdc - 3
+meas ac f3db when vdb(iout)=$&target fall=1
+.endc
+.end

@@ -74,3 +74,7 @@ is smaller in scope (write `layout/gen_<block>.py` straight against
 gdsfactory 9.51 and GF180's primitive cells, no adapter layer to keep in
 sync with either upstream), M9 should take that fallback rather than sink
 further time into gLayout.
+
+## M9 note: the PDK's magic tech file, patched per run
+
+gf180mcuD.tech's cifinput maps GDS 110/11 to MET2RES, among the MET1 lines. Its own cifoutput, klayout's .lyp and layers_def.py all say 110/11 is metal1_res, so I think it's a typo. As shipped, magic never forms rm1 and extracts the resistor as a short. `engine/lib/layoutlib.py` writes a copy of the tech file per run with that one line changed, and it refuses to run if the line isn't there, so a PDK update that fixes or moves it shows up at once. The PDK itself is never edited.

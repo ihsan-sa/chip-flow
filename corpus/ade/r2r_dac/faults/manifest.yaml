@@ -1,12 +1,30 @@
-# faults manifest (docs/design.md section 3, "### M8."). Only spec_lint
-# here on purpose - this rung's own untouched sim_tt is EXPECTED to fail
-# (see netlist/r2r_dac.cir's own comment: the ratio is deliberately wrong
-# until optimise.py numeric corrects it), so it is not a fault
-# DEMONSTRATION and does not belong in this manifest; corpus/ade/mirror
-# already exercises netlist_lint/sim_tt/sim_pvt/bench_strength in full.
+# (No pex_sim fault here: this ladder extracts no wire R, so nothing
+# parasitic can fail its bench - see layout_ref/r2r_dac_pex_tb.cir; the
+# pex_sim fault lives on corpus/ade/mirror.)
+#
+# faults manifest (docs/design.md section 3, "### M8."/"### M9."). Only
+# spec_lint, drc and lvs here on purpose - this rung's own untouched sim_tt is
+# EXPECTED to fail (see netlist/r2r_dac.cir's own comment: the ratio is
+# deliberately wrong until optimise.py numeric corrects it), so it is not
+# a fault DEMONSTRATION and does not belong in this manifest;
+# corpus/ade/mirror already exercises netlist_lint/sim_tt/sim_pvt/
+# bench_strength in full. M8 and M9's builders ran in parallel with no
+# shared base; this list is the two reconciled into one.
 version: 1
 faults:
   - name: spec_lint_measure_no_bounds
     gate: spec_lint
     plant: plant_spec_lint.py
     expect: {status: fail, kind: measure_no_bounds}
+  - name: offgrid_shape
+    gate: drc
+    plant: plant_drc_offgrid.py
+    expect:
+      status: fail
+      kind: metal1_OFFGRID
+  - name: leg_sized_differently
+    gate: lvs
+    plant: plant_lvs_sized_differently.py
+    expect:
+      status: fail
+      kind: lvs_mismatch
