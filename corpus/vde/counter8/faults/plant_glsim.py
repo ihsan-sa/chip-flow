@@ -13,7 +13,7 @@ through glsim's own pipeline - the gate-level netlist, the generated
 tt_pins harness, both cocotb passes - to prove that pipeline catches a
 real defect end to end, not only that it can be made to fail somehow. A
 genuinely gate-level-only race is future work, noted here rather than
-faked."""
+faked. plant_glsim_sdf.py is the fault only the SDF pass catches."""
 from pathlib import Path
 
 BUGGY = """\

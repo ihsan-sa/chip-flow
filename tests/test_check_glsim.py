@@ -152,3 +152,95 @@ def test_both_passes_all_green_is_a_pass(tmp_path, monkeypatch, capsys):
     assert out["status"] == "pass"
     assert out["results"]["functional"]["test_x"] is True
     assert out["results"]["sdf"]["test_x"] is True
+
+
+PASS_XML_X = """<?xml version="1.0"?>
+<testsuites><testsuite><testcase name="test_counter8.test_x" classname="test_counter8">
+</testcase></testsuite></testsuites>"""
+
+
+def _runner_writing_logs(build_log_text="", sim_log_text="", calls=None):
+    """A fake cocotb runner that passes every test and writes the given text
+    into the sdf pass's build/sim logs, the way Icarus's own messages land
+    there."""
+    class FakeRunner:
+        def build(self, build_args, log_file, **kw):
+            if calls is not None:
+                calls.append((log_file, list(build_args)))
+            if "sdf" in Path(log_file).name:
+                Path(log_file).write_text(build_log_text, encoding="utf-8")
+
+        def test(self, results_xml, log_file, **kw):
+            if "sdf" in Path(log_file).name:
+                Path(log_file).write_text(sim_log_text, encoding="utf-8")
+            Path(results_xml).write_text(PASS_XML_X, encoding="utf-8")
+    return FakeRunner()
+
+
+def _run(ws, monkeypatch, capsys, runner):
+    monkeypatch.setattr("cocotb_tools.runner.get_runner", lambda name: runner)
+    code = check_glsim.main(["--workspace", str(ws)])
+    return code, json.loads(capsys.readouterr().out)
+
+
+def test_sdf_pass_builds_with_specify_and_interconnect(tmp_path, monkeypatch, capsys):
+    ws = make_ws(tmp_path)
+    _patch_pdk(monkeypatch, tmp_path)
+    calls: list = []
+    code, out = _run(ws, monkeypatch, capsys, _runner_writing_logs(calls=calls))
+    assert code == 0, out
+    args = {Path(log).name: a for log, a in calls}
+    assert args["build_functional.log"] == []
+    assert args["build_sdf.log"] == ["-gspecify", "-ginterconnect"]
+
+
+def test_sdf_annotate_omitted_refuses(tmp_path, monkeypatch, capsys):
+    ws = make_ws(tmp_path)
+    _patch_pdk(monkeypatch, tmp_path)
+    code, out = _run(ws, monkeypatch, capsys, _runner_writing_logs(
+        sim_log_text="counter8_glsim_sdf.v:30: warning: Omitting $sdf_annotate() "
+                     "since specify blocks and interconnects are being omitted.\n"))
+    assert code == 2, out
+    assert "Omitting $sdf_annotate" in out["error"]
+
+
+def test_sdf_error_refuses(tmp_path, monkeypatch, capsys):
+    ws = make_ws(tmp_path)
+    _patch_pdk(monkeypatch, tmp_path)
+    code, out = _run(ws, monkeypatch, capsys, _runner_writing_logs(
+        sim_log_text="SDF ERROR: x.sdf:15: Could not find intermodpath!\n"))
+    assert code == 2, out
+    assert "SDF ERROR" in out["error"]
+
+
+def test_unmatched_modpath_on_a_cell_icarus_refused_is_waived(tmp_path, monkeypatch, capsys):
+    ws = make_ws(tmp_path)
+    _patch_pdk(monkeypatch, tmp_path)
+    cells = tmp_path / "cells.v"
+    cells.write_text("module a_buf(A, Z);\nendmodule\n"
+                     "module a_xor(A1, A2, Z);\n specify\n"
+                     " ifnone (posedge A1 => (Z:A1)) = (1.0,1.0);\n"
+                     " endspecify\nendmodule\n", encoding="utf-8")
+    sdf = (ws / "harden" / "runs" / "run" / "final" / "sdf" / check_glsim.SDF_CORNER /
+           f"tt_um_counter8__{check_glsim.SDF_CORNER}.sdf")
+    sdf.write_text(
+        '(DELAYFILE\n (CELL\n  (CELLTYPE "a_xor")\n  (INSTANCE _50_)\n )\n'
+        ' (CELL\n  (CELLTYPE "a_buf")\n  (INSTANCE _51_)\n )\n'
+        ' (CELL (CELLTYPE "tt_um_counter8") (INSTANCE) (DELAY (ABSOLUTE\n'
+        '    (INTERCONNECT tie.ZN uio_oe[0] (0.000:0.000:0.000))\n'
+        '    (INTERCONNECT a.Z b.A (0.118:0.118:0.118) (0.063:0.063:0.063))\n'
+        ')))\n)\n', encoding="utf-8")
+    build = f"{cells}:5: sorry: ifnone with an edge-sensitive path is not supported.\n"
+    ok_sim = "SDF ERROR: x.sdf:9: Unable to match ModPath A1 -> Z in counter8.dut._50_\n"
+    code, out = _run(ws, monkeypatch, capsys, _runner_writing_logs(build, ok_sim))
+    assert code == 0, out
+    assert out["sdf"]["sdf_unannotated"] == ["_50_ (a_xor)"]
+    assert out["sdf"]["zero_interconnects_dropped"] == 1
+    icarus_sdf = (ws / "log" / "glsim_build" / "sdf_icarus.sdf").read_text()
+    assert "tie.ZN" not in icarus_sdf and "a.Z b.A" in icarus_sdf
+
+    # the same mismatch on a cell Icarus did NOT refuse is a real SDF error
+    bad_sim = "SDF ERROR: x.sdf:9: Unable to match ModPath A -> Z in counter8.dut._51_\n"
+    code, out = _run(ws, monkeypatch, capsys, _runner_writing_logs(build, bad_sim))
+    assert code == 2, out
+    assert "_51_" in out["error"]
