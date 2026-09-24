@@ -5,6 +5,7 @@ gate, including the slow mcy-driven mutate gate, twice per rung) is tests/
 smoke-faults.sh, not part of this suite."""
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -216,6 +217,27 @@ def test_run_rung_does_not_check_sim_for_a_non_holdout_fault(tmp_path, monkeypat
     tmp_root.mkdir()
     faults.run_rung(tmp_root, rung, "vde", gates={})
     assert "sim" not in calls
+
+
+def test_run_rung_restores_env_a_plant_sets(tmp_path, monkeypatch):
+    rung = make_rung(tmp_path, MANIFEST)
+    (rung / "faults" / "plant_a.py").write_text(
+        "import os\n"
+        "def plant(ws):\n    os.environ['CHIP_FLOW_TEST_PLANT_ENV'] = 'x'\n",
+        encoding="utf-8")
+    seen: list = []
+
+    def fake_run_gate(ws, gate_name, gates, skill):
+        seen.append(os.environ.get("CHIP_FLOW_TEST_PLANT_ENV"))
+        return {}, {"status": "fail", "failing": [{"kind": "LATCH"}]}
+
+    monkeypatch.delenv("CHIP_FLOW_TEST_PLANT_ENV", raising=False)
+    monkeypatch.setattr(faults, "run_gate", fake_run_gate)
+    tmp_root = tmp_path / "scratch"
+    tmp_root.mkdir()
+    faults.run_rung(tmp_root, rung, "vde", gates={})
+    assert seen[-1] == "x"   # the gate right after the plant still sees it
+    assert "CHIP_FLOW_TEST_PLANT_ENV" not in os.environ
 
 
 RELEASE_MANIFEST = """\

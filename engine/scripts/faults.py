@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import os
 import shutil
 import sys
 import tempfile
@@ -196,8 +197,16 @@ def run_rung(tmp_root: Path, rung_dir: Path, skill: str, gates: dict) -> dict:
         name, gname = entry["name"], entry["gate"]
         plant = import_plant(rung_dir, entry["plant"])
         ws = make_scratch_workspace(tmp_root, rung_dir, skill, rung)
-        plant(ws)
-        _report, result = run_gate(ws, gname, gates, skill)
+        # a plant may steer its gate through an env var (plant_precheck.py's
+        # CHIP_FLOW_PRECHECK_TOP_OVERRIDE); it must not outlive that gate
+        # and leak into the next fault's run in this same process.
+        saved_env = dict(os.environ)
+        try:
+            plant(ws)
+            _report, result = run_gate(ws, gname, gates, skill)
+        finally:
+            os.environ.clear()
+            os.environ.update(saved_env)
         if gname == "mutate":
             gate_timings.setdefault("mutate_fault", round(
                 (_report or {}).get("wall_s", 0.0), 2))
