@@ -1,0 +1,24 @@
+# faults manifest (docs/design.md section 3, "### M10."): one entry per
+# fault the `cosim` gate must catch. CLAUDE.md's rule ("a gate that did not
+# run is a refusal, never a pass ... parse the measures") names three
+# specific failure shapes this gate must never wave through: a
+# non-converging run, a bench where the digital side never toggled, and a
+# missing measure. The never-toggled and out-of-bounds faults below are
+# real, end-to-end (a genuine RTL edit, run through the real bridge); the
+# non-converging and missing-measure shapes are exercised as fast,
+# hermetic unit tests instead (tests/test_check_cosim.py) - manufacturing a
+# genuine ngspice non-convergence on demand is exactly the fragile,
+# machine-specific thing docs/spikes/dcosim.md spent its effort on for the
+# ONE case M10 needs solved (the gf180 two-inverter proof, see spec.md);
+# check_cosim.py's own log-scanning and measures-parsing are unit-testable
+# in isolation and are tested that way instead.
+version: 1
+faults:
+  - name: cosim_digital_never_toggled
+    gate: cosim
+    plant: plant_never_toggled.py
+    expect: {status: fail, kind: digital_side_never_toggled}
+  - name: cosim_divided_freq_out_of_bounds
+    gate: cosim
+    plant: plant_wrong_divide_ratio.py
+    expect: {status: fail, kind: measure_out_of_bounds}
