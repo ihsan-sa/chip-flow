@@ -53,6 +53,18 @@ async def test_reset_is_zero(dut):
     assert int(dut.count.value) == 0
 """
 
+SKIPPED_TB = """\
+import cocotb
+from cocotb.clock import Clock
+from cocotb.triggers import RisingEdge
+
+# req: REQ-RESET
+@cocotb.test(skip=True)
+async def test_reset_is_zero(dut):
+    cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
+    assert False, "must never run"
+"""
+
 UNTAGGED_TB = """\
 import cocotb
 from cocotb.clock import Clock
@@ -108,6 +120,20 @@ def test_untagged_holdout_test_is_flagged(tmp_path, capsys):
     assert code == 1, out
     kinds = {v["kind"] for v in out["violations"]}
     assert "untagged_holdout_test" in kinds
+
+
+def test_skipped_holdout_test_is_not_passed_and_not_named(tmp_path, capsys):
+    ws = make_ws(tmp_path, RTL_GOOD, SKIPPED_TB)
+    code = check_holdout.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 1, out
+    assert out["tests_passed"] == 0
+    v = next(v for v in out["violations"] if v["kind"] == "test_skipped")
+    assert v["refs"] == ["REQ-RESET"]
+    # same "never the held-out test" discipline as holdout_failed.
+    assert v["file"] is None
+    assert v["module"] is None
+    assert "test_reset_is_zero" not in v["msg"]
 
 
 def test_no_holdout_modules_is_an_error(tmp_path, capsys):

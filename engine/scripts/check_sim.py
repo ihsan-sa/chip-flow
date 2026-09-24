@@ -89,6 +89,12 @@ def run(argv=None):
         if res["passed"]:
             continue
         refs = sorted(tags.get(name, []))
+        if res.get("skipped"):
+            violations.append(checklib.violation(
+                "sim", "error", None, name, "test_skipped", refs,
+                f"{name} was skipped - it never ran, so it cannot cover "
+                "the requirement(s) it is tagged with", "cocotb"))
+            continue
         violations.append(checklib.violation(
             "sim", "error", None, name, "test_failed", refs,
             f"{name} failed: {res['message'] or 'see the sim log'}",

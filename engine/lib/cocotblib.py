@@ -12,7 +12,9 @@ Requirement tagging convention (this module's own choice; docs/design.md
 section 2 says only "every test carries the requirement ids it covers", not
 the mechanism): a `# req: ID [ID2 ...]` comment on the line immediately
 before a `@cocotb.test()` decorator tags that test with the requirement
-id(s) it covers.
+id(s) it covers - UNLESS that decorator carries `expect_fail`/`expect_error`
+(see scan_requirement_tags below): a test cocotb itself expects to fail
+cannot silently stand in for a real pass.
 """
 from __future__ import annotations
 
@@ -23,6 +25,16 @@ from pathlib import Path
 REQ_TAG_RE = re.compile(r"^\s*#\s*req:\s*(.+?)\s*$")
 COCOTB_TEST_RE = re.compile(r"^\s*@cocotb\.test\(")
 DEF_RE = re.compile(r"^\s*(?:async\s+)?def\s+(\w+)\s*\(")
+# `@cocotb.test(expect_fail=True)` / `expect_error=...`: cocotb's own xunit
+# reporter (cocotb/regression.py _record_test_xfail) writes such a test's
+# expected failure with NO <failure>/<error>/<skipped> child at all - by
+# default (COCOTB_XFAIL_IN_RESULTS off) it is even written with status
+# "passed", indistinguishable in results.xml from a real pass. Nothing in
+# parse_results_xml below can ever catch that after the fact, so it is
+# caught here instead, statically: a test decorated this way never gets its
+# `# req:` comment attached, so it can never satisfy required coverage
+# (check_sim.py) or be treated as a tagged holdout test (check_holdout.py).
+EXPECT_FAILURE_RE = re.compile(r"\bexpect_(?:fail|error)\b")
 
 
 def scan_requirement_tags(py_dir: Path) -> dict[str, set[str]]:
@@ -30,7 +42,12 @@ def scan_requirement_tags(py_dir: Path) -> dict[str, set[str]]:
     function under py_dir (non-recursive - test files live directly in tb/
     or holdout/) whose immediately preceding non-blank line is a `# req:
     ...` comment. A test with no such comment is simply absent here; callers
-    decide whether that omission is itself a finding."""
+    decide whether that omission is itself a finding.
+
+    A test decorated `expect_fail`/`expect_error` never gets its pending tag
+    attached, whatever the decorator's own line span (the lookahead window
+    below is the same one already used to find the `def` line, so both
+    checks see the same text) - see EXPECT_FAILURE_RE's own comment for why."""
     tags: dict[str, set[str]] = {}
     if not py_dir.is_dir():
         return tags
@@ -43,10 +60,12 @@ def scan_requirement_tags(py_dir: Path) -> dict[str, set[str]]:
                 pending = set(m.group(1).split())
                 continue
             if COCOTB_TEST_RE.match(line):
-                for look in lines[i:i + 4]:
+                window = lines[i:i + 4]
+                expects_failure = any(EXPECT_FAILURE_RE.search(w) for w in window)
+                for look in window:
                     dm = DEF_RE.match(look)
                     if dm:
-                        if pending:
+                        if pending and not expects_failure:
                             tags.setdefault(dm.group(1), set()).update(pending)
                         break
                 pending = None
@@ -97,21 +116,39 @@ def run_cocotb(build_dir: Path, test_dir: Path, sources: list[Path],
 
 
 def parse_results_xml(xml_path: Path) -> dict[str, dict]:
-    """{test_function_name: {"passed": bool, "message": str|None}} from a
-    JUnit-shaped results.xml (cocotb_tools.runner's own output format -
-    <testcase name="module.function"> with a <failure>/<error> child on
-    failure). Only the function part of `name` is kept, matching
-    scan_requirement_tags's keys."""
+    """{test_function_name: {"passed": bool, "skipped": bool, "message":
+    str|None}} from a JUnit-shaped results.xml (cocotb_tools.runner's own
+    output format - <testcase name="module.function"> with a
+    <failure>/<error>/<skipped> child). Only the function part of `name` is
+    kept, matching scan_requirement_tags's keys.
+
+    A <skipped> testcase (cocotb.test(skip=True)) has neither <failure> nor
+    <error>, so it used to fall through as "passed" here - a test that never
+    ran would count as covering whatever requirement it was tagged with.
+    Reported as passed=False, skipped=True instead; callers (check_sim.py,
+    check_holdout.py) turn that into a `test_skipped` finding rather than
+    `test_failed`/`holdout_failed`, since it never actually exercised
+    anything."""
     out: dict[str, dict] = {}
     tree = ET.parse(xml_path)
     for tc in tree.iter("testcase"):
         name = tc.attrib.get("name", "")
         short = name.rsplit(".", 1)[-1]
+        skip = tc.find("skipped")
+        if skip is not None:
+            out[short] = {
+                "passed": False,
+                "skipped": True,
+                "message": (skip.attrib.get("message")
+                           or (skip.text or "").strip() or None),
+            }
+            continue
         bad = tc.find("failure")
         if bad is None:
             bad = tc.find("error")
         out[short] = {
             "passed": bad is None,
+            "skipped": False,
             "message": (bad.attrib.get("message") or (bad.text or "").strip()
                        if bad is not None else None),
         }

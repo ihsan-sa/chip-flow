@@ -88,6 +88,12 @@ def run(argv=None):
             continue
         if res["passed"]:
             continue
+        if res.get("skipped"):
+            violations.append(checklib.violation(
+                "holdout", "error", None, None, "test_skipped", refs,
+                f"a held-out test for requirement(s) {', '.join(refs)} was "
+                "skipped - it never ran, so it cannot cover them", "cocotb"))
+            continue
         violations.append(checklib.violation(
             "holdout", "error", None, None, "holdout_failed", refs,
             f"a held-out test for requirement(s) {', '.join(refs)} failed",

@@ -66,6 +66,36 @@ async def test_wraps_at_3(dut):
 """
 
 
+# cocotb.test(skip=True): a <skipped> testcase in results.xml.
+TB_SKIPPED = """\
+import cocotb
+from cocotb.clock import Clock
+from cocotb.triggers import RisingEdge
+
+# req: REQ-WRAP
+@cocotb.test(skip=True)
+async def test_wraps_at_3(dut):
+    cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
+    assert False, "must never run"
+"""
+
+# cocotb.test(expect_fail=True): the test body fails on purpose, and cocotb
+# itself scores that a PASS (cocotb/regression.py _record_test_xfail,
+# results.xml written with no <failure>/<error>/<skipped> child at all by
+# default - indistinguishable from a real pass there).
+TB_EXPECT_FAIL = """\
+import cocotb
+from cocotb.clock import Clock
+from cocotb.triggers import RisingEdge
+
+# req: REQ-WRAP
+@cocotb.test(expect_fail=True)
+async def test_wraps_at_3(dut):
+    cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
+    assert False, "deliberately fails - expect_fail turns this into a PASS"
+"""
+
+
 def make_ws(tmp_path: Path, rtl_text: str, spec_text: str, tb_text: str) -> Path:
     ws = tmp_path / "ws"
     (ws / "rtl").mkdir(parents=True)
@@ -115,3 +145,30 @@ def test_no_tb_modules_is_an_error(tmp_path, capsys):
     out = json.loads(capsys.readouterr().out)
     assert code == 2
     assert "no test_*.py modules" in out["remediation"]
+
+
+def test_skipped_test_is_not_passed_and_does_not_cover_its_requirement(
+        tmp_path, capsys):
+    ws = make_ws(tmp_path, RTL_GOOD, SPEC_ONE_REQ, TB_SKIPPED)
+    code = check_sim.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 1, out
+    assert out["tests_passed"] == 0
+    v = next(v for v in out["violations"] if v["kind"] == "test_skipped")
+    assert v["refs"] == ["REQ-WRAP"]
+    # a skipped test must not ALSO count as missing coverage twice over -
+    # its own finding is test_skipped, not requirement_no_test.
+    kinds = {v["kind"] for v in out["violations"]}
+    assert "requirement_no_test" not in kinds
+
+
+def test_expect_fail_test_cannot_cover_a_requirement_silently(tmp_path, capsys):
+    ws = make_ws(tmp_path, RTL_GOOD, SPEC_ONE_REQ, TB_EXPECT_FAIL)
+    code = check_sim.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 1, out
+    # cocotb itself scores the expect_fail test a pass...
+    assert out["tests_passed"] == 1
+    # ...but that must never silently satisfy the requirement's coverage.
+    v = next(v for v in out["violations"] if v["kind"] == "requirement_no_test")
+    assert v["refs"] == ["REQ-WRAP"]
