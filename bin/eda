@@ -1,0 +1,511 @@
+#!/usr/bin/env bash
+# eda -- run a tool from an unpacked IIC-OSIC-TOOLS image tree, unprivileged,
+# no docker, no root, no nested user namespaces.
+#
+#   eda <tool> [args...]
+#
+# APPROACH (generated shim directory + env overrides; no shebang rewriting
+# into a persistent cache -- everything below is rebuilt fresh, per run,
+# under mktemp, so more than one $EDA_TOOLCHAIN version can be in flight on
+# the same box with nothing stale left behind):
+#
+#  * Every real binary under the tree is an Ubuntu 24.04 ELF built against
+#    glibc 2.39. This host's own /lib64/ld-linux-x86-64.so.2 is glibc 2.43,
+#    and the two do not mix: a plain `execve()` of an image binary dies with
+#    "symbol lookup error ... GLIBC_PRIVATE" the moment it touches an image
+#    .so alongside a host-loaded libc. So *every* exec of an image ELF -
+#    ours, or one a tool spawns on its own - goes through the image's own
+#    loader, `$T/lib64/ld-linux-x86-64.so.2 --library-path ...`, never the
+#    kernel's default PT_INTERP resolution.
+#
+#  * That fixes direct invocation. The hard part named in the brief - a tool
+#    that execs another by *name* - is fixed by a generated shim directory
+#    placed first on PATH for the lifetime of the run: each entry is a tiny
+#    wrapper script with the tool's bare name that re-execs the real binary
+#    through the loader above. A wrapper is a *script* (not a copy of the
+#    ELF), so this needs no patchelf and never touches the read-only tree.
+#
+#  * GCC's cc1/cc1plus/collect2/as/ld are not found via PATH at all - gcc's
+#    own driver resolves them itself, relative to its own invoked path, and
+#    only respects an externally supplied `-B<dir>` for redirecting that
+#    (COMPILER_PATH was tried and does not move cc1plus's resolution; -B
+#    does, empirically, and first). So the gcc/g++ wrappers in the shim dir
+#    inject `-B$SHIM`, and the shim dir also holds wrapped copies of those
+#    four names, again as loader-wrapping scripts. This is what makes g++ ->
+#    cc1plus -> as -> ld work for Verilator's --binary C++ build.
+#
+#  * Verilator's own `verilator` front end is a Perl script that locates its
+#    sibling `verilator_bin` and `share/verilator` by the *directory of its
+#    own invoked path* (Perl FindBin, realpath-resolved) - a bare PATH shim
+#    cannot redirect that, because the script would still compute the real,
+#    read-only tree as its root. So it gets a small *mirror* instead: the
+#    Perl script is copied byte for byte into a shim subdirectory (a copy,
+#    not a symlink, so FindBin's realpath lands on our directory and not the
+#    original), `verilator_bin`/`verilator_bin_dbg` become loader-wrapping
+#    scripts alongside it, and `share`/`include` are whole-directory symlinks
+#    back to the real tree (their contents need no fixing, only their path).
+#
+#  * magic and netgen ship a thin bash "wish replacement" wrapper whose
+#    fallback TCL_MAG_DIR is a literal `/foss/tools/...` string, and whose
+#    startup Tcl (magic.tcl / netgen.tcl) does `load /foss/tools/.../tcl*.so`
+#    with the same literal prefix baked in. Rather than run those wrappers,
+#    `eda` talks to the Tcl extension directly: it feeds the batch binary
+#    (magicdnull / netgenexec) a small stdin script that does the one `load`
+#    the wrapper would have done, with the prefix rewritten to $T, and then
+#    calls the tool's own namespaced commands. This sidesteps the wrapper
+#    entirely rather than patching it.
+#
+#  * Every script under usr/local/bin (librelane, sby's neighbours, etc.) is
+#    a pip/uv console-script with an *absolute* `#!/usr/bin/python3` shebang
+#    - literally the case named in the brief. The host has its own
+#    /usr/bin/python3 with none of these packages installed, so the shebang
+#    is bypassed outright: `eda` hands the script path to the image's own
+#    python3.12 directly (`$LD ... python3.12 <script> "$@"`), never lets
+#    the kernel read the shebang line. Scripts that instead say
+#    `#!/usr/bin/env python3` do not need this - `env` does its own PATH
+#    search, and the shim dir's own `python3` entry is what it finds.
+#
+#  * One consequence of "every exec goes through the image loader": a tool
+#    is never itself execve()'d (ld.so is, and loads the tool without a
+#    further execve), so /proc/self/exe keeps pointing at ld.so, not the
+#    tool. Most of the tree doesn't care, but yosys calls
+#    readlink("/proc/self/exe") itself to find its share/ directory, and
+#    fails outright without it. Fixed with a small LD_PRELOAD shim
+#    (fakeexe_so, below) that intercepts exactly that one readlink() and
+#    answers with the tool's real path - source-built with the image's own
+#    gcc at run time rather than vendoring a prebuilt patchelf (the more
+#    conventional fix, and the one that was tried first) into the repo.
+#
+# $EDA_TOOLCHAIN picks the image tree; defaults to the one this box has at
+# the path below. A second version can be used at any time by pointing a
+# different invocation at it - nothing here is tied to one tree.
+
+set -euo pipefail
+
+T="${EDA_TOOLCHAIN:-$HOME/.cc/toolchains/iic-osic-tools-2026.09}"
+if [ ! -d "$T" ]; then
+  echo "eda: no toolchain tree at '$T' (set EDA_TOOLCHAIN)" >&2
+  exit 1
+fi
+
+GCC_VER=13
+LD="$T/lib64/ld-linux-x86-64.so.2"
+BASE_LIBPATH="$T/lib/x86_64-linux-gnu:$T/usr/lib/x86_64-linux-gnu:$T/usr/lib/gcc/x86_64-linux-gnu/$GCC_VER:$T/usr/lib:$T/opt/or-tools/lib"
+PYBIN="$T/usr/bin/python3.12"
+PY_SITE="$T/usr/local/lib/python3.12/dist-packages"
+PY_HOME="$T/usr"
+# Exported globally, not just for run_py/wrap_py: several tools (yosys among
+# them) link libpython and call Py_Initialize() themselves, unconditionally,
+# whether or not the run actually touches a Python feature. Without
+# PYTHONHOME, CPython's own fallback landmark search walks $PATH looking for
+# a program named "python3" to derive its prefix from -- and since this
+# launcher puts one there (for sby/yosys-smtbmc's `#!/usr/bin/env python3`),
+# that search finds *our wrapper script*, not the real interpreter, and
+# resolves the stdlib to nothing. Setting PYTHONHOME once, up front, is what
+# makes an embedded interpreter agree with a spawned one.
+export PYTHONHOME="$PY_HOME"
+
+if [ $# -lt 1 ]; then
+  echo "usage: eda <tool> [args...]" >&2
+  exit 1
+fi
+TOOL="$1"; shift
+
+SHIM="$(mktemp -d "${TMPDIR:-/tmp}/eda-shim.XXXXXX")"
+trap 'rm -rf "$SHIM"' EXIT
+
+# fakeexe_so -- compile (once per run, into $SHIM) a tiny LD_PRELOAD shared
+# object and print its path. Running a target as `ld.so --library-path X
+# target` (mandatory here -- see the header) never calls execve() on target
+# itself, so the kernel never updates /proc/self/exe past ld.so's own path.
+# Most of the tree doesn't care (magic/netgen/openroad key off env vars;
+# $ORIGIN-relative RPATH is resolved by the dynamic linker's own bookkeeping,
+# not /proc/self/exe) but yosys calls readlink("/proc/self/exe") itself to
+# find its share/ directory, and fails outright without it. The preload
+# below intercepts exactly that one readlink() and answers with whatever
+# EDA_FAKE_SELF_EXE says, source-built with the image's own gcc rather than
+# vendoring a prebuilt patchelf or similar into the repo.
+FAKEEXE_SO=""
+fakeexe_so() {
+  [ -n "$FAKEEXE_SO" ] && { echo "$FAKEEXE_SO"; return; }
+  local src="$SHIM/.fakeexe.c" so="$SHIM/.fakeexe.so"
+  cat > "$src" <<'EOF'
+#define _GNU_SOURCE
+#include <unistd.h>
+#include <string.h>
+#include <stdlib.h>
+#include <dlfcn.h>
+ssize_t readlink(const char *path, char *buf, size_t bufsiz) {
+    static ssize_t (*real_readlink)(const char *, char *, size_t) = 0;
+    if (!real_readlink)
+        real_readlink = (ssize_t (*)(const char *, char *, size_t))dlsym(RTLD_NEXT, "readlink");
+    if (path && strcmp(path, "/proc/self/exe") == 0) {
+        const char *fake = getenv("EDA_FAKE_SELF_EXE");
+        if (fake) {
+            size_t len = strlen(fake);
+            if (len > bufsiz) len = bufsiz;
+            memcpy(buf, fake, len);
+            return (ssize_t)len;
+        }
+    }
+    return real_readlink(path, buf, bufsiz);
+}
+EOF
+  "$LD" --library-path "$BASE_LIBPATH" "$T/usr/bin/gcc-$GCC_VER" \
+    -shared -fPIC -o "$so" "$src" -ldl >&2
+  FAKEEXE_SO="$so"
+  echo "$so"
+}
+
+# run_elf <real-absolute-path> [args...] -- exec an image ELF through the
+# image's own loader, library path widened with the binary's own directory
+# (several tools, e.g. klayout, keep their .so files next to the binary
+# with an absolute, non-$ORIGIN RUNPATH that only resolves inside a real
+# container -- adding dirname(bin) here covers that without needing a
+# per-tool special case), with EDA_FAKE_SELF_EXE/LD_PRELOAD set so a tool
+# that reads its own path via /proc/self/exe (see fakeexe_so above) sees the
+# real one instead of ld.so's.
+run_elf() {
+  local bin="$1"; shift
+  EDA_FAKE_SELF_EXE="$bin" LD_PRELOAD="$(fakeexe_so)" \
+    exec "$LD" --library-path "$BASE_LIBPATH:$(dirname "$bin")" "$bin" "$@"
+}
+
+# run_py <script-path> [args...] -- bypass the script's own shebang (usually
+# an absolute, host-wrong `#!/usr/bin/python3`) and hand it to the image's
+# python3.12 directly, through the loader, with the image's site-packages
+# on PYTHONPATH.
+run_py() {
+  local script="$1"; shift
+  PYTHONPATH="${PYTHONPATH:-}${PYTHONPATH:+:}$PY_SITE" \
+    exec "$LD" --library-path "$BASE_LIBPATH" "$PYBIN" "$script" "$@"
+}
+
+# wrap_at <dest-script-path> <real-absolute-path> -- write a loader-wrapping
+# shell script at an exact path (used both for $SHIM/<name> and for the
+# per-tool mirrors, e.g. verilator's). Carries the same /proc/self/exe fix
+# as run_elf -- this is how it reaches something spawned by *name* rather
+# than by eda's own top-level dispatch (e.g. yosys-abc, spawned by yosys).
+wrap_at() {
+  local dest="$1" real="$2" so
+  so="$(fakeexe_so)"
+  mkdir -p "$(dirname "$dest")"
+  cat > "$dest" <<EOF
+#!/bin/sh
+export EDA_FAKE_SELF_EXE="$real"
+export LD_PRELOAD="$so"
+exec "$LD" --library-path "$BASE_LIBPATH:$(dirname "$real")" "$real" "\$@"
+EOF
+  chmod +x "$dest"
+}
+
+# wrap <name> <real-absolute-path> -- same, at $SHIM/<name>, for anything
+# reached by a bare PATH lookup (a tool spawning another tool by name).
+wrap() {
+  wrap_at "$SHIM/$1" "$2"
+}
+
+# wrap_iverilog_vvp -- shim both, the way the top-level iverilog/vvp cases
+# do (see the comment there for why they need -B/-M and the extra lib dir).
+# Needed wherever something else spawns them by name instead of eda being
+# asked for them directly -- cocotb's runner does exactly that.
+wrap_iverilog_vvp() {
+  local so
+  so="$(fakeexe_so)"
+  cat > "$SHIM/iverilog" <<EOF
+#!/bin/sh
+export EDA_FAKE_SELF_EXE="$T/foss/tools/iverilog/bin/iverilog"
+export LD_PRELOAD="$so"
+exec "$LD" --library-path "$BASE_LIBPATH:$T/foss/tools/iverilog/lib" \\
+  "$T/foss/tools/iverilog/bin/iverilog" -B"$T/foss/tools/iverilog/lib/ivl" "\$@"
+EOF
+  chmod +x "$SHIM/iverilog"
+  cat > "$SHIM/vvp" <<EOF
+#!/bin/sh
+export EDA_FAKE_SELF_EXE="$T/foss/tools/iverilog/bin/vvp"
+export LD_PRELOAD="$so"
+exec "$LD" --library-path "$BASE_LIBPATH:$T/foss/tools/iverilog/lib" \\
+  "$T/foss/tools/iverilog/bin/vvp" -M"$T/foss/tools/iverilog/lib/ivl" "\$@"
+EOF
+  chmod +x "$SHIM/vvp"
+}
+
+# wrap_py_at <dest-script-path> <real-script-path> -- a usr/local/bin style
+# python console-script, reached by name, with the same shebang problem
+# run_py solves for the top-level case.
+wrap_py_at() {
+  local dest="$1" real="$2"
+  mkdir -p "$(dirname "$dest")"
+  cat > "$dest" <<EOF
+#!/bin/sh
+export PYTHONPATH="$PY_SITE\${PYTHONPATH:+:\$PYTHONPATH}"
+export PYTHONHOME="$PY_HOME"
+exec "$LD" --library-path "$BASE_LIBPATH" "$PYBIN" "$real" "\$@"
+EOF
+  chmod +x "$dest"
+}
+wrap_py() {
+  wrap_py_at "$SHIM/$1" "$2"
+}
+
+# gcc_shims -- populate $SHIM with the four gcc subprograms plus binutils,
+# and with gcc/g++ wrappers that inject -B$SHIM so gcc's own (PATH-blind)
+# subprogram search lands on the wrapped copies. See header comment.
+gcc_shims() {
+  local gdir="$T/usr/libexec/gcc/x86_64-linux-gnu/$GCC_VER"
+  local n
+  for n in cc1 cc1plus lto1 collect2; do
+    [ -e "$gdir/$n" ] && wrap "$n" "$gdir/$n"
+  done
+  for n in as ld ld.bfd ld.gold ld.mold mold ar nm ranlib strip objcopy ccache make; do
+    [ -e "$T/usr/bin/$n" ] && wrap "$n" "$T/usr/bin/$n"
+  done
+  for n in gcc g++ cc c++ "gcc-$GCC_VER" "g++-$GCC_VER" cpp "cpp-$GCC_VER"; do
+    local real="$T/usr/bin/$n"
+    [ -e "$real" ] || continue
+    cat > "$SHIM/$n" <<EOF
+#!/bin/sh
+exec "$LD" --library-path "$BASE_LIBPATH:$(dirname "$real")" "$real" -B"$SHIM" "\$@"
+EOF
+    chmod +x "$SHIM/$n"
+  done
+}
+
+# verilator_entry -- build the bin/share mirror described in the header and
+# print the path of the copied `verilator` driver script to exec.
+verilator_entry() {
+  local vroot="$SHIM/.verilator-root"
+  mkdir -p "$vroot/bin"
+  cp "$T/foss/tools/verilator/bin/verilator" "$vroot/bin/verilator"
+  chmod +x "$vroot/bin/verilator"
+  wrap_at "$vroot/bin/verilator_bin" "$T/foss/tools/verilator/bin/verilator_bin"
+  wrap_at "$vroot/bin/verilator_bin_dbg" "$T/foss/tools/verilator/bin/verilator_bin_dbg"
+  ln -sfn "$T/foss/tools/verilator/share" "$vroot/share"
+  [ -d "$T/foss/tools/verilator/include" ] && ln -sfn "$T/foss/tools/verilator/include" "$vroot/include"
+  echo "$vroot/bin/verilator"
+}
+
+# netgen_script <extra-tcl-commands-file-or-inline> -- write the stdin script
+# that loads netgen's Tcl extension the way netgen.tcl would (its one
+# /foss-prefixed `load` line, rewritten to $T) and defines the "lvs" etc.
+# convenience procs, without running netgen.tcl's own wrapper/argv handling.
+netgen_tcl_shim() {
+  local patched="$SHIM/netgen.tcl"
+  sed "s#/foss/#$T/foss/#g" "$T/foss/tools/netgen/lib/netgen/tcl/netgen.tcl" > "$patched"
+  echo "$patched"
+}
+
+# magic_bootstrap -- print the stdin preamble that loads magic's Tcl
+# extension directly (see header). This gets magic::* commands registered
+# and PDK_ROOT-based tech switching available; the one piece it does *not*
+# solve is this image shipping no default/minimum technology for magic's own
+# mandatory first-technology bootstrap (see check.sh's magic case, which
+# reports this honestly rather than pretending it works).
+magic_tcl_load_line() {
+  echo "load $T/foss/tools/magic/lib/magic/tcl/tclmagic.so"
+}
+
+# $SHIM is on PATH, and a "python3" shim is always there, for every case
+# below -- not just the ones that obviously touch Python. PYTHONHOME is
+# exported globally (see above) so that yosys's *embedded* interpreter
+# resolves correctly; the flip side is that anything which spawns a plain
+# "python3" subprocess (verilator's own build spawns one for a codegen
+# step) MUST find our wrapper and not the host's python3, because the host
+# interpreter, handed the image's PYTHONHOME, cannot find its own stdlib
+# either. Keeping this in one place beats re-adding it per case and missing
+# one.
+wrap python3 "$PYBIN"
+export PATH="$SHIM:$PATH"
+
+case "$TOOL" in
+  # ---- digital sim / lint -------------------------------------------------
+  # iverilog/vvp both have a *compiled-in* absolute /foss/tools/iverilog/lib
+  # module-search prefix (not argv0-relative like most of the tree, and not
+  # exposed as an env var) -- iverilog takes it as -B<dir>, vvp as -M<dir>;
+  # vvp also needs iverilog's lib/ dir on the library path for libvvp.so.1,
+  # which lives there rather than under the usual lib/x86_64-linux-gnu.
+  iverilog|vvp)
+    wrap_iverilog_vvp
+    exec "$SHIM/$TOOL" "$@"
+    ;;
+
+  iverilog-vpi|ghdl|verible*|slang|nvc)
+    real="$T/foss/tools/${TOOL%%-*}/bin/$TOOL"
+    [ -e "$real" ] || real="$T/foss/tools/iverilog/bin/$TOOL"
+    run_elf "$real" "$@"
+    ;;
+
+  verilator|verilator_coverage|verilator_gantt)
+    gcc_shims
+    entry="$(verilator_entry)"
+    entry_dir="$(dirname "$entry")"
+    export PATH="$SHIM:$entry_dir:$PATH"
+    export VERILATOR_ROOT="$T/foss/tools/verilator/share/verilator"
+    exec "$entry" "$@"
+    ;;
+
+  # ---- synthesis / formal --------------------------------------------------
+  yosys)
+    wrap yosys-abc "$T/foss/tools/yosys/bin/yosys-abc"
+    export PATH="$SHIM:$PATH"
+    run_elf "$T/foss/tools/yosys/bin/yosys" "$@"
+    ;;
+
+  # sby and yosys-smtbmc are `#!/usr/bin/env python3` scripts (no absolute-
+  # shebang problem), so they're run from their real location, left to find
+  # "python3" via PATH like they would in the real container -- only the
+  # things *they* spawn by name need shimming: yosys and its solvers (yices
+  # is the one solver this image actually ships; smtbmc's own --solver
+  # default already happens to be yices).
+  sby|yosys-smtbmc|yosys-config|yosys-filterlib|yosys-witness)
+    wrap yosys "$T/foss/tools/yosys/bin/yosys"
+    wrap yosys-abc "$T/foss/tools/yosys/bin/yosys-abc"
+    # yices' binaries are real files directly under foss/tools/bin (not a
+    # per-tool bin/ subdirectory, and not the dead symlinks most of that
+    # directory is made of).
+    for s in yices yices-sat yices-smt yices-smt2; do
+      real="$T/foss/tools/bin/$s"
+      [ -e "$real" ] && [ ! -L "$real" ] && wrap "$s" "$real"
+    done
+    export PATH="$SHIM:$T/foss/tools/yosys/bin:$PATH"
+    export PYTHONPATH="$PY_SITE${PYTHONPATH:+:$PYTHONPATH}"
+    exec "$T/foss/tools/yosys/bin/$TOOL" "$@"
+    ;;
+
+  # ---- cocotb / python -----------------------------------------------------
+  python3|python)
+    wrap_iverilog_vvp
+    run_py "$@"
+    ;;
+
+  # ---- analog --------------------------------------------------------------
+  ngspice|ngspice_con)
+    run_elf "$T/foss/tools/ngspice/bin/ngspice" "$@"
+    ;;
+
+  # ---- layout / DRC / LVS ---------------------------------------------------
+  klayout)
+    # klayout's Qt Network/Multimedia modules pull in two plugin .so's kept
+    # outside the usual lib dir (a proxy backend, a pulseaudio backend);
+    # neither is used headless, but both are hard NEEDED entries. Batch mode
+    # (-b) matters too: without it klayout tries to open a GUI/X11 session
+    # and this box has none to open, so it just hangs. klayout's *embedded*
+    # Ruby (used by every .drc/.lydrc deck, including gf180mcu's) needs its
+    # own stdlib pointed at explicitly too -- without RUBYLIB even klayout's
+    # own built-in DRC engine macro fails to `require 'pathname'` and DRC
+    # decks die with a half-constructed DRCEngine object.
+    export RUBYLIB="$T/usr/lib/ruby/3.2.0:$T/usr/lib/x86_64-linux-gnu/ruby/3.2.0"
+    EDA_FAKE_SELF_EXE="$T/foss/tools/klayout/klayout" LD_PRELOAD="$(fakeexe_so)" \
+    exec "$LD" --library-path "$BASE_LIBPATH:$T/foss/tools/klayout:$T/usr/lib/x86_64-linux-gnu/libproxy:$T/usr/lib/x86_64-linux-gnu/pulseaudio" \
+      "$T/foss/tools/klayout/klayout" "$@"
+    ;;
+
+  magic)
+    cadroot="$SHIM/.cadroot"
+    mkdir -p "$cadroot/magic"
+    ln -sfn "$T/foss/tools/magic/lib/magic/tcl" "$cadroot/magic/tcl"
+    export CAD_ROOT="$cadroot"
+    export TCL_LIBRARY="$T/usr/share/tcltk/tcl8.6"
+    export TCL_MAG_DIR="$T/foss/tools/magic/lib/magic/tcl"
+    export PDK_ROOT="${PDK_ROOT:-$T/foss/pdks}"
+    {
+      magic_tcl_load_line
+      echo 'if {[catch {magic::initialize -noconsole -nowindow} initerr]} {'
+      # shellcheck disable=SC2016  # this is Tcl source, not bash -- $initerr
+      # is meant to expand when Tcl reads it, not now.
+      echo '  puts stderr "eda: magic bootstrap failed: $initerr"'
+      echo '  exit 1'
+      echo '}'
+      cat
+    } | run_elf "$T/foss/tools/magic/lib/magic/tcl/magicdnull" -nowrapper -dnull -noconsole "$@"
+    ;;
+
+  netgen)
+    export TCL_LIBRARY="$T/usr/share/tcltk/tcl8.6"
+    export PDK_ROOT="${PDK_ROOT:-$T/foss/pdks}"
+    patched="$(netgen_tcl_shim)"
+    if [ "${1:-}" = "-batch" ]; then
+      shift
+      { echo "source $patched"; echo "$*"; echo "::netgen::quit"; } \
+        | run_elf "$T/foss/tools/netgen/lib/netgen/tcl/netgenexec" --
+    else
+      { echo "source $patched"; cat; } \
+        | run_elf "$T/foss/tools/netgen/lib/netgen/tcl/netgenexec" -- "$@"
+    fi
+    ;;
+
+  # ---- timing / place-and-route ---------------------------------------------
+  openroad|sta)
+    export TCL_LIBRARY="$T/usr/share/tcltk/tcl8.6"
+    run_elf "$T/foss/tools/openroad/bin/$TOOL" "$@"
+    ;;
+
+  librelane)
+    # Best effort: LibreLane's default flow drives yosys, verilator (lint),
+    # openroad/sta, klayout and (magic or netgen for DRC/LVS) all by bare
+    # name. The first three are shimmed the same way their own top-level
+    # `eda` cases are; magic is wrapped too even though it will fail for
+    # the reason documented at the magic case below -- that failure should
+    # surface as one failed LibreLane step, not silently skip DRC.
+    gcc_shims
+    wrap yosys "$T/foss/tools/yosys/bin/yosys"
+    wrap yosys-abc "$T/foss/tools/yosys/bin/yosys-abc"
+    entry="$(verilator_entry)"
+    entry_dir="$(dirname "$entry")"
+    wrap magic "$T/foss/tools/magic/bin/magic" # best effort, see magic case
+    wrap klayout "$T/foss/tools/klayout/klayout"
+    wrap openroad "$T/foss/tools/openroad-librelane/bin/openroad"
+    wrap sta "$T/foss/tools/openroad-librelane/bin/sta"
+    export PATH="$SHIM:$entry_dir:$T/foss/tools/openroad-librelane/bin:$PATH"
+    export VERILATOR_ROOT="$T/foss/tools/verilator/share/verilator"
+    export TOOLS="$T/foss/tools"
+    export PDK_ROOT="${PDK_ROOT:-$T/foss/pdks}"
+    export TCL_LIBRARY="$T/usr/share/tcltk/tcl8.6"
+    export RUBYLIB="$T/usr/lib/ruby/3.2.0:$T/usr/lib/x86_64-linux-gnu/ruby/3.2.0"
+    run_py "$T/usr/local/bin/librelane" --manual-pdk "$@"
+    ;;
+
+  # ---- generic fallback ------------------------------------------------------
+  *)
+    real=""
+    for cand in \
+      "$T/foss/tools/$TOOL/bin/$TOOL" \
+      "$T/foss/tools/$TOOL/$TOOL" \
+      "$T/foss/tools/bin/$TOOL" \
+      "$T/usr/local/bin/$TOOL" \
+      "$T/usr/bin/$TOOL"
+    do
+      if [ -e "$cand" ] && [ ! -L "$cand" ]; then real="$cand"; break; fi
+      if [ -L "$cand" ]; then
+        tgt="$(readlink -f "$cand" 2>/dev/null || true)"
+        # a symlink inside the tree resolving to /foss/... is one of the
+        # image's own (broken-on-host) absolute symlinks; re-root it at $T.
+        case "$tgt" in
+          /foss/*) real="$T$tgt" ;;
+          "$T"/*) real="$tgt" ;;
+        esac
+        [ -n "$real" ] && [ -e "$real" ] && break
+        real=""
+      fi
+    done
+    if [ -z "$real" ]; then
+      echo "eda: don't know how to run '$TOOL' (not found under $T)" >&2
+      exit 1
+    fi
+    first2="$(head -c2 "$real" 2>/dev/null || true)"
+    if [ "$first2" = "#!" ]; then
+      shebang="$(head -n1 "$real")"
+      case "$shebang" in
+        *python3*|*python*)
+          run_py "$real" "$@"
+          ;;
+        *)
+          export PATH="$SHIM:$PATH"
+          exec "$real" "$@"
+          ;;
+      esac
+    else
+      run_elf "$real" "$@"
+    fi
+    ;;
+esac
