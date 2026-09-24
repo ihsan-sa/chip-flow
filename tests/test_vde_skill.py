@@ -175,6 +175,22 @@ def test_full_run_is_overridden_not_the_engine_placeholder():
     assert "reviewer" in agents
 
 
+def test_full_run_never_forces_past_p6_signoff_gates():
+    """set-phase --force skips gate_coverage's own check that every gate
+    owed before the target phase has a recorded result - using it to reach
+    P8 would waive every P6 signoff gate (harden/timing/drc/lvs/glsim/
+    precheck) with no recorded reason or approval. full-run must reach P8
+    through P7 (which owes no gate of its own) with plain set-phase calls
+    only."""
+    tasks = tr.load_tasks("vde")
+    steps = tasks["verbs"]["full-run"]["steps"]
+    do_cmds = [s["do"] for s in steps if "do" in s]
+    set_phase_cmds = [c for c in do_cmds if "set-phase" in c]
+    assert not any("--force" in c for c in set_phase_cmds), set_phase_cmds
+    assert any(c.endswith("--phase P7") for c in set_phase_cmds)
+    assert any(c.endswith("--phase P8") for c in set_phase_cmds)
+
+
 def test_full_run_plans_p1_through_h2_in_gate_phase_order():
     ws = ws_empty  # noqa: F841 - not used; full-run creates its own workspace
     tasks = tr.load_tasks("vde")

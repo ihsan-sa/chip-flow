@@ -167,11 +167,16 @@ verbs:
         why: "tt-support-tools precheck (real once M4 lands)"
       - note: "P7 optimise is optional and not part of a default full-run -
                invoke the `optimise` verb directly when wanted."
-      - do: "scripts/state.py set-phase --workspace {ws} --phase P8 --force"
-        why: "P7 is skipped by design (optional) - --force is the
-              documented escape hatch for advancing past an unentered
-              optional phase; it logs phase_forced with nothing actually
-              owed there since P7 has no gate of its own"
+      - do: "scripts/state.py set-phase --workspace {ws} --phase P7"
+        why: "P7 is skipped by design (optional, no gate of its own) - NO
+              --force: advancing past P6 still requires every P6 gate
+              (harden/timing/drc/lvs/glsim/precheck) to already have a
+              recorded result. --force is never a substitute for that; a
+              gap here is a refusal to fix, never a phase jump to paper
+              over it."
+      - do: "scripts/state.py set-phase --workspace {ws} --phase P8"
+        why: "P7 owes no gate of its own, so this advances cleanly once P6
+              is actually covered - never forced"
       - gate: release
         why: "strict - refuses rather than pass on any gap; cannot pass
               until harden onward are real (M4)"
