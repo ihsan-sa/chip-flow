@@ -419,8 +419,12 @@ def resume_view(ctx: dict) -> dict | None:
         "gates_stale": fresh["summary"]["stale"],
         "gates_freshness_unknown": fresh["summary"]["unknown"],
         "human_hold_pending": fresh["summary"]["human_hold_pending"],
+        # "escalated" counts as unresolved too (M5, found running the fix
+        # loop for real; same fix as state.py's own resume_summary and
+        # attest.py's build()) - a `no_open_issues` precondition must not
+        # wave a human-decision-pending issue through as if it were closed.
         "open_issues": [i["id"] for i in data.get("open_issues", [])
-                        if i.get("status") in ("open", "fixing")],
+                        if i.get("status") in ("open", "fixing", "escalated")],
     }
 
 

@@ -247,8 +247,13 @@ def build(ws: Path, max_report_age_h: float = 24.0) -> tuple[dict | None, list[s
             continue
         problems.append(f"{c['gate']}: {c['reason']}")
         problems.extend(c.get("waiver_problems") or [])
+    # "escalated" (M5, found running the fix loop for real) is NOT
+    # resolved - it is the fix loop's own outcome for a finding a human
+    # has to decide on, and release refusing to notice one would be
+    # exactly the silent-failure class docs/design.md section 2 exists to
+    # answer. Only "fixed"/"waived" are genuinely closed.
     open_issues = [i for i in data.get("open_issues", [])
-                   if i.get("status") in ("open", "fixing")]
+                   if i.get("status") in ("open", "fixing", "escalated")]
     if open_issues:
         problems.append(f"{len(open_issues)} open issue(s) unresolved")
     if problems:
