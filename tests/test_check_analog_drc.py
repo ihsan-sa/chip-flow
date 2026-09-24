@@ -45,7 +45,8 @@ def make_ws(tmp_path: Path, block: str) -> Path:
             for f in src.iterdir():
                 if f.is_file() and f.suffix != ".gds":
                     shutil.copy2(f, ws / sub / f.name)
-    shutil.copy2(CORPUS / block / "spec.yaml", ws / "spec.yaml")
+    (ws / "spec").mkdir()
+    shutil.copy2(CORPUS / block / "spec.yaml", ws / "spec" / "spec.yaml")
     ws.joinpath("state.json").write_text(
         json.dumps({"version": 3, "skill": "ade", "block": block}),
         encoding="utf-8")

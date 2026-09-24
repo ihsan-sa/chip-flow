@@ -12,9 +12,9 @@ GDS), extracts it with magic, then runs netgen under the PDK's own setup
 
 The schematic is M8's own netlist: `netlist/<block>.cir`, or
 `netlist/<block>.spice`. There is no fallback. A workspace without one is a
-refusal, not an empty pass. The cell compared is spec.yaml's `top` (M8's
-subckt name, `current_mirror` for the mirror), or the block name when the
-spec has none.
+refusal, not an empty pass. The cell compared is spec/spec.yaml's `top`
+(M8's subckt name, `current_mirror` for the mirror), or the block name
+when the spec has none.
 
 When the block has sizing/sizing.yaml, the subckt's own parameter defaults
 are replaced by the sizing values in a copy under log/lvs/ before netgen
@@ -60,7 +60,7 @@ def find_reference_netlist(ws: Path, block: str) -> Path:
 
 def reference_cell(ws: Path, block: str, ref_text: str) -> str:
     cell = block
-    spec = ws / "spec.yaml"
+    spec = ws / "spec" / "spec.yaml"
     if spec.is_file():
         import yaml
         data = yaml.safe_load(spec.read_text(encoding="utf-8")) or {}

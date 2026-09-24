@@ -44,7 +44,8 @@ def make_ws(tmp_path: Path, block: str) -> Path:
             for f in src.iterdir():
                 if f.is_file() and f.suffix != ".gds":
                     shutil.copy2(f, ws / sub / f.name)
-    shutil.copy2(CORPUS / block / "spec.yaml", ws / "spec.yaml")
+    (ws / "spec").mkdir()
+    shutil.copy2(CORPUS / block / "spec.yaml", ws / "spec" / "spec.yaml")
     ws.joinpath("state.json").write_text(
         json.dumps({"version": 3, "skill": "ade", "block": block}),
         encoding="utf-8")
@@ -105,8 +106,9 @@ def test_find_reference_netlist_has_no_stand_in_fallback(tmp_path):
 
 def test_reference_cell_is_spec_top(tmp_path):
     ws = tmp_path / "ws"
-    ws.mkdir()
-    (ws / "spec.yaml").write_text("top: current_mirror\n", encoding="utf-8")
+    (ws / "spec").mkdir(parents=True)
+    (ws / "spec" / "spec.yaml").write_text("top: current_mirror\n",
+                                           encoding="utf-8")
     text = ".subckt current_mirror a b\n.ends\n"
     assert check_analog_lvs.reference_cell(ws, "mirror", text) == "current_mirror"
     with pytest.raises(Exception, match="declares no .subckt"):
