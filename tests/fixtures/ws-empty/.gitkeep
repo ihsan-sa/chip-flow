@@ -1,0 +1,4 @@
+Placeholder so this empty fixture directory is tracked by git. test_state.py
+copies it to a tmp dir and runs state.py init there - the M1 done criterion
+("tests/fixtures/ws-empty goes through state.py init, edit --class
+rtl_edit, freshness and resume with the marks section 1.6 lists").
