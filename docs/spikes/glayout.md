@@ -34,7 +34,7 @@ This fork also carries a second, native **`gdstk` backend**
 from upstream's `tutorial/glayout_tutorial_INV_part1.ipynb`, using GF180's
 mapped PDK) all generate GDS with **no patches** — one line dropped
 (`ComponentReference.name` has no setter on this backend; cosmetic, not
-used). See `layout/gen_inverter.py`, `layout/gen_mirror.py`.
+used). See `docs/spikes/glayout/gen_inverter.py`, `docs/spikes/glayout/gen_mirror.py`.
 
 ## DRC / LVS on the gdstk-backend output
 
@@ -61,7 +61,7 @@ the time budget, so it is not a real schematic-vs-layout LVS.
 
 None to gLayout itself — no patch files beside this doc. The only
 adaptation is the one dropped line noted above, inline in
-`layout/gen_inverter.py`.
+`docs/spikes/glayout/gen_inverter.py`.
 
 ## Recommendation for M9
 
