@@ -282,6 +282,27 @@ def test_classify_property_pdr_unknown_raises():
             "UNKNOWN", 20)
 
 
+def test_wrong_kind_labels_ignores_skipped_asserts():
+    # M5, docs/design.md-cited: a skipped ASSERT is still an ASSERT - it
+    # falls back to classify_property's task-level basecase/induction
+    # verdict, and must never be refused as a label/kind mismatch just
+    # because sby marked it <skipped/> when SOME OTHER property in the same
+    # run needed more induction depth.
+    props = {"P_OK": "REQ-OK", "P_SKIPPED": "REQ-SKIPPED"}
+    smt_cases = {
+        "P_OK": {"type": "ASSERT", "failed": False, "skipped": False},
+        "P_SKIPPED": {"type": "ASSERT", "failed": False, "skipped": True},
+    }
+    assert check_formal.wrong_kind_labels(props, smt_cases) == []
+
+
+def test_wrong_kind_labels_catches_a_cover_point_named_as_an_assert():
+    props = {"COVER_MAX": "REQ-X"}
+    smt_cases = {"COVER_MAX": {"type": "COVER", "failed": False,
+                               "skipped": False}}
+    assert check_formal.wrong_kind_labels(props, smt_cases) == ["COVER_MAX"]
+
+
 def test_classify_property_no_verdict_at_all_is_an_error():
     import pytest
     from checklib import CheckError

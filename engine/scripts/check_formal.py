@@ -244,6 +244,19 @@ def classify_property(label: str, rid: str, smt_case: dict,
         f"induction={smt_sub['induction']!r}")
 
 
+def wrong_kind_labels(props: dict[str, str],
+                      smt_cases: dict[str, dict]) -> list[str]:
+    """`property:` labels among `props` whose sby-model testcase is not an
+    ASSERT (a COVER point named as if it were one) - `skipped` is NOT the
+    same signal and must never be folded into this (see the comment above
+    this function's one call site in run()): a `skipped` ASSERT still
+    belongs to classify_property's task-level basecase/induction fallback,
+    only a genuine type mismatch belongs here. Pure, like
+    classify_property, so the rule is testable without a real solver run."""
+    return [label for label in props
+           if smt_cases[label].get("type") != "ASSERT"]
+
+
 def parse_testcases(xml_path: Path) -> dict[str, dict]:
     """{id: {"type": "ASSERT"|"COVER", "failed": bool, "skipped": bool}} for
     every named property testcase sby's own JUnit XML carries - the id sby
@@ -356,9 +369,10 @@ def run(argv=None):
     # classify_property's own basecase/induction/pdr fallback (task-level,
     # exactly what a skipped-but-still-ASSERT testcase should fall back to)
     # already handles this correctly; only a genuine kind mismatch (a COVER
-    # point named as if it were an ASSERT) is refused here.
-    wrong_kind = [label for label in props
-                 if smt_cases[label].get("type") != "ASSERT"]
+    # point named as if it were an ASSERT) is refused here - see
+    # wrong_kind_labels, pulled out pure (same reason classify_property is)
+    # so this rule is testable without a real solver run.
+    wrong_kind = wrong_kind_labels(props, smt_cases)
     if wrong_kind:
         raise CheckError(
             f"spec.yaml 'property' label(s) {', '.join(sorted(wrong_kind))} "
