@@ -154,6 +154,18 @@ def import_plant(rung_dir: Path, plant_rel: str):
     return mod.plant
 
 
+def _ordered_gate_names(names: set[str], skill: str, gates: dict) -> list[str]:
+    """Pipeline order (gates.yaml's own declaration order, via
+    state.applicable_gate_order - phase then position), not alphabetical.
+    M4 (docs/design.md "### M4."): a manifest naming "harden" alongside a
+    gate that reads harden's own output (timing, drc, lvs, glsim, precheck)
+    needs harden to run FIRST in the shared pre-check loop below; a plain
+    alphabetical sort put "drc" ahead of "harden" and broke that."""
+    order = [g for _, g in state_mod.applicable_gate_order(skill, gates)]
+    index = {g: i for i, g in enumerate(order)}
+    return sorted(names, key=lambda g: index.get(g, len(order)))
+
+
 def run_rung(tmp_root: Path, rung_dir: Path, skill: str, gates: dict) -> dict:
     rung = rung_dir.name
     manifest = load_manifest(rung_dir)
@@ -170,7 +182,8 @@ def run_rung(tmp_root: Path, rung_dir: Path, skill: str, gates: dict) -> dict:
     # requiring that here would refuse every release fault regardless of
     # what it actually plants.
     clean_ws = make_scratch_workspace(tmp_root, rung_dir, skill, rung)
-    gate_names = sorted({f["gate"] for f in manifest["faults"]} - {"release"})
+    gate_names = _ordered_gate_names(
+        {f["gate"] for f in manifest["faults"]} - {"release"}, skill, gates)
     for gname in gate_names:
         t0 = time.monotonic()
         _report, result = run_gate(clean_ws, gname, gates, skill)

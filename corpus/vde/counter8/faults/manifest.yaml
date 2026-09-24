@@ -42,3 +42,33 @@ faults:
     gate: release
     plant: plant_release.py
     expect: {status: fail, kind: gate_not_ready}
+  # --- M4 (docs/design.md "### M4.") --------------------------------------
+  # harden/timing/drc/lvs/glsim/precheck's own faults, all on this rung
+  # (the fastest to harden of the three) - each plant() below runs
+  # check_harden.run() itself (these gates read
+  # harden's own output on disk, not anything faults.py records) before the
+  # named gate is asked to evaluate it; see each plant_<gate>.py for why.
+  - name: harden_design_too_large_for_tile
+    gate: harden
+    plant: plant_harden.py
+    expect: {status: fail, kind: flow_step_failed}
+  - name: timing_chain_misses_clock
+    gate: timing
+    plant: plant_timing.py
+    expect: {status: fail, kind: setup_violation}
+  - name: drc_metal_spacing_violation
+    gate: drc
+    plant: plant_drc.py
+    expect: {status: fail, kind: magic_drc_violation}
+  - name: lvs_via_removed
+    gate: lvs
+    plant: plant_lvs.py
+    expect: {status: fail, kind: netlist_mismatch}
+  - name: glsim_functional_bug_through_gate_level
+    gate: glsim
+    plant: plant_glsim.py
+    expect: {status: fail, kind: test_failed}
+  - name: precheck_wrong_top_module_name
+    gate: precheck
+    plant: plant_precheck.py
+    expect: {status: fail, kind: precheck_failed}
