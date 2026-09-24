@@ -20,8 +20,8 @@ pin naming/property setup closely enough to match even a clean design
 (a real gap - this gate is only as independent of `harden`'s own
 extraction as that leaves it); `corpus/vde/*/faults/plant_lvs.py`
 compensates by corrupting the extracted spice text directly rather than
-the GDS, so the fault this gate must catch ("one via removed from the
-GDS") is still exercised through this exact comparison.
+the GDS: the fault splits one net in two in that extracted netlist, the
+electrical effect of a missing via, so this exact comparison sees it.
 
 Passes when netgen reports the two circuits equivalent (gates.yaml's `lvs`
 row: "match").

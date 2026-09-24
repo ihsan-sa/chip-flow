@@ -139,7 +139,9 @@ gates:
       tool: lvs
       fail_severities: [error]
       max_count: 0
-      fault: "one via removed from the GDS"
+      fault: >-
+        one net split in two in the extracted layout netlist, the electrical
+        effect of a missing via
       description: "Match."
     glsim:
       phase: P6

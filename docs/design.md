@@ -83,7 +83,7 @@ Digital (`/vde`):
 | harden (job) | LibreLane 3, TT config, gf180mcuD | the flow finishes with no failing step and produces GDS, LEF, netlist, SDF, metrics | a design too large for the tile |
 | timing | OpenSTA on the hardened netlist at LibreLane's corners | setup and hold slack at or above 0 at every corner; no fanout or slew violations | a chain that misses the spec's clock |
 | drc | magic DRC and klayout DRC, PDK decks | 0 violations from both | a metal spacing violation planted in the GDS |
-| lvs | netgen, magic-extracted layout versus the hardened netlist | match | one via removed from the GDS |
+| lvs | netgen, magic-extracted layout versus the hardened netlist | match | one net split in two in the extracted layout netlist, the electrical effect of a missing via |
 | glsim | the sim suite on the gate-level netlist, then with SDF | every test passes both ways | a register read before it is written, which only X-propagation exposes |
 | precheck | tt-support-tools precheck, pinned | passes | a wrong top module name in info.yaml |
 | release | attest, strict | every applicable gate has a fresh recorded pass on the current inputs; waivers carry reason, approval and durability | an RTL edit after harden, which must refuse |

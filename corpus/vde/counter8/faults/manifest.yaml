@@ -60,13 +60,17 @@ faults:
     gate: drc
     plant: plant_drc.py
     expect: {status: fail, kind: magic_drc_violation}
-  - name: lvs_via_removed
+  - name: lvs_extracted_net_split
     gate: lvs
     plant: plant_lvs.py
     expect: {status: fail, kind: netlist_mismatch}
   - name: glsim_functional_bug_through_gate_level
     gate: glsim
     plant: plant_glsim.py
+    expect: {status: fail, kind: test_failed}
+  - name: glsim_slow_clock_to_q_only_in_sdf
+    gate: glsim
+    plant: plant_glsim_sdf.py
     expect: {status: fail, kind: test_failed}
   - name: precheck_wrong_top_module_name
     gate: precheck

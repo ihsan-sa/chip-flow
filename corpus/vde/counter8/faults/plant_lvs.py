@@ -1,5 +1,6 @@
-"""Fault: one via removed from the GDS (gates.yaml's lvs row, docs/design.md
-"### M4."). Hardens the untouched RTL first (`lvs` reads harden's own
+"""Fault: one net split in two in LibreLane's extracted layout netlist, the
+electrical effect of a missing via (gates.yaml's lvs row, docs/design.md
+"### M4."). It edits final/spice/, not the GDS. Hardens the untouched RTL first (`lvs` reads harden's own
 output on disk, not anything faults.py records, so this fault runs
 check_harden.run() itself before the target gate sees it).
 
