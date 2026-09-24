@@ -55,6 +55,23 @@ def test_dir_text_hashes_every_file_name_sorted(tmp_path):
     assert h3 != h1
 
 
+def test_dir_text_ignores_pycache(tmp_path):
+    # tb/ and holdout/ are Python packages cocotb imports directly - just
+    # running the tests once (no source edit) writes __pycache__/*.pyc under
+    # the very directory being hashed. That must never move the hash, or a
+    # gate's recorded input goes stale on its own bytecode cache.
+    d = tmp_path / "tb"
+    d.mkdir()
+    (d / "test_a.py").write_text("x = 1\n", encoding="utf-8")
+    h1 = statelib.hash_artifact(d, "dir_text")
+    cache = d / "__pycache__"
+    cache.mkdir()
+    (cache / "test_a.cpython-312.pyc").write_bytes(b"\x00fake bytecode")
+    (d / "stray.pyc").write_bytes(b"\x00also fake")
+    h2 = statelib.hash_artifact(d, "dir_text")
+    assert h1 == h2
+
+
 def test_missing_file_hashes_none(tmp_path):
     assert statelib.hash_artifact(tmp_path / "nope.v", "text_eol") is None
 

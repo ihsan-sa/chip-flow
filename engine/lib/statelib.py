@@ -133,11 +133,20 @@ def _norm_json_canonical(path: Path) -> bytes:
 def _norm_dir_text(path: Path) -> bytes:
     """All files under a directory, name-sorted, each EOL-normalized. Only
     defined for directories (rtl/, tb/, holdout/, ...); a file input raises
-    so the caller's raw fallback takes over."""
+    so the caller's raw fallback takes over.
+
+    `__pycache__` (and any stray `.pyc`/`.pyo`) is skipped: tb/ and holdout/
+    are Python packages cocotb imports directly, and simply importing them
+    once (no source edit at all) writes bytecode cache files under the very
+    directory being hashed here - counted in, that would flip a gate's
+    recorded input hash on its second run and mark a design gate stale for
+    a reason that has nothing to do with the design."""
     if not path.is_dir():
         raise ValueError(f"{path} is not a directory")
     h_parts: list[bytes] = []
-    for f in sorted(p for p in path.rglob("*") if p.is_file()):
+    for f in sorted(p for p in path.rglob("*")
+                    if p.is_file() and "__pycache__" not in p.parts
+                    and p.suffix not in (".pyc", ".pyo")):
         rel = f.relative_to(path).as_posix()
         h_parts.append(rel.encode("utf-8") + b"\0"
                        + _eol(_text(f.read_bytes())).encode("utf-8") + b"\0")
