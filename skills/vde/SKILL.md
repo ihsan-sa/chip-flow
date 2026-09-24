@@ -18,22 +18,35 @@ names, not the whole thing.
 ## Where things live, and how a command actually runs
 
 `docs/design.md` section 1.1 names every script `scripts/<name>.py` as a
-convention - `task_router.py`'s own plans use that same short form. In this
-repo the real path is `engine/scripts/<name>.py`, and every script runs
-through the launcher, never a bare interpreter:
+convention - `task_router.py`'s own plans use that same short form, then
+resolve it themselves. The engine's real root is
+`${CHIP_FLOW_HOME:-$HOME/.claude/skills/chip-flow}` (docs/design.md 1.1's
+own env-var contract) - never a path relative to this session's cwd or to
+a repo checkout, because a read-only skill checkout binds `skills/vde`
+alone, with no `engine/` sibling reachable by a relative path. The launcher
+and every engine script are spelled out fully, in every command below and
+everywhere else in this skill:
 
-    eda python engine/scripts/task_router.py --skill vde --task "<words>"
+    ${CHIP_FLOW_HOME:-$HOME/.claude/skills/chip-flow}/bin/eda python \
+      ${CHIP_FLOW_HOME:-$HOME/.claude/skills/chip-flow}/engine/scripts/task_router.py --skill vde \
+      --task "<words>"
 
-`bin/eda` is at the repo root; run it as `<repo>/bin/eda` or `./bin/eda` from
-the root. A recipe step written `scripts/state.py resume --workspace {ws}`
-means, resolved: `eda python engine/scripts/state.py resume --workspace
-<ws>`. Gates are the one exception worth knowing up front: `gate.py`
-dynamically imports its sibling `check_<tool>.py` from `engine/scripts/` by
-module name, so a gate step's `--workspace` is the only path that varies.
+A recipe step written `scripts/state.py resume --workspace {ws}` is already
+resolved for you by the time it reaches `recipe.steps[].command`:
+`task_router.py` binds the `scripts/` convention to
+`${CHIP_FLOW_HOME:-$HOME/.claude/skills/chip-flow}/engine/scripts/` before
+it ever renders a plan, and that resolution is proven to work from any cwd
+(`tests/test_task_router.py`) - run the rendered `command` field verbatim,
+through `eda python`, never a hand-assembled relative path. Gates are the
+one exception worth knowing up front: `gate.py` dynamically imports its
+sibling `check_<tool>.py` from that same directory by module name, so a
+gate step's `--workspace` is the only path that varies.
 
 ## Front door - route the task first
 
-    eda python engine/scripts/task_router.py --skill vde --task "<the user's words>" [--workspace blocks/<name>]
+    ${CHIP_FLOW_HOME:-$HOME/.claude/skills/chip-flow}/bin/eda python \
+      ${CHIP_FLOW_HOME:-$HOME/.claude/skills/chip-flow}/engine/scripts/task_router.py --skill vde \
+      --task "<the user's words>" [--workspace blocks/<name>]
 
 - **exit 0** - one verb matched. `recipe.steps` are bound to this
   workspace's real paths; `recipe.gates` and `recipe.human_hold` come from
@@ -157,17 +170,30 @@ On gate fail (exit 1, result JSON has `failing` with a `kind`/`file`/
 2. `state.py snapshot --workspace <ws> --label pre-fix-<gate>-a<attempt>`
    (default: every file artifact currently registered - fine for a
    text-only fix loop; pass `--files` to scope it tighter).
-3. `engine/scripts/fix_dispatch.py --input <gate result JSON> --workspace
-   <ws> --state <ws>/state.json` - clusters the failing findings by
-   `(file, module, kind)` (`cluster_violations.py`), writes one work order
-   per cluster under `log/workorders/wo-<id>.json`, attaches
+3. `scripts/fix_dispatch.py --input <gate result JSON> --workspace <ws>
+   --state <ws>/state.json` - resolved, per "Where things live" above, to
+   `$CFH/engine/scripts/fix_dispatch.py`
+   (`$CFH` = `${CHIP_FLOW_HOME:-$HOME/.claude/skills/chip-flow}`) - clusters
+   the findings by `(file, module, kind)` (`cluster_violations.py`), writes one
+   work order per cluster AT THE GATE'S OWN FAILING SEVERITY under
+   `log/workorders/wo-<id>.json`, attaches
    `skills/vde/reference/remediations/<kind>.md` where one exists, and
-   registers each cluster as an open issue.
-4. Spawn one `fixer` per order - orders inside one `parallel_groups` entry
-   (from the dispatch summary) may run concurrently since their files don't
-   overlap; groups run in sequence. When in doubt, serialize - correctness
-   beats wall clock. Mark issues `fixing` -> `fixed`/`escalated`
-   (`state.py issue`).
+   registers each failing-severity cluster as an open issue. A same-gate
+   `info`-severity finding (a `mutate` survivor detail, a `formal`
+   bounded-not-proven depth, a `cover` line-not-covered) is never its own
+   issue - nothing would ever close it, since the gate did not fail on it -
+   it rides along as context on the failing-severity order(s) instead.
+4. Spawn one agent per order, chosen by the order's `fixer` domain: a
+   `testbench` order (every `mutate` finding, and every requirement-
+   coverage gap - `requirement_no_test`, `untagged_holdout_test`, a
+   `cover` line/toggle gap) goes to the tb-writer in WORK-ORDER MODE
+   (`skills/vde/agents/tb-writer.md`), never the generic fixer; every
+   other domain (rtl/formal/synth/harden/review) goes to the `fixer` role
+   (`skills/vde/agents/fixer.md`). Orders inside one `parallel_groups`
+   entry (from the dispatch summary) may run concurrently since their
+   files don't overlap; groups run in sequence. When in doubt, serialize -
+   correctness beats wall clock. Mark issues `fixing` ->
+   `fixed`/`escalated` (`state.py issue`).
 5. Declare what the fix actually changed: `state.py edit --workspace <ws>
    --class <c> --note "fix <gate>"`. The domain -> class table:
 
@@ -192,10 +218,12 @@ On gate fail (exit 1, result JSON has `failing` with a `kind`/`file`/
 
 - **`mutate` never blames the design.** A survivor or a low kill rate is
   the TESTBENCH failing to notice the design is wrong - the work order's
-  `fixer` is `testbench`, and it goes to the tb-writer, never the
-  rtl-writer (`docs/design.md` section 2). `engine/scripts/
-  cluster_violations.py`'s `FIXER_HINTS` already routes every
-  `survivor_*`/`kill_rate_below_threshold` kind there; don't override it.
+  `fixer` domain is `testbench`, and step 4 above sends it to the
+  tb-writer in WORK-ORDER MODE, never the generic fixer and never the
+  rtl-writer (`docs/design.md` section 2). `cluster_violations.py`'s
+  `FIXER_HINTS` already routes every `survivor_*`/`kill_rate_below_threshold`
+  kind there, and every other requirement-coverage kind besides, to
+  `testbench`; don't override it.
 - **`holdout` never reveals the held-out test.** A held-out failure's work
   order names the requirement id and the visible tests that cover it -
   never the held-out test itself, and the rtl-writer/fixer's file list
@@ -303,10 +331,12 @@ silently drop to a weaker tier.
   frozen-evaluator loop) is M7's build; the verb here records intent and
   the current synth/timing baseline and stops.
 - **No skill-directory host bind yet.** `docs/design.md`'s Risks section:
-  the `~/.claude/skills/vde` read-only bind this file's own path
-  conventions assume needs host support that does not exist today. Until
-  it does, run a session from the repo root with full filesystem access
-  instead - every path in this file already resolves from there.
+  the `~/.claude/skills/vde` read-only bind does not exist on the host yet.
+  It no longer matters for path resolution: every command in this file is
+  spelled `${CHIP_FLOW_HOME:-$HOME/.claude/skills/chip-flow}/...`
+  (docs/design.md 1.1), which resolves the same way whether that bind
+  exists, the repo sits under `~/dev`, or a session's cwd is anywhere at
+  all - point `CHIP_FLOW_HOME` at a non-default checkout when one applies.
 - **No equivalent-mutant filter.** `check_mutate.py` scores every mcy
   mutant mechanically; a Verilog coding style that leaves a handful
   structurally unobservable at any output (see "Special cases" above) can

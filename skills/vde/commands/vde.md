@@ -17,7 +17,9 @@ On invocation:
    loop, state recording, and human checkpoints.
 2. Route the task FIRST:
 
-       eda python engine/scripts/task_router.py --skill vde --task "<the user's words>" [--workspace blocks/<name>]
+       ${CHIP_FLOW_HOME:-$HOME/.claude/skills/chip-flow}/bin/eda python \
+         ${CHIP_FLOW_HOME:-$HOME/.claude/skills/chip-flow}/engine/scripts/task_router.py --skill vde \
+         --task "<the user's words>" [--workspace blocks/<name>]
 
    exit 0 -> follow `recipe.doc` (when non-null) + `recipe.steps`; exit 1 ->
    the payload says whether to classify (`--verb`), ask the user, or clear

@@ -22,10 +22,11 @@ difference between those two cases.
 `mutate` second: this is the actual point of the verb. A new test that
 passes `sim` but still lets a mutant through has not actually added
 coverage - it is decorative. A `mutate` failure after `add-test` goes back
-to the SAME tb-writer role (fresh context again, not resuming), never to
-rtl-writer - re-read `SKILL.md`'s fix loop special case before dispatching
-this one; `fix_dispatch.py` already routes every `survivor_*`/
-`kill_rate_below_threshold` kind to the testbench domain via
+to the tb-writer in WORK-ORDER MODE (fresh context, never the generic
+`fixer`, never rtl-writer) - re-read `SKILL.md`'s fix loop step 4 and its
+`mutate` special case before dispatching this one; `fix_dispatch.py`
+already routes every `survivor_*`/`kill_rate_below_threshold` kind, and
+every other requirement-coverage kind besides, to the testbench domain via
 `cluster_violations.FIXER_HINTS`, so a manual override here is a mistake,
 not a judgment call.
 
