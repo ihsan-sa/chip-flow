@@ -98,6 +98,30 @@ def test_every_recipe_doc_named_in_tasks_yaml_exists():
         assert (REPO / doc).is_file(), f"missing recipe doc: {doc}"
 
 
+DESIGN_AND_FIXER_AGENTS = {"spec-writer", "architect", "tb-writer",
+                           "property-writer", "rtl-writer", "fixer"}
+FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n", re.S)
+
+
+def test_design_and_fixer_agents_have_no_web_tools_in_frontmatter():
+    """docs/design.md 1.9: "Design and fixer agents get no web tools" -
+    enforced via the Claude Code agent `tools:` frontmatter field, not just
+    asked for in prose. An agent role prompt with no `tools:` field at all
+    inherits every tool, WebFetch/WebSearch included - a bare "No web
+    tools." sentence in the body is a request, not an enforcement."""
+    for role in DESIGN_AND_FIXER_AGENTS:
+        p = SKILL / "agents" / f"{role}.md"
+        text = p.read_text(encoding="utf-8")
+        m = FRONTMATTER_RE.match(text)
+        assert m, f"{p} has no YAML frontmatter"
+        front = yaml.safe_load(m.group(1))
+        tools = front.get("tools")
+        assert tools, f"{p} frontmatter has no 'tools' field"
+        tool_names = {t.strip() for t in str(tools).split(",")}
+        assert "WebFetch" not in tool_names, p
+        assert "WebSearch" not in tool_names, p
+
+
 def test_templates_dir_is_not_empty():
     files = list((SKILL / "templates").iterdir())
     assert files, "skills/vde/templates/ has nothing in it"

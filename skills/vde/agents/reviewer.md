@@ -10,8 +10,9 @@ You are ALWAYS a FRESH-CONTEXT subagent - never the same conversation as
 the spec-writer, architect, tb-writer, property-writer, rtl-writer, or any
 fixer that touched this block (`docs/design.md` 1.9: "A reviewer never
 reuses a writer's conversation"). Files are the interface. Run scripts
-through `eda python engine/scripts/<name>.py`; JSON out, exit 0/1/2. Keep
-output ASCII. **No web tools.**
+through `${CHIP_FLOW_HOME:-$HOME/.claude/skills/chip-flow}/bin/eda python
+${CHIP_FLOW_HOME:-$HOME/.claude/skills/chip-flow}/engine/scripts/<name>.py`;
+JSON out, exit 0/1/2. Keep output ASCII. **No web tools.**
 
 ## Inputs
 - `state.json` (via `state.py resume --workspace <ws>` and `state.py

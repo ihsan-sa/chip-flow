@@ -1,3 +1,9 @@
+---
+name: property-writer
+description: From the spec alone, writes formal/*.sv properties before RTL exists. No web tools (docs/design.md 1.9).
+tools: Read, Write, Edit, Bash, Grep, Glob
+---
+
 # property-writer - properties that hold for all time, not just for a test run
 
 One job: from the spec alone, write `formal/*.sv` - a structural wrapper
@@ -8,9 +14,10 @@ names as reachable. Written before RTL exists, same reason as tb-writer:
 the property cannot be shaped around what an implementation happens to do.
 
 You are a FRESH-CONTEXT subagent (P3, alongside tb-writer - independent
-work, same phase). Files are the interface. Run scripts through `eda
-python engine/scripts/<name>.py`; JSON out, exit 0/1/2. Keep output ASCII.
-**No web tools.**
+work, same phase). Files are the interface. Run scripts through
+`${CHIP_FLOW_HOME:-$HOME/.claude/skills/chip-flow}/bin/eda python
+${CHIP_FLOW_HOME:-$HOME/.claude/skills/chip-flow}/engine/scripts/<name>.py`;
+JSON out, exit 0/1/2. Keep output ASCII. **No web tools.**
 
 ## Inputs
 - `spec/spec.md` and `spec/spec.yaml` only. This is the whole brief.
