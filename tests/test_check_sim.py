@@ -9,6 +9,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[1]
 ENGINE = REPO / "engine"
 SCRIPTS = ENGINE / "scripts"
@@ -110,6 +112,7 @@ def make_ws(tmp_path: Path, rtl_text: str, spec_text: str, tb_text: str) -> Path
     return ws
 
 
+@pytest.mark.slow
 def test_clean_design_all_requirements_covered_passes(tmp_path, capsys):
     ws = make_ws(tmp_path, RTL_GOOD, SPEC_ONE_REQ, TB_WRAP)
     code = check_sim.main(["--workspace", str(ws)])
@@ -119,6 +122,7 @@ def test_clean_design_all_requirements_covered_passes(tmp_path, capsys):
     assert out["tests_passed"] == 1
 
 
+@pytest.mark.slow
 def test_counter_wraps_one_early_is_caught(tmp_path, capsys):
     ws = make_ws(tmp_path, RTL_BUGGY, SPEC_ONE_REQ, TB_WRAP)
     code = check_sim.main(["--workspace", str(ws)])
@@ -128,6 +132,7 @@ def test_counter_wraps_one_early_is_caught(tmp_path, capsys):
     assert v["refs"] == ["REQ-WRAP"]
 
 
+@pytest.mark.slow
 def test_requirement_without_a_test_fails_sim(tmp_path, capsys):
     ws = make_ws(tmp_path, RTL_GOOD, SPEC_TWO_REQS, TB_WRAP)
     code = check_sim.main(["--workspace", str(ws)])
@@ -149,6 +154,7 @@ def test_no_tb_modules_is_an_error(tmp_path, capsys):
     assert "no test_*.py modules" in out["remediation"]
 
 
+@pytest.mark.slow
 def test_skipped_test_is_not_passed_and_does_not_cover_its_requirement(
         tmp_path, capsys):
     ws = make_ws(tmp_path, RTL_GOOD, SPEC_ONE_REQ, TB_SKIPPED)
@@ -164,6 +170,7 @@ def test_skipped_test_is_not_passed_and_does_not_cover_its_requirement(
     assert "requirement_no_test" not in kinds
 
 
+@pytest.mark.slow
 def test_expect_fail_test_cannot_cover_a_requirement_silently(tmp_path, capsys):
     ws = make_ws(tmp_path, RTL_GOOD, SPEC_ONE_REQ, TB_EXPECT_FAIL)
     code = check_sim.main(["--workspace", str(ws)])
@@ -176,6 +183,7 @@ def test_expect_fail_test_cannot_cover_a_requirement_silently(tmp_path, capsys):
     assert v["refs"] == ["REQ-WRAP"]
 
 
+@pytest.mark.slow
 def test_gate_sim_stdout_is_pure_json_not_polluted_by_sim_log(tmp_path):
     # black-box: gate.py run as a REAL subprocess through bin/eda, exactly
     # how a caller that trusts its stdout to be JSON would invoke it -

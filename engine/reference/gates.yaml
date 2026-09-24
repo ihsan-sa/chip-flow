@@ -8,7 +8,9 @@
 # Later milestones replace a row's `tool` with its real check_<gate>.py stem
 # (e.g. `tool: lint` -> engine/scripts/check_lint.py) as that gate is built;
 # `future_tool` and `description` already carry the real tool and pass
-# criteria from the design doc so nothing is lost in the meantime.
+# criteria from the design doc so nothing is lost in the meantime. M3
+# (docs/design.md, "### M3.") built vde's formal/cover/synth/release - each
+# row below drops `future_tool` once its `tool` is real, same as M2's rows.
 #
 # gate.py resolves which skill's row a bare `--gate <name>` means from the
 # workspace's state.json (`skill`), or from an explicit `--skill` override
@@ -83,8 +85,7 @@ gates:
         Kill rate at or above 0.9; no survivor in the must-kill classes.
     formal:
       phase: P4
-      tool: stub
-      future_tool: "SymbiYosys: smtbmc k-induction and abc pdr, plus cover"
+      tool: formal
       fail_severities: [error]
       max_count: 0
       fault: "a register with no reset: sim passes, formal fails"
@@ -93,8 +94,7 @@ gates:
         asks; every cover point reached.
     cover:
       phase: P4
-      tool: stub
-      future_tool: "verilator --coverage, same tests"
+      tool: cover
       fail_severities: [error]
       max_count: 0
       fault: "an unreachable state"
@@ -103,8 +103,7 @@ gates:
         carry reasons.
     synth:
       phase: P5
-      tool: stub
-      future_tool: "yosys synth to the gf180 liberty"
+      tool: synth
       fail_severities: [error]
       max_count: 0
       fault: "a combinational loop"
@@ -166,8 +165,7 @@ gates:
       description: "Passes."
     release:
       phase: P8
-      tool: stub
-      future_tool: "attest, strict"
+      tool: release
       strict: true
       fail_severities: [error]
       max_count: 0

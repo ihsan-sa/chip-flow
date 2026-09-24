@@ -3,6 +3,12 @@
 # minutes. Landing wires this into tests/check.sh (docs/design.md, "###
 # M1."); until then, run it directly.
 #
+# `-m "not slow"` excludes every real-tool test (needs the eda image - sby,
+# yosys, verilator, mcy, cocotb; tests/conftest.py registers the `slow`
+# marker) - those alone ran past two minutes once M3's formal/cover/synth
+# suites landed (measured: ~146 s of the ~162 s full run). They still run,
+# in tests/check-slow.sh, just not on this budget.
+#
 # The launcher (bin/eda) is not on main yet (M0 lands it separately). This
 # script reaches it through one helper that prefers ./bin/eda - once M0
 # merges, this needs no change - and falls back to $EDA for the interim
@@ -26,4 +32,6 @@ eda_bin() {
 
 EDA_BIN="$(eda_bin)"
 cd "$REPO_ROOT"
-exec timeout 120 "$EDA_BIN" python -m pytest tests/ -q
+# The cap catches a hang, not a slow box: the not-slow subset passed in
+# well under 20 s under load (uptime 20-30 on 6 cores).
+exec timeout 120 "$EDA_BIN" python -m pytest tests/ -q -m "not slow"

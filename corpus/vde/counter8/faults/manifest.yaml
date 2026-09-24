@@ -25,3 +25,20 @@ faults:
     gate: mutate
     plant: plant_mutate.py
     expect: {status: fail, kind: kill_rate_below_threshold}
+  # --- M3 (docs/design.md "### M3.") --------------------------------------
+  - name: formal_register_with_no_reset
+    gate: formal
+    plant: plant_formal.py
+    expect: {status: fail, kind: property_failed}
+  - name: cover_unreachable_state
+    gate: cover
+    plant: plant_cover.py
+    expect: {status: fail, kind: line_coverage_below_threshold}
+  - name: synth_combinational_loop
+    gate: synth
+    plant: plant_synth.py
+    expect: {status: fail, kind: combinational_loop}
+  - name: release_rtl_changed_after_sim
+    gate: release
+    plant: plant_release.py
+    expect: {status: fail, kind: gate_not_ready}

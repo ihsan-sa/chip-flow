@@ -8,6 +8,11 @@ requirements:
     text: busy is asserted from the start pulse until the stop bit's hold
       completes, then returns low
     check: sim
+  - id: REQ-FORMAL-RESET
+    text: rst forces tx to 1 and busy to 0 on the very next clock, proven
+      for all time rather than for whatever tb/ happens to try
+    check: formal
+    property: REQ_FORMAL_RESET
 ports:
   clk: {dir: input, width: 1}
   rst: {dir: input, width: 1}
@@ -21,3 +26,5 @@ clock:
 mutate:
   size: 24
   seed: 2
+formal:
+  depth: 20

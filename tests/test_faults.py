@@ -216,3 +216,44 @@ def test_run_rung_does_not_check_sim_for_a_non_holdout_fault(tmp_path, monkeypat
     tmp_root.mkdir()
     faults.run_rung(tmp_root, rung, "vde", gates={})
     assert "sim" not in calls
+
+
+RELEASE_MANIFEST = """\
+version: 1
+faults:
+  - name: r
+    gate: release
+    plant: plant_r.py
+    expect: {status: fail, kind: gate_not_ready}
+"""
+
+
+def make_release_rung(tmp_path: Path) -> Path:
+    rung = make_rung(tmp_path, RELEASE_MANIFEST)
+    (rung / "faults" / "plant_r.py").write_text(
+        "def plant(ws):\n    pass\n", encoding="utf-8")
+    return rung
+
+
+def test_run_rung_excludes_release_from_the_untouched_reference_precheck(
+        tmp_path, monkeypatch):
+    # release can never "pass" on a bare scratch copy (every OTHER gate has
+    # nothing recorded there either) - only the fault's own plant script
+    # fabricates that story (a full pipeline pass, recorded, then gone
+    # stale). Without the exclusion this generic precheck would call
+    # run_gate on the untouched clean_ws too and always report a problem,
+    # regardless of what the fault's own plant/expect said.
+    rung = make_release_rung(tmp_path)
+    calls: list[str] = []
+
+    def fake_run_gate(ws, gate_name, gates, skill):
+        calls.append(gate_name)
+        assert gate_name == "release"
+        return {}, {"status": "fail", "failing": [{"kind": "gate_not_ready"}]}
+
+    monkeypatch.setattr(faults, "run_gate", fake_run_gate)
+    tmp_root = tmp_path / "scratch"
+    tmp_root.mkdir()
+    result = faults.run_rung(tmp_root, rung, "vde", gates={})
+    assert calls == ["release"]   # never called a second time for a precheck
+    assert result["problems"] == []

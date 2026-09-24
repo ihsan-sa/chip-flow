@@ -7,6 +7,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[1]
 ENGINE = REPO / "engine"
 SCRIPTS = ENGINE / "scripts"
@@ -56,6 +58,7 @@ def make_ws(tmp_path: Path, rtl_text: str, top: str = "top") -> Path:
     return ws
 
 
+@pytest.mark.slow
 def test_clean_design_passes(tmp_path, capsys):
     ws = make_ws(tmp_path, CLEAN_V)
     code = check_lint.main(["--workspace", str(ws)])
@@ -65,6 +68,7 @@ def test_clean_design_passes(tmp_path, capsys):
     assert out["violations"] == []
 
 
+@pytest.mark.slow
 def test_latch_fails_uncovered_else(tmp_path, capsys):
     # gates.yaml's named fault for `lint`: "an always @* missing an else
     # (latch)".
@@ -79,6 +83,7 @@ def test_latch_fails_uncovered_else(tmp_path, capsys):
     assert v["source"] == "verilator"
 
 
+@pytest.mark.slow
 def test_unallowlisted_warning_fails(tmp_path, capsys):
     ws = make_ws(tmp_path, WIDTH_V)
     code = check_lint.main(["--workspace", str(ws)])
@@ -88,6 +93,7 @@ def test_unallowlisted_warning_fails(tmp_path, capsys):
     assert kinds.get("WIDTHTRUNC") == "error"
 
 
+@pytest.mark.slow
 def test_allowlisted_warning_downgrades_to_info_and_gate_passes(tmp_path, capsys):
     # check_<gate>.py's own exit reflects "found anything at all" (docs/
     # design.md 1.1: exit 1 = findings); it is gate.py's evaluate(), applying

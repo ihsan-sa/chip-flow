@@ -113,6 +113,20 @@ def lint_spec(spec: dict, rel_path: str = "spec/spec.yaml") -> list[dict]:
             bad("requirement_measure_no_bounds",
                f"{where} (id {rid!r}) has check: measure but no 'bounds'",
                refs=[rid] if rid else [])
+        elif check in ("formal", "both"):
+            # M3 (docs/design.md "### M3."): check_formal.py joins a
+            # requirement to its assert/cover in formal/*.sv by this label,
+            # never by a text search - a requirement with no 'property'
+            # would otherwise have to be searched for by name, and that
+            # falls apart the moment the property's own name and the
+            # requirement's id can't agree (dashes are illegal in a Verilog
+            # statement label, so they never can).
+            prop = req.get("property")
+            if not isinstance(prop, str) or not prop.strip():
+                bad("requirement_formal_no_property",
+                   f"{where} (id {rid!r}) has check: {check} but no "
+                   "'property' label naming its assert/cover in formal/*.sv",
+                   refs=[rid] if rid else [])
 
     tt_pins = spec.get("tt_pins")
     if tt_pins is not None and (not isinstance(tt_pins, dict) or not tt_pins):
