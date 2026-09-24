@@ -1,0 +1,19 @@
+top: counter8
+requirements:
+  - id: REQ-WRAP
+    text: count increments every clock and wraps from 255 to 0
+    check: sim
+  - id: REQ-RESET
+    text: a held rst clears count to 0 on every following clock, including a
+      one-clock reset asserted mid-run
+    check: sim
+ports:
+  clk: {dir: input, width: 1}
+  rst: {dir: input, width: 1}
+  count: {dir: output, width: 8}
+clock:
+  period_ns: 10
+  domains: [clk]
+mutate:
+  size: 24
+  seed: 1
