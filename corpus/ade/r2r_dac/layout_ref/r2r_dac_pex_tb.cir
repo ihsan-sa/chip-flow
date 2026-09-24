@@ -10,6 +10,12 @@
 * Bounds are the ladder at the rung's current sizing (1:1, what
 * sizing/sizing.yaml and the layout both carry; M8's spec wants 2:1 once
 * optimise has run): 0.66V, 1.98V, 2.64V unloaded, +-3%.
+*
+* These measures cannot move with parasitics: magic's extresist only splits
+* nets that reach a transistor, so the ladder extracts a few fF of C and no
+* wire R, and a sub-ohm rm1 ladder settles to the schematic's voltages. This
+* bench proves the extracted netlist simulates; the parasitic-sensitive
+* check and its planted fault are on corpus/ade/mirror.
 .include '{pdk}/libs.tech/ngspice/design.spice'
 .lib '{pdk}/libs.tech/ngspice/sm141064.spice' typical
 .lib '{pdk}/libs.tech/ngspice/sm141064.spice' res_typical

@@ -1,3 +1,7 @@
+# (No pex_sim fault here: this ladder extracts no wire R, so nothing
+# parasitic can fail its bench - see layout_ref/r2r_dac_pex_tb.cir; the
+# pex_sim fault lives on corpus/ade/mirror.)
+#
 # faults manifest (docs/design.md section 3, "### M8."/"### M9."). Only
 # spec_lint, drc and lvs here on purpose - this rung's own untouched sim_tt is
 # EXPECTED to fail (see netlist/r2r_dac.cir's own comment: the ratio is
