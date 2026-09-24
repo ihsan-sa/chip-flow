@@ -264,8 +264,12 @@ def run(argv=None):
             f"kill rate {kill_rate:.2f} ({killed}/{total}) is below "
             f"{KILL_RATE_MIN:.2f}", "mcy"))
 
+    # stamp() hashes exactly this path as input_digest; gate.py's own
+    # record_gate cross-checks that against invalidation.yaml's gate_inputs
+    # kinds[0] for this gate ("rtl" for mutate) - the whole workspace would
+    # never match that and silently fail every real recording.
     payload = checklib.report(
-        SCRIPT, ws, violations, top=top, total_mutants=total, killed=killed,
+        SCRIPT, ws / "rtl", violations, top=top, total_mutants=total, killed=killed,
         survived=survived, kill_rate=round(kill_rate, 4),
         survivors_by_class={c: len(v) for c, v in
                             sorted(survivors_by_class.items())},

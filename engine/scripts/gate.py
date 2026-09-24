@@ -177,6 +177,14 @@ def validate_report(gate_name: str, gate: dict, report: dict,
             "re-run the tool")
 
 
+# checklib's own report envelope keys (checklib.report/stamp): never a
+# check-specific fact, so never duplicated into a gate result's own "facts".
+_STANDARD_REPORT_KEYS = {
+    "script", "status", "counts", "violations", "report_schema",
+    "checker_version", "generated_at", "input", "input_digest",
+}
+
+
 def evaluate(gate_name: str, gate: dict, report: dict) -> dict:
     fail_sev = set(gate.get("fail_severities") or ["error"])
     max_count = int(gate.get("max_count", 0))
@@ -195,6 +203,15 @@ def evaluate(gate_name: str, gate: dict, report: dict) -> dict:
         "failing_count": len(failing),
         "failing": failing,
     }
+    # Whatever the check script reported beyond the standard envelope - a
+    # kill rate and survivors by class (mutate), tests_run (sim/holdout), a
+    # top module name (lint) - surfaces here rather than being silently
+    # dropped: "gate.py --gate mutate ... reports a kill rate and survivors
+    # by class" (docs/design.md "### M2.") needs this to actually be true of
+    # the GATE's own output, not just the check script's.
+    facts = {k: v for k, v in report.items() if k not in _STANDARD_REPORT_KEYS}
+    if facts:
+        result["facts"] = facts
     return result
 
 

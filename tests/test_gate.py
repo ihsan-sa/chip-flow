@@ -110,6 +110,28 @@ def test_evaluate_pass_and_fail_thresholds():
     assert gate.evaluate("lint", g, report3)["status"] == "pass"
 
 
+def test_evaluate_surfaces_check_specific_facts():
+    # a check script's own extra facts (mutate's kill_rate/survivors_by_
+    # class, sim's tests_run, lint's top) must reach the gate's own result,
+    # not be dropped along with the rest of the report envelope - docs/
+    # design.md "### M2.": "gate.py --gate mutate ... reports a kill rate
+    # and survivors by class".
+    g = {"fail_severities": ["error"], "max_count": 0, "phase": "P4",
+        "tool": "mutate"}
+    report = {"violations": [], "counts": {"total": 0}, "status": "pass",
+             "script": "check_mutate", "report_schema": 1, "input": "x",
+             "kill_rate": 0.95, "survivors_by_class": {}, "wall_s": 12.3}
+    r = gate.evaluate("mutate", g, report)
+    assert r["facts"] == {"kill_rate": 0.95, "survivors_by_class": {},
+                          "wall_s": 12.3}
+
+
+def test_evaluate_no_facts_key_when_report_has_no_extras():
+    g = {"fail_severities": ["error"], "max_count": 0}
+    report = {"violations": [], "counts": {"total": 0}}
+    assert "facts" not in gate.evaluate("lint", g, report)
+
+
 # ------------------------------------------------------------------ stub
 
 def test_stub_gate_is_always_exit_2(tmp_path, capsys):

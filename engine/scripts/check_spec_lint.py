@@ -36,7 +36,12 @@ def run(argv=None):
     spec_path = ws / SPEC_REL
     spec = speclib.load_spec(spec_path)
     violations = speclib.lint_spec(spec, rel_path=SPEC_REL)
-    payload = checklib.report(SCRIPT, ws, violations)
+    # stamp() hashes exactly this path as input_digest; gate.py's own
+    # record_gate cross-checks that against invalidation.yaml's gate_inputs
+    # kinds[0] for this gate ("spec_yaml" for spec_lint) - passing the whole
+    # workspace here would stamp a dir_text hash of everything under it and
+    # never match, silently failing every real (non---no-record) recording.
+    payload = checklib.report(SCRIPT, spec_path, violations)
     return payload, args.out
 
 

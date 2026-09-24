@@ -140,7 +140,11 @@ def run(argv=None):
     allow = load_allowlist(ws)
     output = run_verilator(ws, top, files)
     violations = parse_violations(output, allow)
-    payload = checklib.report(SCRIPT, ws, violations, top=top,
+    # stamp() hashes exactly this path as input_digest; gate.py's own
+    # record_gate cross-checks that against invalidation.yaml's gate_inputs
+    # kinds[0] for this gate ("rtl" for lint) - the whole workspace would
+    # never match that and silently fail every real recording.
+    payload = checklib.report(SCRIPT, ws / "rtl", violations, top=top,
                               files=[str(f.relative_to(ws)) for f in files])
     return payload, args.out
 
