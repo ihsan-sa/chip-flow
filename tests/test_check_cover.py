@@ -215,3 +215,21 @@ def test_parse_info_empty_report_is_an_error(tmp_path):
     info.write_text("", encoding="utf-8")
     with pytest.raises(CheckError):
         check_cover.parse_info(info)
+
+
+@pytest.mark.slow
+def test_relative_workspace_reaches_full_coverage(tmp_path, capsys,
+                                                   monkeypatch):
+    """M5 regression (found running the real /vde skill end to end on
+    counter8): write_coverage_info's own `cwd=str(ws)` combined with an
+    unresolved-relative `info_path`/`coverage_dat` (both built from that
+    same, possibly-relative, ws) doubled the workspace's own relative
+    prefix under verilator_coverage's cwd and it could never find its own
+    input. A relative --workspace must still reach full coverage."""
+    ws = make_ws(tmp_path, RTL)
+    monkeypatch.chdir(tmp_path)
+    code = check_cover.main(["--workspace", "ws"])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0, out
+    assert out["status"] == "pass"
+    assert out["line_pct"] == 100.0

@@ -152,7 +152,17 @@ def run_sby(sby_dir: Path, config: Path, workdir_name: str) -> tuple[str, Path]:
     """Run one sby task, -f'd to a fresh workdir under sby_dir. Returns
     (stdout+stderr text, the task's own workdir) - never raises on a
     property FAIL (that is a normal, parseable outcome via the workdir's
-    XML/stdout), only on a launcher that never reached a DONE line at all."""
+    XML/stdout), only on a launcher that never reached a DONE line at all.
+
+    sby_dir/config/workdir are all resolved to absolute FIRST (M5, found by
+    actually running this gate against a relative --workspace): passing
+    `cwd=str(sby_dir)` while ALSO passing `config`/`workdir` as the same
+    ws-relative path sby sees them nested a second time under its own
+    (now-cwd) directory - `sby_dir/<that same relative path again>` - and
+    fails to find them. Absolute throughout sidesteps this regardless of
+    whether the caller's own ws was relative or absolute."""
+    sby_dir = Path(sby_dir).resolve()
+    config = Path(config).resolve()
     workdir = sby_dir / workdir_name
     try:
         proc = subprocess.run(
@@ -327,21 +337,34 @@ def run(argv=None):
             "-formal frontend silently drops)")
 
     # A `property:` label spec.yaml names must be the ASSERT it claims to
-    # be - a COVER testcase (or one sby itself skipped) appears in the smt
-    # task's own model too (cover points are enumerated there, just never
-    # evaluated in prove mode), so `label not in smt_cases` above would not
-    # catch it: it would sail through classify_property's own basecase/
-    # induction/pdr checks and come back "proven" without anything ever
-    # having been proven about it.
+    # be - a COVER testcase appears in the smt task's own model too (cover
+    # points are enumerated there, just never evaluated in prove mode), so
+    # `label not in smt_cases` above would not catch it: it would sail
+    # through classify_property's own basecase/induction/pdr checks and
+    # come back "proven" without anything ever having been proven about it.
+    #
+    # A `skipped` ASSERT testcase is NOT the same signal (M5, found by
+    # actually running this gate on a THREE-property block - M3 only ever
+    # exercised one property per run): smtbmc's k-induction reports
+    # basecase/induction at the TASK level, shared across every ASSERT in
+    # one sby run, not per property - when one property's induction step
+    # does not converge, sby can mark OTHER, perfectly healthy properties'
+    # own per-testcase XML entries `<skipped/>` too, even though the task
+    # itself reached a real (if only "bounded") verdict. Treating every
+    # skipped ASSERT as a label mismatch refused every property in the run
+    # the moment ANY one of them needed more induction depth than it got -
+    # classify_property's own basecase/induction/pdr fallback (task-level,
+    # exactly what a skipped-but-still-ASSERT testcase should fall back to)
+    # already handles this correctly; only a genuine kind mismatch (a COVER
+    # point named as if it were an ASSERT) is refused here.
     wrong_kind = [label for label in props
-                 if smt_cases[label].get("type") != "ASSERT"
-                 or smt_cases[label].get("skipped")]
+                 if smt_cases[label].get("type") != "ASSERT"]
     if wrong_kind:
         raise CheckError(
             f"spec.yaml 'property' label(s) {', '.join(sorted(wrong_kind))} "
-            "do not name an ASSERT in sby's own model (a cover point, or an "
-            "assert sby itself skipped) - check: formal|both must point at "
-            "an assert's own Verilog label, never a cover's")
+            "do not name an ASSERT in sby's own model (a cover point) - "
+            "check: formal|both must point at an assert's own Verilog "
+            "label, never a cover's")
 
     violations = []
     proven, bounded, failed = [], [], []

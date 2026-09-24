@@ -289,3 +289,20 @@ def test_classify_property_no_verdict_at_all_is_an_error():
         check_formal.classify_property(
             "P", "REQ", CASE_OK, {"basecase": None, "induction": None},
             "PASS", 20)
+
+
+@pytest.mark.slow
+def test_relative_workspace_proves_cleanly(tmp_path, capsys, monkeypatch):
+    """M5 regression (found running the real /vde skill end to end on
+    counter8): run_sby's own `cwd=str(sby_dir)` combined with an
+    unresolved-relative `config`/`workdir` (both built from the same,
+    possibly-relative, --workspace) doubled the workspace's own relative
+    prefix under sby's cwd and it could never find its own config file.
+    A relative --workspace must still prove cleanly."""
+    ws = make_ws(tmp_path, RTL_OK)
+    monkeypatch.chdir(tmp_path)
+    code = check_formal.main(["--workspace", "ws"])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0, out
+    assert out["status"] == "pass"
+    assert out["proven"] == ["REQ-RESET"]
