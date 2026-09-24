@@ -266,10 +266,21 @@ gates:
       description: "As digital."
 
   msde:
+    # M10 (docs/design.md "### M10."): split and cosim are real. cosim's
+    # `future_tool` read "ngspice d_cosim running the Icarus-compiled
+    # digital side inside the analog bench" at M1 - docs/spikes/dcosim.md
+    # found that bridge's ivlng backend broken in this image (a hardcoded
+    # /foss/... dlopen baked into a compiled .so, not fixable without
+    # writing into the read-only toolchain tree) and recorded the decision
+    # design.md section 5 asks for: build on the first working fallback,
+    # cocotbext-ams, which turns out to itself cover the second fallback
+    # too (a lock-step driver of ngspice's shared library), so there was
+    # only one fallback to pick. top_drc/top_lvs/release stay `stub` -
+    # they need the assembled top GDS and both nested vde/ade runs, which
+    # arrive after M4 and M9 merge.
     split:
       phase: P1
-      tool: stub
-      future_tool: "speclib over interface.yaml"
+      tool: split
       fail_severities: [error]
       max_count: 0
       fault: "a control word width that differs between the two"
@@ -278,10 +289,7 @@ gates:
         direction, level and domain.
     cosim:
       phase: P3
-      tool: stub
-      future_tool: >-
-        ngspice d_cosim running the Icarus-compiled digital side inside the
-        analog bench
+      tool: cosim
       fail_severities: [error]
       max_count: 0
       fault: "control word polarity inverted"

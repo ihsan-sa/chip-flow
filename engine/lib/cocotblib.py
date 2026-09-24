@@ -19,8 +19,17 @@ cannot silently stand in for a real pass.
 from __future__ import annotations
 
 import re
+import signal
 import xml.etree.ElementTree as ET
 from pathlib import Path
+
+
+class CocotbTimeout(RuntimeError):
+    """run_cocotb's build()+test() exceeded its wall-clock budget. Raised,
+    never swallowed - a cosim bench wedged inside ngspice's shared library
+    has no subprocess to time out on its own (there is no exit code at all,
+    docs/spikes/dcosim.md), so without this a hang here hangs the gate
+    forever."""
 
 REQ_TAG_RE = re.compile(r"^\s*#\s*req:\s*(.+?)\s*$")
 COCOTB_TEST_RE = re.compile(r"^\s*@cocotb\.test\(")
@@ -92,7 +101,8 @@ def required_ids(spec: dict, checks: tuple[str, ...] = ("sim", "both")) -> set[s
 
 def run_cocotb(build_dir: Path, test_dir: Path, sources: list[Path],
               hdl_toplevel: str, test_modules_: list[str], results_xml: Path,
-              timescale: tuple[str, str] = ("1ns", "1ps")) -> Path:
+              timescale: tuple[str, str] = ("1ns", "1ps"),
+              timeout_s: float | None = None) -> Path:
     """Build the design then run every module in test_modules_ as one cocotb
     regression over Icarus. Returns the results.xml path (results_xml is
     pinned explicitly - concurrent callers, e.g. check_mutate.py running one
@@ -119,7 +129,19 @@ def run_cocotb(build_dir: Path, test_dir: Path, sources: list[Path],
     a `dir_text`-hashed gate input, and staled every gate that reads `tb`
     on the very next hash check with no RTL/tb edit involved. Absolute
     paths make every one of these calls independent of whatever directory
-    the runner is standing in at the moment it opens them."""
+    the runner is standing in at the moment it opens them.
+
+    timeout_s, if given, bounds build()+test() together with a SIGALRM
+    (Unix - matching bin/eda's own platform assumption; None, the default,
+    changes nothing for existing callers). This is the only lever available
+    for a co-simulation run: build()/test() call straight into cocotb's own
+    Python API and ngspice's shared library, not a subprocess this module
+    can attach a `timeout=` kwarg to or kill outright, so a real hang here
+    (an ngspice shared-library co-sim wedged waiting on a sync point that
+    never comes, say) would otherwise block forever with no exit code to
+    time out on. CocotbTimeout propagates to the caller uncaught - check_
+    *.py's cli_wrap (checklib.py) maps any exception to exit 2, the same
+    "this gate did not run" contract a hang should report."""
     from cocotb_tools.runner import get_runner
     build_dir = Path(build_dir).resolve()
     test_dir = Path(test_dir).resolve()
@@ -127,22 +149,38 @@ def run_cocotb(build_dir: Path, test_dir: Path, sources: list[Path],
     results_xml = Path(results_xml).resolve()
     runner = get_runner("icarus")
     log_file = str(build_dir / "sim.log")
-    runner.build(sources=[str(s) for s in sources], hdl_toplevel=hdl_toplevel,
-                build_dir=str(build_dir), waves=False, timescale=timescale,
-                log_file=log_file)
+
+    def _on_alarm(signum, frame):
+        raise CocotbTimeout(
+            f"run_cocotb exceeded its {timeout_s:g}s wall-clock timeout "
+            f"(hdl_toplevel={hdl_toplevel!r})")
+
+    old_handler = None
+    if timeout_s is not None:
+        old_handler = signal.signal(signal.SIGALRM, _on_alarm)
+        signal.alarm(max(1, int(timeout_s)))
     try:
-        # cocotb_tools.runner.test() itself does sys.exit(1) when any test
-        # in the run FAILED (mirroring a CLI tool's own exit code) - by the
-        # time it does, results_xml is already written in full, and a
-        # failing test is exactly the outcome this gate exists to catch, so
-        # that exit is swallowed here and the caller reads results_xml
-        # itself rather than trusting a bare return code either way.
-        return runner.test(hdl_toplevel=hdl_toplevel, test_module=test_modules_,
-                           test_dir=str(test_dir), build_dir=str(build_dir),
-                           results_xml=str(results_xml), waves=False,
-                           log_file=log_file)
-    except SystemExit:
-        return Path(results_xml)
+        runner.build(sources=[str(s) for s in sources], hdl_toplevel=hdl_toplevel,
+                    build_dir=str(build_dir), waves=False, timescale=timescale,
+                    log_file=log_file)
+        try:
+            # cocotb_tools.runner.test() itself does sys.exit(1) when any
+            # test in the run FAILED (mirroring a CLI tool's own exit code)
+            # - by the time it does, results_xml is already written in
+            # full, and a failing test is exactly the outcome this gate
+            # exists to catch, so that exit is swallowed here and the
+            # caller reads results_xml itself rather than trusting a bare
+            # return code either way.
+            return runner.test(hdl_toplevel=hdl_toplevel, test_module=test_modules_,
+                               test_dir=str(test_dir), build_dir=str(build_dir),
+                               results_xml=str(results_xml), waves=False,
+                               log_file=log_file)
+        except SystemExit:
+            return Path(results_xml)
+    finally:
+        if timeout_s is not None:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, old_handler)
 
 
 def parse_results_xml(xml_path: Path) -> dict[str, dict]:

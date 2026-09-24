@@ -78,6 +78,17 @@ def make_scratch_workspace(tmp_root: Path, rung_dir: Path, skill: str,
         src = rung_dir / name
         if src.is_file():
             shutil.copy2(src, ws / "spec" / name)
+    # M10 (msde): interface.yaml and the two per-side specs `split` checks
+    # against it (docs/design.md section 5: "two specs carrying the same
+    # entries") live at the rung root, same as spec.md/spec.yaml above -
+    # but land at the WORKSPACE ROOT, not under spec/, matching
+    # invalidation.yaml artifact_kinds' `interface` path (a top-level
+    # artifact of an msde block, not a per-side spec). Harmless no-op for
+    # vde/ade rungs, which never have these files.
+    for name in ("interface.yaml", "digital_spec.yaml", "analog_spec.yaml"):
+        src = rung_dir / name
+        if src.is_file():
+            shutil.copy2(src, ws / name)
     for sub in COPY_SUBDIRS:
         src_dir = rung_dir / sub
         if not src_dir.is_dir():

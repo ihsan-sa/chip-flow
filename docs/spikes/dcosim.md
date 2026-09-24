@@ -10,9 +10,14 @@ turns out to itself be an implementation of section 5's second fallback
 too (a lock-step driver of ngspice's shared library) — so there is only
 one fallback to pick, not two.
 
-Open item for M10: a real gf180 transistor-level two-inverter block does
-not converge inside that bridge yet (below). The bridge mechanism itself
-is proven; the transistor-level convergence work is not.
+Open item this spike left: a real gf180 transistor-level two-inverter block
+did not converge inside that bridge (below). Partly resolved for M10 — see
+"Resolved for M10" below: the wrong node name in the `.ic` fix was real and
+is genuinely fixed, so the pair now round-trips a real digitized transition
+through the bridge. A separate, narrower shared-library timestep quirk
+remains open, not fixed — the same run's `tran` then aborts at its own
+declared end. `run.sh` section 3 fails on that signature rather than
+reporting a false pass on cocotb's own clean exit.
 
 ## Why ivlng is broken
 
@@ -72,8 +77,88 @@ stepping, RC input damping, and correct `.ic` values — a real ngspice
 convergence issue with the bridge's cold `uic` start on active devices,
 left as an M10 follow-up rather than solved here.
 
+## Resolved for M10
+
+The "correct `.ic` values" above were never actually applied. `mid` is an
+internal node of `two_inv_gf180.sp`'s `.subckt` — not a port — and
+cocotbext-ams's generated wrapper netlist always instantiates the user
+subcircuit as `x1`, so the node's real top-level name is `x1.mid`. ngspice
+does not error on an `.ic` naming a node that does not exist; it prints
+"IC on non-existent node - mid, ignored" and carries on, so the fix looked
+like a no-op rather than a wrong name.
+
+With `.ic v(x1.mid)=<expected> v(out_pin)=<expected>` passed through
+`AnalogBlock`'s `extra_lines` (alongside the PDK's own `design.spice` and
+`sm141064.spice typical` includes), the identical netlist converges
+cleanly under plain batch `ngspice -b` for a full window with real digital
+transitions. Through cocotbext-ams itself, the pair round-trips both
+digital-driven transitions and the digitized readback is asserted (not
+exit 0) — genuinely fixed, not a no-op — **but** the same run's `tran` then
+hits the second, narrower quirk below and aborts at its own declared end
+(`time = 5e-08` — exactly `duration_ns=50.0` — logged as "Timestep too
+small ... trouble with node x1.mid" followed by "tran simulation(s)
+aborted"). `docs/spikes/dcosim/run.sh` section 3 used to report PASS here
+on cocotb's own clean exit alone, missing that log line entirely; it now
+scans the sim log for the same signature `check_cosim.py` does and fails
+on it.
+
+A second, narrower issue remains and is not a netlist or modeling problem:
+this ngspice build's shared-library transient can drive its own adaptive
+timestep to numeric underflow whenever it is forced to land exactly on a
+boundary time — a periodic fallback sync, or the analysis's own declared
+final `tstop` — regardless of the circuit's actual state at that instant
+(confirmed by sweeping about twenty different declared stop times on the
+identical static, never-toggling netlist: all but one failed, each exactly
+at its own declared end; the same netlist run start-to-finish under plain
+batch `ngspice -b`, which never needs to land on such a boundary, never
+failed once). This is specific to running through the shared library,
+which every real cosim bridge must use (batch mode has no bidirectional
+channel) — not to gf180, BSIM, or `uic` specifically. **Not actually
+worked around**: the idea was that a bench should request more duration
+than it needs and let the run finish naturally, but `test_two_inv_gf180.py`
+itself requests `duration_ns=50.0` — no more than it needs — and that
+exact value is one of the ones that fails. Re-checked 2026-09-24 (~20
+minutes, docs/spikes/dcosim/run.sh section 3 item on chip-flow PR #8):
+sweeping `duration_ns` over 41.0/42.0/44.0/46.0/50.3 (all failed, each at
+its own declared end, matching the pattern above) and 45.0/48.7 (both
+converged cleanly, twice each) reproduces the original ~20-value sweep's
+finding rather than explaining it — roughly one declared stop time in
+three converges here, with no principled rule found for which, so picking
+one of the clean values would just be repeating the original "all but one
+worked" luck, not fixing it. Left as `duration_ns=50.0` (a value that
+fails, on purpose) so `run.sh` keeps reporting the true state instead of a
+lucky pass; `check_cosim.py`'s independent sim-log scan is still the real
+guard against this in the actual gate (halting a foreground
+shared-library `tran` mid-flight was not found to be reliable either —
+`bg_halt` targets a `bg_run`-started analysis, not one started with the
+plain blocking `tran` command cocotbext-ams's own `run_simulation()`
+issues).
+
+M10's own `cosim` gate (`engine/scripts/check_cosim.py`) does not trust a
+clean exit for this reason: it parses the raw sim log for ngspice's own
+non-convergence signatures independently of what the cocotb regression
+reports, on every run.
+
+The `cosim` gate's own bench (`corpus/msde/ring_osc_div`) does not reuse
+this gf180 pair — a multi-stage active ring oscillator is a substantially
+harder cold-start problem (an unforced symmetric equilibrium, on top of
+the same BSIM sensitivity), and gates.yaml's own pass criterion for
+`cosim` is a measure inside its bound, not a proof that a gf180 ring
+converges. That rung's `ring5.sp` is a real SPICE feedback oscillator built
+from ideal RC/comparator stages instead, deliberately avoiding BSIM's
+near-zero-leakage cold-start sensitivity while still being genuinely
+computed by ngspice — see that rung's own `spec.md` for the reasoning, and
+`skills/ade/reference/topologies/` (M8, in flight) for where a real gf180
+ring belongs once it exists.
+
 ## Reproduce
 
 ```
 docs/spikes/dcosim/run.sh
 ```
+
+This spike's own script currently exits 1: section 3 correctly fails on
+the shared-library timestep quirk above (`duration_ns=50.0` is one of the
+values that does not converge cleanly). That is expected, not a
+regression — see "Resolved for M10" for why this is left failing honestly
+rather than picking a `duration_ns` that happens to pass.

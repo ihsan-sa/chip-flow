@@ -1,0 +1,13 @@
+# interface.yaml - the one crossing signal this rung exercises for the
+# `cosim` gate (docs/design.md section 5). check_cosim.py stamps its report
+# against this file (invalidation.yaml gate_inputs.msde.cosim's first
+# kind), so it must exist even though this rung's own focus is the bench,
+# not `split` (see corpus/msde/sensor_counted/ for that gate's rung).
+version: 1
+signals:
+  - name: osc_out
+    direction: a2d
+    level: cmos_3v3
+    domain: clk_free
+    width: 1
+    load: "digital divider clock input"

@@ -3,7 +3,15 @@
 # bridge work in this box's image? Section 1 reproduces the answer (no,
 # with the exact evidence). Section 2 runs the first fallback from
 # design.md section 5 (cocotbext-ams, already in the image) end to end
-# and checks the digital side really drove the analog computation.
+# and checks the digital side really drove the analog computation. Section
+# 3 (M10) is the spike's open issue, partly resolved: the same gf180
+# transistor-level two-inverter pair, through cocotbext-ams, round-trips a
+# real digitized transition (asserted, not exit 0) - the original ".ic on
+# the wrong node name" bug is genuinely fixed - but the same run's tran
+# then hits a separate shared-library timestep quirk and aborts at its own
+# declared end (dcosim.md's "Resolved for M10" section has the honest
+# story). This section fails on that signature rather than reporting PASS
+# on cocotb's own clean exit alone.
 #
 # Everything runs through bin/eda; nothing is written under the toolchain.
 set -uo pipefail
@@ -78,12 +86,54 @@ export LD_LIBRARY_PATH="$T/foss/tools/ngspice/lib"
 export LIBNGSPICE_PATH="$T/foss/tools/ngspice/lib/libngspice.so.0"
 out="$("$EDA" python3 run_cocotb.py 2>&1)"
 echo "$out" | grep "cocotb.two_inv_top" # the three in_pin -> out_pin lines
+section2_ok=0
 if echo "$out" | grep -q "TESTS=1 PASS=1 FAIL=0"; then
   echo "PASS: cocotbext-ams bridge round-tripped the digital pin through a"
   echo "  real ngspice analog computation and back, correctly, 3/3 times."
-  exit 0
+  section2_ok=1
 else
   echo "FAIL: fallback did not pass -- see output below"
   echo "$out" | tail -40
+fi
+
+echo
+echo "== 3. M10: the gf180 transistor-level pair, through the same bridge =="
+echo "   (the open issue this spike left - see two_inv_gf180.sp's own"
+echo "   comment and dcosim.md's 'Resolved for M10' section for the fix)"
+
+cp "$HERE"/two_inv_gf180.sp "$HERE"/test_two_inv_gf180.py "$HERE"/run_gf180_cocotb.py "$WORK/"
+
+export GF180_NGSPICE_DIR="$T/foss/pdks/gf180mcuD/libs.tech/ngspice"
+out="$("$EDA" python3 run_gf180_cocotb.py 2>&1)"
+echo "$out" | grep -E "cocotb\.two_inv_top|Timestep too small|tran simulation"
+section3_ok=0
+# cocotb's own "TESTS=1 PASS=1 FAIL=0" is not enough by itself - CLAUDE.md's
+# "ngspice exits 0 on many failures, so parse the measures" applies here
+# too: this run's own assertions pass because both digital transitions
+# round-trip before the failure, but ngspice's tran then hits the
+# shared-library timestep quirk (dcosim.md's "Resolved for M10" section)
+# and aborts at its own declared end. That must fail this section, not
+# report PASS on cocotb's clean exit alone.
+if echo "$out" | grep -qE "Timestep too small|tran simulation\(s\) aborted"; then
+  echo "FAIL: the gf180 case round-tripped its transition, then ngspice"
+  echo "  logged a non-convergence signature before the run's declared end:"
+  echo "$out" | grep -E "Timestep too small|tran simulation\(s\) aborted"
+elif echo "$out" | grep -q "TESTS=1 PASS=1 FAIL=0"; then
+  echo "PASS: the gf180 transistor-level two-inverter pair converged through"
+  echo "  cocotbext-ams and the digital side read back a real transition"
+  echo "  (asserted, not just exit 0), with no non-convergence signature in"
+  echo "  the sim log."
+  section3_ok=1
+else
+  echo "FAIL: the gf180 case did not pass -- see output below"
+  echo "$out" | tail -40
+fi
+
+echo
+if [ "$section2_ok" -eq 1 ] && [ "$section3_ok" -eq 1 ]; then
+  echo "ALL PASS"
+  exit 0
+else
+  echo "FAIL: section2_ok=$section2_ok section3_ok=$section3_ok"
   exit 1
 fi
