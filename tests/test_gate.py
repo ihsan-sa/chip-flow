@@ -43,6 +43,26 @@ def run(argv=None):
     return payload, args.out
 '''
 
+# A check that ran but has nothing to report as pass/violations - a tool
+# that decided its inputs don't apply here, say. gate.py must treat this as
+# a refusal (exit 2), never as a pass: "skipped" is not in {pass,
+# violations}, so evaluate() must never see it (gate.evaluate: "126."
+# below).
+SKIPPED_CHECK = '''
+def run(argv=None):
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--workspace")
+    ap.add_argument("--out")
+    args = ap.parse_args(argv)
+    payload = {"script": "check_fakegate", "status": "skipped",
+              "counts": {"total": 0}, "violations": [],
+              "report_schema": 1, "checker_version": 1,
+              "generated_at": "2026-01-01T00:00:00+00:00",
+              "input": str(args.workspace), "input_digest": None}
+    return payload, args.out
+'''
+
 FAKE_GATES_YAML = '''
 version: 1
 gates:
@@ -61,10 +81,10 @@ def make_ws(tmp_path: Path, skill="vde", block="counter8") -> Path:
     return ws
 
 
-def make_checks_dir(tmp_path: Path) -> Path:
+def make_checks_dir(tmp_path: Path, body: str = FAKE_CHECK) -> Path:
     d = tmp_path / "checks"
-    d.mkdir()
-    (d / "check_fakegate.py").write_text(FAKE_CHECK, encoding="utf-8")
+    d.mkdir(exist_ok=True)
+    (d / "check_fakegate.py").write_text(body, encoding="utf-8")
     return d
 
 
@@ -127,6 +147,20 @@ def test_fail_records_and_exits_1(tmp_path, capsys):
     data = json.loads((ws / "state.json").read_text(encoding="utf-8"))
     assert data["gates"]["lint"]["status"] == "fail"
     assert data["gates"]["lint"]["attempts"] == 1
+
+
+def test_skipped_status_is_refused_not_a_pass(tmp_path, capsys):
+    ws = make_ws(tmp_path)
+    checks_dir = make_checks_dir(tmp_path, SKIPPED_CHECK)
+    gates_yaml = make_gates_yaml(tmp_path)
+    code = gate.main(["--gate", "lint", "--workspace", str(ws),
+                      "--gates", str(gates_yaml), "--checks-dir", str(checks_dir)])
+    assert code == 2
+    out = json.loads(capsys.readouterr().out)
+    assert out["status"] == "error"
+    assert "skipped" in out["error"]
+    data = json.loads((ws / "state.json").read_text(encoding="utf-8"))
+    assert data["gates"] == {}   # never recorded as any kind of result
 
 
 def test_no_record_flag_skips_state(tmp_path, capsys):

@@ -83,11 +83,25 @@
 set -euo pipefail
 
 EDA_SELF="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+# The repo this launcher lives in (bin/eda -> repo root), so `check-env`
+# below can find its sibling script without a second copy of this path
+# logic anywhere else.
+EDA_REPO_ROOT="$(cd "$(dirname "$EDA_SELF")/.." && pwd)"
+CHECK_ENV_PY="$EDA_REPO_ROOT/engine/scripts/check_env.py"
 
+# $HOME/.cc/toolchains/iic-osic-tools-2026.09 is the box's own default, and
+# this is the ONE place it is spelled out - docs/design.md and tests/
+# check.sh both ask `eda --print-toolchain-root` for the resolved path
+# below rather than carrying their own copy of the fallback that could go
+# stale independently of this one.
 T="${EDA_TOOLCHAIN:-$HOME/.cc/toolchains/iic-osic-tools-2026.09}"
 if [ ! -d "$T" ]; then
   echo "eda: no toolchain tree at '$T' (set EDA_TOOLCHAIN)" >&2
   exit 1
+fi
+if [ "${1:-}" = "--print-toolchain-root" ]; then
+  echo "$T"
+  exit 0
 fi
 
 GCC_VER=13
@@ -137,7 +151,35 @@ TOOL="$1"; shift
 # `mv -T` calls can win, because POSIX rename() onto an existing
 # *non-empty* directory fails rather than merging -- the loser just
 # deletes its own copy and uses the winner's.
-CACHE_ROOT="${XDG_CACHE_HOME:-$HOME/.cache}/chip-flow/shims"
+# WHERE the cache root lives is itself a security choice, not just a path.
+# This box's worker sandboxes (cc-sandbox, a sibling project) bind the
+# HOST's real ~/.cache read-write into every track worker -- that is where
+# ~/.npm and other package caches persist across a worker's runs -- so a
+# cache under ~/.cache is one a worker running a FOREIGN PR can write into.
+# The librelane case below and wrap_recurse write actual shim SCRIPTS into
+# this cache (magic/netgen/klayout wrappers that re-exec through this same
+# launcher): a shim planted by a worker there is a shim a later, unsandboxed
+# HOST run would exec, unmodified, no privilege check possible after the
+# fact. A manifest recorded beside the cache would not fix this -- the same
+# writer that can plant a shim can rewrite a manifest describing it as
+# clean. So: CC_WORKER_SANDBOX=1 or CC_MEMBER_SANDBOX=1 (set by cc-sandbox
+# on every sandboxed launch, never unset before exec) means this process IS
+# the sandbox that owns whatever ~/.cache resolves to in here (a member's
+# ~/.cache is already its own private directory, never the host's, but the
+# same env check draws the line the same way for both rather than special-
+# casing) -- ~/.cache is fine and stays fast/shared across that sandbox's
+# own runs. Absent both signals -- the default, and every real host run --
+# ~/.local/state is used instead: nothing under it is bound by any sandbox
+# profile on this box (only ~/.local/bin and ~/.local/share/claude are,
+# both read-only, neither this path), so a worker's write there never lands
+# anywhere a host process will later read, and a host run never reads
+# anywhere a worker could have written. Fails CLOSED: an environment this
+# check cannot place is treated as a host run, not a sandboxed one.
+if [ "${CC_WORKER_SANDBOX:-}" = 1 ] || [ "${CC_MEMBER_SANDBOX:-}" = 1 ]; then
+  CACHE_ROOT="${XDG_CACHE_HOME:-$HOME/.cache}/chip-flow/shims"
+else
+  CACHE_ROOT="${XDG_STATE_HOME:-$HOME/.local/state}/chip-flow/shims"
+fi
 mkdir -p "$CACHE_ROOT"
 cache_key() {
   {
@@ -239,7 +281,13 @@ run_elf() {
 # on PYTHONPATH.
 run_py() {
   local script="$1"; shift
-  PYTHONPATH="${PYTHONPATH:-}${PYTHONPATH:+:}$PY_SITE" \
+  # PYTHONNOUSERSITE: without it, CPython still adds the HOST's user site
+  # dir (~/.local/lib/python3.12/site-packages, PYTHONHOME notwithstanding
+  # -- that lookup is keyed on $HOME, not PYTHONHOME) to sys.path. Any
+  # package a host pip install ever put there would then shadow or clash
+  # with the image's own, glibc-2.39-built dist-packages inside a run that
+  # is supposed to be hermetic to the image.
+  PYTHONNOUSERSITE=1 PYTHONPATH="${PYTHONPATH:-}${PYTHONPATH:+:}$PY_SITE" \
     exec "$LD" --library-path "$BASE_LIBPATH" "$PYBIN" "$script" "$@"
 }
 
@@ -273,12 +321,25 @@ wrap() {
 # specific env plus extra flags, not just a loader wrapper) so the case
 # dispatch below is the one place that logic lives, used whether eda was
 # asked for the tool directly or something else found it by name on PATH.
+#
+# Recurses into $SHIM_FINAL/.eda -- a COPY of this script, written once by
+# populate_shim_cache (below), never $EDA_SELF (this invocation's own
+# checkout path). The cache key already hashes this script's content, so
+# whichever checkout built a given cache entry is guaranteed byte-identical
+# to any other checkout that would have produced the same key -- but
+# $EDA_SELF is still that ONE checkout's path, and baking it into a shim
+# that outlives this process is what let a later run of a DIFFERENT
+# worktree (same content, same cache key) end up executing a shim that
+# calls back into a worktree that may since have been removed, or have
+# checked out a different branch entirely. Recursing into the cache's own
+# copy instead makes the shim self-contained: it depends on nothing but the
+# cache entry it already lives in.
 wrap_recurse() {
   local name="$1" tool="${2:-$1}"
   mkdir -p "$SHIM"
   cat > "$SHIM/$name" <<EOF
 #!/bin/sh
-exec "$EDA_SELF" "$tool" "\$@"
+exec "$SHIM_FINAL/.eda" "$tool" "\$@"
 EOF
   chmod +x "$SHIM/$name"
 }
@@ -318,6 +379,7 @@ wrap_py_at() {
 #!/bin/sh
 export PYTHONPATH="$PY_SITE\${PYTHONPATH:+:\$PYTHONPATH}"
 export PYTHONHOME="$PY_HOME"
+export PYTHONNOUSERSITE=1
 exec "$LD" --library-path "$BASE_LIBPATH" "$PYBIN" "$real" "\$@"
 EOF
   chmod +x "$dest"
@@ -381,6 +443,12 @@ netgen_tcl_shim() {
 # (verilator's own build does, for a codegen step) needs to find our
 # wrapper and not the host's, which PYTHONHOME would otherwise break.
 populate_shim_cache() {
+  # A copy, not a symlink, and not $EDA_SELF: see wrap_recurse's comment.
+  # Written first so every wrap_recurse call below has it in place, though
+  # none of them read it back until a shim they write is actually exec'd,
+  # always after the atomic rename into $SHIM_FINAL further down.
+  cp "$EDA_SELF" "$SHIM/.eda"
+  chmod +x "$SHIM/.eda"
   wrap python3 "$PYBIN"
   wrap_iverilog_vvp
   wrap yosys "$T/foss/tools/yosys/bin/yosys"
@@ -392,6 +460,27 @@ populate_shim_cache() {
   gcc_shims
   verilator_entry >/dev/null
   netgen_tcl_shim >/dev/null
+  # LibreLane's own flow drives magic, netgen, klayout, openroad, sta and
+  # ruby all by bare name (see the librelane case below) -- built here,
+  # once, into the atomic cache build, rather than on every `eda librelane`
+  # run: the OLD code wrote these six directly into $SHIM from inside the
+  # librelane case itself, which by then always equals $SHIM_FINAL (the
+  # live, already-published cache, read by every concurrent `eda` on this
+  # box) -- so every single librelane run rewrote six files in a directory
+  # other processes could be reading mid-write, non-atomically, whether or
+  # not the cache already existed. magic and netgen recurse back into this
+  # same script (wrap_recurse) because their correct invocation is more
+  # than "exec one binary"; that logic stays in one place, their own case
+  # below, however they're reached.
+  wrap_recurse magic
+  wrap_recurse netgen
+  wrap_recurse klayout
+  wrap openroad "$T/foss/tools/openroad-librelane/bin/openroad"
+  wrap sta "$T/foss/tools/openroad-librelane/bin/sta"
+  # LibreLane's own klayout step doesn't only run `klayout -r <script>` --
+  # for at least one check (XOR) it spawns "ruby" directly to run a
+  # standalone .rb script outside klayout entirely.
+  wrap ruby "$T/usr/bin/ruby3.2"
 }
 
 if [ "$populate_shim_cache_later" = "1" ]; then
@@ -406,6 +495,11 @@ fi
 export PATH="$SHIM:$PATH"
 
 case "$TOOL" in
+  # ---- environment ----------------------------------------------------------
+  check-env)
+    run_py "$CHECK_ENV_PY" "$@"
+    ;;
+
   # ---- digital sim / lint -------------------------------------------------
   # iverilog/vvp both have a *compiled-in* absolute /foss/tools/iverilog/lib
   # module-search prefix (not argv0-relative like most of the tree, and not
@@ -522,19 +616,10 @@ case "$TOOL" in
   librelane)
     # Best effort: LibreLane's default flow drives yosys, verilator (lint),
     # openroad/sta, klayout and (magic or netgen for DRC/LVS) all by bare
-    # name. magic and netgen recurse back into this same script (see
-    # wrap_recurse) rather than a plain loader wrapper, because their
-    # correct invocation is more than "exec one binary" -- that logic
-    # stays in one place, their own case below, however they're reached.
-    wrap_recurse magic
-    wrap_recurse netgen
-    wrap_recurse klayout
-    wrap openroad "$T/foss/tools/openroad-librelane/bin/openroad"
-    wrap sta "$T/foss/tools/openroad-librelane/bin/sta"
-    # LibreLane's own klayout step doesn't only run `klayout -r <script>` --
-    # for at least one check (XOR) it spawns "ruby" directly to run a
-    # standalone .rb script outside klayout entirely.
-    wrap ruby "$T/usr/bin/ruby3.2"
+    # name. Every one of those shims (magic and netgen recursing back into
+    # this same script, klayout too, openroad/sta/ruby as plain loader
+    # wrappers) is built once, atomically, in populate_shim_cache -- never
+    # here, so a librelane run only ever READS the cache, never writes it.
     export PATH="$SHIM:$SHIM/.verilator-root/bin:$T/foss/tools/openroad-librelane/bin:$PATH"
     export VERILATOR_ROOT="$T/foss/tools/verilator/share/verilator"
     export TOOLS="$T/foss/tools"

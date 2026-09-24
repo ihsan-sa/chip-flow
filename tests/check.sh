@@ -12,7 +12,10 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
 EDA="$REPO/bin/eda"
-T="${EDA_TOOLCHAIN:-$HOME/.cc/toolchains/iic-osic-tools-2026.09}"
+# bin/eda's own `T=` line is the ONE place the box's default toolchain path
+# is spelled out; asking it back (rather than a second copy of that
+# fallback here) is what keeps the two from going stale independently.
+T="$("$EDA" --print-toolchain-root)" || exit 1
 PDK="$T/foss/pdks/gf180mcuD"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/chip-flow-check.XXXXXX")"
@@ -37,11 +40,13 @@ report() {
 }
 
 echo "== shellcheck ==" >&2
-if shellcheck "$REPO/bin/eda" >/tmp/chip-flow-shellcheck.log 2>&1; then
+SHELLCHECK_LOG="$(mktemp "${TMPDIR:-/tmp}/chip-flow-shellcheck.XXXXXX.log")"
+if shellcheck "$REPO/bin/eda" >"$SHELLCHECK_LOG" 2>&1; then
   report "shellcheck" true "bin/eda is clean"
 else
-  report "shellcheck" false "$(tail -c 300 /tmp/chip-flow-shellcheck.log)"
+  report "shellcheck" false "$(tail -c 300 "$SHELLCHECK_LOG")"
 fi
+rm -f "$SHELLCHECK_LOG"
 
 # ---------------------------------------------------------------- iverilog+vvp
 cat > counter.v <<'EOF'
@@ -319,6 +324,44 @@ EOF
 else
   report "opensta-timing" false "no synthesized netlist available (yosys step produced none)"
 fi
+
+# ------------------------------------------------------------------ check-env
+# `eda check-env` (engine/scripts/check_env.py) already runs both of these
+# as rows in its own report; reading them back here rather than
+# re-implementing either check in bash is what keeps the two from drifting.
+CHECKENV_JSON="$(mktemp "${TMPDIR:-/tmp}/chip-flow-checkenv.XXXXXX.json")"
+CHECKENV_PARSE="$(mktemp "${TMPDIR:-/tmp}/chip-flow-checkenv-parse.XXXXXX.py")"
+cat > "$CHECKENV_PARSE" <<'PY'
+import json, sys
+path, *names = sys.argv[1:]
+try:
+    rows = {r.get("tool"): r for r in json.load(open(path)).get("tools", [])}
+    err = None
+except Exception as exc:
+    rows, err = {}, str(exc)
+for name in names:
+    r = rows.get(name)
+    if r is None:
+        print(f"false\t{err or ('no ' + name + ' row in check-env output')}")
+    else:
+        print(f"{'true' if r.get('ok') else 'false'}\t{r.get('detail') or ''}")
+PY
+"$EDA" check-env --out "$CHECKENV_JSON" >/dev/null 2>&1
+if [ -s "$CHECKENV_JSON" ]; then
+  mapfile -t checkenv_rows < <("$EDA" python3 "$CHECKENV_PARSE" "$CHECKENV_JSON" python-imports mcy)
+else
+  checkenv_rows=()
+fi
+if [ "${#checkenv_rows[@]}" -ge 2 ]; then
+  IFS=$'\t' read -r pyimp_ok pyimp_detail <<<"${checkenv_rows[0]}"
+  IFS=$'\t' read -r mcy_ok mcy_detail <<<"${checkenv_rows[1]}"
+else
+  pyimp_ok=false; pyimp_detail="eda check-env produced no usable report"
+  mcy_ok=false; mcy_detail="eda check-env produced no usable report"
+fi
+report "python-imports" "$pyimp_ok" "$pyimp_detail"
+report "mcy-presence" "$mcy_ok" "$mcy_detail"
+rm -f "$CHECKENV_JSON" "$CHECKENV_PARSE"
 
 # the engine's own tests (M1 onward)
 if (cd "$REPO" && bash tests/check-engine.sh) >&2; then

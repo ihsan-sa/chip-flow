@@ -86,6 +86,21 @@ def skill_of(workspace: Path | None, explicit: str | None) -> str:
         "explicitly")
 
 
+def _reject_unless_completed(payload: dict, bad) -> None:
+    """A check result counts only when it is 'pass' or 'violations' with a
+    real violations list - 'skipped', None, a missing key, or anything else
+    is a refusal, never silently recorded as a pass. `bad` is the caller's
+    own raiser, so each call site keeps its own message prefix. Shared by
+    run_report_for_gate (a check that just ran) and validate_report (a
+    --report file), so the two can never drift apart on what "completed"
+    means."""
+    status = payload.get("status")
+    if status not in ("pass", "violations"):
+        bad(f"status {status!r} is not a completed run")
+    if not isinstance(payload.get("violations"), list):
+        bad("no 'violations' list - a missing key is invalid, not empty")
+
+
 def run_report_for_gate(gate: dict, workspace: Path,
                         checks_dir: Path | None = None) -> dict:
     """Import check_<tool>.py (sibling script, or --checks-dir for tests)
@@ -117,6 +132,11 @@ def run_report_for_gate(gate: dict, workspace: Path,
     if payload.get("status") == "error":
         raise RuntimeError(f"{mod_name} report status is error: "
                            f"{payload.get('error')}")
+
+    def bad(msg: str):
+        raise RuntimeError(f"{mod_name} report refused: {msg}")
+
+    _reject_unless_completed(payload, bad)
     return payload
 
 
@@ -136,11 +156,7 @@ def validate_report(gate_name: str, gate: dict, report: dict,
     if report.get("script") != expected:
         bad(f"produced by {report.get('script')!r} but the {gate_name!r} "
             f"gate's tool expects {expected!r}")
-    status = report.get("status")
-    if status not in ("pass", "violations"):
-        bad(f"status {status!r} is not a completed run")
-    if not isinstance(report.get("violations"), list):
-        bad("no 'violations' list - a missing key is invalid, not empty")
+    _reject_unless_completed(report, bad)
 
     from datetime import datetime, timezone
     gen = report.get("generated_at")

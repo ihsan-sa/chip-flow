@@ -10,7 +10,7 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
 EDA="$REPO/bin/eda"
-T="${EDA_TOOLCHAIN:-$HOME/.cc/toolchains/iic-osic-tools-2026.09}"
+T="$("$EDA" --print-toolchain-root)" || exit 1
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/chip-flow-librelane.XXXXXX")"
 echo "run dir: $WORK"
