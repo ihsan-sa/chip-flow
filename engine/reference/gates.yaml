@@ -322,8 +322,7 @@ gates:
       description: "Match."
     release:
       phase: P4
-      tool: stub
-      future_tool: "attest, strict"
+      tool: release
       strict: true
       fail_severities: [error]
       max_count: 0

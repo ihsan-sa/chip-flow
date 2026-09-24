@@ -1,0 +1,21 @@
+# faults manifest (docs/design.md section 3, "### M10."): one entry per
+# fault the `split` gate must catch (gates.yaml's msde.split row, plus the
+# CLAUDE.md rule that every branch a builder adds gets a selfcheck case).
+version: 1
+faults:
+  - name: split_width_mismatch
+    gate: split
+    plant: plant_width_mismatch.py
+    expect: {status: fail, kind: width_mismatch}
+  - name: split_direction_mismatch
+    gate: split
+    plant: plant_direction_mismatch.py
+    expect: {status: fail, kind: direction_mismatch}
+  - name: split_signal_missing_from_spec
+    gate: split
+    plant: plant_missing_signal.py
+    expect: {status: fail, kind: signal_missing_from_spec}
+  - name: split_domain_mismatch
+    gate: split
+    plant: plant_domain_mismatch.py
+    expect: {status: fail, kind: domain_mismatch}
