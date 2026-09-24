@@ -13,12 +13,13 @@ slow and hot" - engine/reference/corners.yaml's own `ss` default corner
 Corner set: spec.yaml's top-level `corners` field (speclib.lint_spec_ade's
 schema: "default" | "all" | a list of corner names) - "default" (the
 implicit value when the field is absent) is corners.py's own
-default_corners(), "all" is every corners.yaml axis combination, and a list
-names an explicit subset/superset. Never fewer than the default five
-(design.md 5) - a spec asking for "all" or a superset is honored, but
-nothing here lets a spec ask for FEWER than default_corners() without
-naming them explicitly (which is itself still "never fewer" than what it
-declared).
+default_corners(). A list is UNIONED with the default five, never used to
+replace them (corner_names_for_spec()) - design.md 5's "never fewer" means
+what it says, so a spec cannot skip a default corner (say, drop `ss` and
+have 'meets at typical, loses headroom at slow and hot' go uncaught) by
+simply not naming it; a list only ever adds names on top of the default
+five (add-corner - skills/ade/reference/tasks.yaml - is how a spec asks for
+more).
 """
 from __future__ import annotations
 
@@ -31,6 +32,7 @@ ENGINE = SCRIPTS.parent
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(ENGINE / "lib"))
 import checklib  # noqa: E402
+import corners as corners_mod  # noqa: E402
 import sim_run  # noqa: E402
 import speclib  # noqa: E402
 
@@ -38,15 +40,28 @@ SCRIPT = "check_sim_pvt"
 DEFAULT_TIMEOUT = 60.0
 
 
-def corner_names_for_spec(spec: dict) -> list[str] | None:
+def corner_names_for_spec(spec: dict, default_names: list[str]) -> list[str] | None:
     """None means "sim_run's own default" (corners.py's default_corners(),
-    design.md 5's five curated points). A list names an explicit subset/
-    superset of corners.yaml's default_corners entries by name - "all" is
-    not accepted here (corners.yaml curates named points; a spec wanting
-    every raw process x temp x supply combination names them explicitly,
-    which add-corner - skills/ade/reference/tasks.yaml - is what extends)."""
+    design.md 5's five curated points) - the common case, and the cheapest:
+    sim_run re-derives the same set itself.
+
+    A list is add-corner's own widening (skills/ade/reference/tasks.yaml:
+    "this verb is how a spec asks for more"), never a replacement - design.md
+    5 is explicit that the default five are "never fewer", so an explicit
+    list is UNIONED with `default_names`, defaults first in their own order
+    then any extra names the spec added, rather than passed through as-is.
+    A spec naming only `[tt]` used to run just tt and silently never catch
+    'meets at typical, loses headroom at slow and hot' at ss - that is
+    exactly the fault this gate exists to catch, so a spec cannot opt out of
+    it by naming a narrower corner list."""
     field = spec.get("corners", "default")
-    return None if field == "default" else field
+    if field == "default":
+        return None
+    names = list(default_names)
+    for c in field:
+        if c not in names:
+            names.append(c)
+    return names
 
 
 def run(argv=None):
@@ -58,7 +73,9 @@ def run(argv=None):
 
     ws = Path(args.workspace)
     spec = speclib.load_spec(ws / "spec" / "spec.yaml")
-    corners_field = corner_names_for_spec(spec)
+    default_names = [c["name"] for c in
+                     corners_mod.default_corners(corners_mod.load())]
+    corners_field = corner_names_for_spec(spec, default_names)
 
     result = sim_run.run_workspace_benches(
         ws, corner_names=corners_field, timeout=args.timeout, check="sim_pvt")

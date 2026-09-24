@@ -112,14 +112,35 @@ def test_meets_at_typical_loses_headroom_at_slow_and_hot(tmp_path, monkeypatch, 
     assert tt_result["violations"] == []
 
 
-def test_explicit_corner_subset_is_honored(tmp_path, monkeypatch, capsys):
+def test_explicit_corner_list_cannot_skip_a_default(tmp_path, monkeypatch, capsys):
+    # A spec naming only `[tt, ff]` used to run ONLY those two - ss (the
+    # "slow and hot" default corner) never ran, so its bound violation never
+    # showed up. design.md 5's five defaults are "never fewer": an explicit
+    # list is unioned with them, not a replacement.
     ws = make_ws(tmp_path, corners_field="[tt, ff]")
     eda = make_corner_sensitive_fake_eda(tmp_path)
     monkeypatch.setattr(sim_run, "EDA_BIN", eda)
     code = check_sim_pvt.main(["--workspace", str(ws)])
     out = json.loads(capsys.readouterr().out)
-    assert code == 0, out  # ss never runs, so its failure never shows up
-    assert set(out["corners"]) == {"tt", "ff"}
+    assert code == 1, out  # ss still runs, and still fails
+    assert set(out["corners"]) == {"tt", "ss", "ff", "sf", "fs"}
+    bad_corners = {v["refs"][1] for v in out["violations"]
+                  if v["kind"] == "sim_bound_fail"}
+    assert bad_corners == {"ss"}
+
+
+def test_explicit_corner_list_can_add_beyond_default(tmp_path, monkeypatch, capsys):
+    # add-corner's own contract (skills/ade/reference/tasks.yaml): naming a
+    # corner in the list is how a spec asks for MORE than the default five,
+    # never fewer. Naming a default-set corner explicitly is a no-op (it
+    # already runs) but must still not drop any of the other four.
+    ws = make_ws(tmp_path, corners_field="[tt]")
+    eda = make_corner_sensitive_fake_eda(tmp_path)
+    monkeypatch.setattr(sim_run, "EDA_BIN", eda)
+    code = check_sim_pvt.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 1, out
+    assert set(out["corners"]) == {"tt", "ss", "ff", "sf", "fs"}
 
 
 @pytest.mark.slow

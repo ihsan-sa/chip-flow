@@ -62,7 +62,13 @@ CHECK_KINDS = {"sim", "formal", "both", "measure"}
 #         bounds: {min?, max?}        required, at least one of min/max
 #         corners: "default"|[str,...]|"all"   optional (default: "default")
 #         severity: error|warning     optional (default: error)
-#     mc: {enabled: bool, runs?: int, yield_min?: float}   optional
+#     mc: {enabled: bool, runs?: int, yield_min?: float, global?: bool,
+#          seed?: int}   optional - runs?/seed? are check_mc.py's own
+#                        per-run count and seed base (`.option seed=<seed
+#                        base + i>` per run, `runs: 0` refused outright);
+#                        global? asks check_mc.py to also force
+#                        `sw_stat_global=1` (process-level MC), not just
+#                        `sw_stat_mismatch=1` (device-level, the default)
 
 ADE_MEASURE_CORNER_KINDS = {"default", "all"}
 
