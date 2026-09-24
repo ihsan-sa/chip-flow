@@ -5,12 +5,14 @@ tests/check.sh's own cocotb-icarus smoke."""
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 ENGINE = REPO / "engine"
 SCRIPTS = ENGINE / "scripts"
+EDA_BIN = REPO / "bin" / "eda"
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(ENGINE / "lib"))
 
@@ -172,3 +174,21 @@ def test_expect_fail_test_cannot_cover_a_requirement_silently(tmp_path, capsys):
     # ...but that must never silently satisfy the requirement's coverage.
     v = next(v for v in out["violations"] if v["kind"] == "requirement_no_test")
     assert v["refs"] == ["REQ-WRAP"]
+
+
+def test_gate_sim_stdout_is_pure_json_not_polluted_by_sim_log(tmp_path):
+    # black-box: gate.py run as a REAL subprocess through bin/eda, exactly
+    # how a caller that trusts its stdout to be JSON would invoke it -
+    # cocotblib.run_cocotb's log_file= wiring is what keeps iverilog/vvp's
+    # own console output off this process's stdout fd.
+    ws = make_ws(tmp_path, RTL_GOOD, SPEC_ONE_REQ, TB_WRAP)
+    gate_py = SCRIPTS / "gate.py"
+    proc = subprocess.run(
+        [str(EDA_BIN), "python3", str(gate_py), "--gate", "sim",
+         "--skill", "vde", "--workspace", str(ws), "--no-record"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        timeout=120)
+    out = json.loads(proc.stdout)   # raises if anything but pure JSON came back
+    assert out["gate"] == "sim"
+    assert out["status"] == "pass", (out, proc.stderr)
+    assert proc.returncode == 0, proc.stderr

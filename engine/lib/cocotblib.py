@@ -96,11 +96,23 @@ def run_cocotb(build_dir: Path, test_dir: Path, sources: list[Path],
     """Build the design then run every module in test_modules_ as one cocotb
     regression over Icarus. Returns the results.xml path (results_xml is
     pinned explicitly - concurrent callers, e.g. check_mutate.py running one
-    mutant per task, must never share cocotb's own default path)."""
+    mutant per task, must never share cocotb's own default path).
+
+    log_file=build_dir/sim.log is passed to both build() and test(): without
+    it, cocotb_tools.runner's own Simulator._execute runs iverilog/vvp with
+    stdout=None, which inherits the CALLER's real stdout fd - the same fd a
+    caller several layers up (gate.py --gate sim) later prints its JSON
+    report to. Every line of iverilog/vvp/cocotb's own console output would
+    land on that fd ahead of the JSON, so a consumer that runs gate.py as a
+    subprocess and expects pure JSON on stdout gets unparsable noise instead
+    (nothing here breaks: results are already read back from results_xml,
+    never from this log)."""
     from cocotb_tools.runner import get_runner
     runner = get_runner("icarus")
+    log_file = str(build_dir / "sim.log")
     runner.build(sources=[str(s) for s in sources], hdl_toplevel=hdl_toplevel,
-                build_dir=str(build_dir), waves=False, timescale=timescale)
+                build_dir=str(build_dir), waves=False, timescale=timescale,
+                log_file=log_file)
     try:
         # cocotb_tools.runner.test() itself does sys.exit(1) when any test
         # in the run FAILED (mirroring a CLI tool's own exit code) - by the
@@ -110,7 +122,8 @@ def run_cocotb(build_dir: Path, test_dir: Path, sources: list[Path],
         # itself rather than trusting a bare return code either way.
         return runner.test(hdl_toplevel=hdl_toplevel, test_module=test_modules_,
                            test_dir=str(test_dir), build_dir=str(build_dir),
-                           results_xml=str(results_xml), waves=False)
+                           results_xml=str(results_xml), waves=False,
+                           log_file=log_file)
     except SystemExit:
         return Path(results_xml)
 
