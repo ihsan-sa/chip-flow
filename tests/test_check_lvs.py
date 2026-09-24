@@ -110,3 +110,16 @@ def test_match_passes(tmp_path, monkeypatch, capsys):
     assert code == 0, out
     assert out["status"] == "pass"
     assert out["matched"] is True
+
+    # Regression: report_path/lvs_script used to be written straight into
+    # harden/runs/run/final/, the exact tree the "harden" artifact-kind's
+    # dir_text hash recursively covers (invalidation.yaml) - a write there
+    # staled every OTHER gate that also reads "harden". They must land under
+    # ws/log/lvs_work/ instead, and final/ must stay exactly what harden
+    # itself produced (spice/, pnl/ only, from make_ws above).
+    final_dir = ws / "harden" / "runs" / "run" / "final"
+    assert sorted(p.name for p in final_dir.iterdir()) == ["pnl", "spice"], \
+        "check_lvs wrote a scratch/report file into final_dir"
+    work_dir = ws / "log" / "lvs_work"
+    assert any(work_dir.glob(".lvs_check_*")), \
+        "expected check_lvs's scratch files under ws/log/lvs_work/"

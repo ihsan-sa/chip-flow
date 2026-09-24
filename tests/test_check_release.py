@@ -88,7 +88,7 @@ def test_release_records_tool_and_version_per_gate(tmp_path, capsys):
     checks_doc = json.loads((ws / "reports" / "checks.json").read_text())
     by_gate = {c["gate"]: c for c in checks_doc["checks"]}
     assert by_gate["formal"]["tool"] == "formal"     # a real, built gate
-    assert by_gate["harden"]["tool"] == "stub"        # not yet built
+    assert by_gate["harden"]["tool"] == "harden"      # M4: built, no longer a stub
     assert by_gate["release"]["tool"] == "release"    # release itself
     assert all(c["version"] == checklib.CHECKER_VERSION
               for c in checks_doc["checks"])

@@ -120,3 +120,34 @@ def test_run_end_to_end_fails_on_nonzero_counts(tmp_path, monkeypatch, capsys):
     assert out["status"] == "violations"
     kinds = {v["kind"] for v in out["violations"]}
     assert kinds == {"magic_drc_violation", "klayout_drc_violation"}
+
+
+def test_run_never_passes_final_dir_as_the_scratch_workdir(tmp_path, monkeypatch, capsys):
+    # Regression: run_magic_drc/run_klayout_drc's scratch/report files used
+    # to land in harden/runs/run/final/, the exact tree the "harden"
+    # artifact-kind's dir_text hash recursively covers (invalidation.yaml) -
+    # any write there staled every OTHER gate that also reads "harden".
+    # run() must hand them a workdir under ws/log/, never final_dir.
+    ws = make_ws(tmp_path)
+    final_dir = ws / "harden" / "runs" / "run" / "final"
+    seen = {}
+
+    def fake_magic(gds, top, workdir):
+        seen["magic"] = workdir
+        return 0
+
+    def fake_klayout(gds, top, pdk, workdir):
+        seen["klayout"] = workdir
+        return 0
+
+    monkeypatch.setattr(check_drc, "run_magic_drc", fake_magic)
+    monkeypatch.setattr(check_drc, "run_klayout_drc", fake_klayout)
+    monkeypatch.setattr(check_drc, "_pdk_root", lambda: Path("/fake/toolchain/foss/pdks"))
+
+    code = check_drc.main(["--workspace", str(ws)])
+    assert code == 0, json.loads(capsys.readouterr().out)
+    for tool, workdir in seen.items():
+        assert final_dir not in workdir.parents and workdir != final_dir, \
+            f"{tool}: workdir {workdir} is inside final_dir {final_dir}"
+        assert (ws / "log") in workdir.parents or workdir == ws / "log", \
+            f"{tool}: workdir {workdir} is not under ws/log/"

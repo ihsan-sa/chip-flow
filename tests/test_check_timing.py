@@ -111,3 +111,16 @@ def test_all_corners_positive_slack_pass(tmp_path, monkeypatch, capsys):
     assert code == 0, out
     assert out["status"] == "pass"
     assert len(out["corners"]) == 2
+
+    # Regression: the per-corner .sta_<corner>.tcl scratch file used to be
+    # written straight into harden/runs/run/final/, the exact tree the
+    # "harden" artifact-kind's dir_text hash recursively covers
+    # (invalidation.yaml) - a write there staled every OTHER gate that also
+    # reads "harden". It must land under ws/log/timing_work/ instead, and
+    # final/ must stay exactly what harden itself produced (nothing new).
+    final_dir = ws / "harden" / "runs" / "run" / "final"
+    assert not list(final_dir.glob(".sta_*")), \
+        "check_timing wrote a scratch file into final_dir"
+    work_dir = ws / "log" / "timing_work"
+    assert len(list(work_dir.glob(".sta_*.tcl"))) == 2, \
+        "expected one .sta_<corner>.tcl per corner under ws/log/timing_work/"

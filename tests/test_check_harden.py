@@ -261,8 +261,28 @@ def test_harden_job_killed_halfway_reports_dead_then_restart_finishes_and_signof
     state = _json.loads((ws / "state.json").read_text(encoding="utf-8"))
     assert state["gates"]["harden"]["status"] == "pass", state["gates"].get("harden")
 
+    # Regression for a real bug: timing/drc/lvs each once wrote their own
+    # scratch/report files straight into harden/runs/run/final/, the exact
+    # tree the "harden" artifact-kind's dir_text hash recursively covers
+    # (invalidation.yaml). Any gate's own bookkeeping writes there silently
+    # mutated that hash for every OTHER gate that also depends on "harden"
+    # (drc, lvs, glsim, precheck, release), staling a sibling's already-
+    # recorded pass even though it genuinely ran - surfaced only by a real
+    # `release` run failing with "stale: input changed... (harden)" right
+    # after every individual gate had just passed. Snapshotting the hash
+    # around each real run below fails the moment any of them regresses to
+    # writing inside harden/ again, without needing a full release run.
+    import statelib
+    imap = statelib.load_map()
     for mod, name in ((check_timing, "timing"), (check_drc, "drc"),
                      (check_lvs, "lvs"), (check_glsim, "glsim"),
                      (check_precheck, "precheck")):
+        _, before = statelib.hash_kind(ws, "harden", imap)
         payload, _out = mod.run(["--workspace", str(ws)])
         assert payload["status"] == "pass", f"{name}: {payload}"
+        _, after = statelib.hash_kind(ws, "harden", imap)
+        assert after == before, (
+            f"{name}: running this gate changed the 'harden' artifact-kind "
+            "hash - it wrote a scratch/report file inside harden/ instead "
+            "of ws/log/<gate>_work/, which would falsely stale every "
+            "sibling gate that also reads 'harden'")
