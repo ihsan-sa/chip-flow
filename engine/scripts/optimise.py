@@ -55,7 +55,28 @@ the end, rather than per intermediate trial the way the digital loop's own
 git-revert does. Every evaluation still gets its own logged trials.tsv row
 (trial, timestamp, param values' own sha, each declared measure's margin,
 score, kept, note) - kept is true only for trial 0 (if nothing better was
-found) or the very last row (the written winner).
+found) or the very last row (the written winner). Each row is appended and
+flushed to disk the moment its own trial finishes, never buffered in
+memory and written once at the end - a search calls its objective hundreds
+of times over real ngspice runs and can run for minutes, and a crash or a
+kill partway through must not cost every trial that already ran.
+
+WINNER, FULL CORNER SET (section 4: "Every K-th kept trial and the winner
+run the full corner set" - only the winner's own half, here): every trial
+during the search itself scores ONLY at 'tt' (the cheap evaluator, section
+4: "the spec bench at typical") - once the search concludes, `numeric`
+also runs the kept sizing (whatever is now on disk, winner or unchanged
+start) through sim_run.run_workspace_benches over the FULL corner set
+spec.yaml's own `corners` field expands to (check_sim_pvt.corner_names_
+for_spec - the identical corner set a real `sim_pvt` gate run would use),
+logs ONE more trials.tsv row for it ("winner, full corner set"), and
+reports `full_corner_pass`/`full_corner_corners`/`full_corner_violations`
+in the payload - a winner that only holds at typical (gates.yaml's own
+sim_pvt fault: "meets at typical, loses headroom at slow and hot") is now
+always visible here, not only if a caller separately chases `numeric` with
+its own `sim_pvt` gate step. `status` itself stays keyed on the tt-only
+evaluator alone (the DAC's own M8 done-criterion is typical-only, unlike
+the mirror's) - full_corner_pass is reported, never gates it.
 """
 from __future__ import annotations
 
@@ -72,6 +93,7 @@ ENGINE = SCRIPTS.parent
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(ENGINE / "lib"))
 import checklib  # noqa: E402
+import check_sim_pvt  # noqa: E402
 import corners as corners_mod  # noqa: E402
 import sim_run  # noqa: E402
 import simlib  # noqa: E402
@@ -173,6 +195,29 @@ def score_sizing(ws: Path, eda_bin: Path, t_root: Path, netlist_path: Path,
     return worst if worst is not None else MISSING_MEASURE_PENALTY
 
 
+def full_corner_margin(results: list[dict],
+                       benches: list[tuple[Path, str, list[dict]]]) -> float:
+    """The same worst-margin scalar score_sizing computes per trial, but
+    over sim_run.run_workspace_benches()'s own per-corner `results` (the
+    winner's full-corner check, run_numeric, after the search concludes) -
+    logged as that check's own trials.tsv score; the pass/fail call itself
+    is `results`' own `violations`, not this number."""
+    bounds_by_bench = {bench_path.name: bounds for bench_path, _text, bounds
+                       in benches}
+    worst = None
+    for r in results:
+        if r["engine_errors"]:
+            worst = MISSING_MEASURE_PENALTY if worst is None \
+                   else min(worst, MISSING_MEASURE_PENALTY)
+            continue
+        for b in bounds_by_bench.get(r["bench"], []):
+            key = b["measure"].lower()
+            m = (measure_margin(r["measures"][key], b) if key in r["measures"]
+                else MISSING_MEASURE_PENALTY)
+            worst = m if worst is None else min(worst, m)
+    return worst if worst is not None else MISSING_MEASURE_PENALTY
+
+
 def run_start(argv=None):
     ap = argparse.ArgumentParser(description="freeze the evaluator")
     ap.add_argument("--workspace", required=True)
@@ -252,7 +297,16 @@ def run_numeric(argv=None):
 
     tsv_path = ws / TSV_PATH
     tsv_path.parent.mkdir(parents=True, exist_ok=True)
-    tsv_rows: list[dict] = []
+    # Appended and flushed ONE ROW AT A TIME (never buffered in memory and
+    # written once at the end): a DE search calls its objective hundreds of
+    # times over real ngspice runs and can run for minutes - a crash, a
+    # --wall timeout, or this process getting killed partway through used
+    # to leave trials.tsv holding only `start`'s own header, every trial
+    # that already ran lost with it. "Every evaluation still gets its own
+    # logged trials.tsv row" (this module's own docstring) means on disk as
+    # it happens, not "eventually, if the run finishes clean".
+    tsv_file = open(tsv_path, "a", newline="", encoding="utf-8")
+    tsv_writer = csv.DictWriter(tsv_file, fieldnames=TSV_FIELDS, delimiter="\t")
     trial_counter = {"n": 0}
     best = {"score": None, "sizing": None}
 
@@ -260,14 +314,18 @@ def run_numeric(argv=None):
         return {n: {"value": float(v), "min": start_sizing[n]["min"],
                    "max": start_sizing[n]["max"]} for n, v in zip(names, x)}
 
+    def write_row(trial: int, sizing: dict, score: float, kept: bool, note: str) -> None:
+        tsv_writer.writerow({"trial": trial, "timestamp": round(time.time(), 3),
+                             "target_sha": target_sha(sizing), "score": round(score, 6),
+                             "kept": kept, "note": note})
+        tsv_file.flush()
+
     def record(sizing: dict, score: float, note: str) -> None:
         n = trial_counter["n"]
         kept = best["score"] is None or score > best["score"]
         if kept:
             best["score"], best["sizing"] = score, sizing
-        tsv_rows.append({"trial": n, "timestamp": round(time.time(), 3),
-                         "target_sha": target_sha(sizing), "score": round(score, 6),
-                         "kept": kept, "note": note})
+        write_row(n, sizing, score, kept, note)
         trial_counter["n"] += 1
 
     # trial 0: the deliberately-wrong starting sizing, scored the same way
@@ -286,28 +344,65 @@ def run_numeric(argv=None):
         record(sizing, score, "differential_evolution")
         return -score  # scipy minimizes; this loop maximizes margin
 
-    result = differential_evolution(
-        objective, bounds_arr, seed=args.seed, popsize=args.popsize,
-        maxiter=args.maxiter, polish=False, tol=1e-3)
+    try:
+        result = differential_evolution(
+            objective, bounds_arr, seed=args.seed, popsize=args.popsize,
+            maxiter=args.maxiter, polish=False, tol=1e-3)
 
-    improved = best["sizing"] is not start_sizing and best["score"] > start_score
-    if improved:
-        write_sizing_yaml(target_path, best["sizing"])
-    # else: nothing beat the start - the file is left exactly as it was
-    # (the digital loop's own "otherwise git reverts it", applied once).
-    kept_final = best["sizing"] if improved else start_sizing
+        improved = best["sizing"] is not start_sizing and best["score"] > start_score
+        if improved:
+            write_sizing_yaml(target_path, best["sizing"])
+        # else: nothing beat the start - the file is left exactly as it was
+        # (the digital loop's own "otherwise git reverts it", applied once).
+        kept_final = best["sizing"] if improved else start_sizing
 
-    with open(tsv_path, "a", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=TSV_FIELDS, delimiter="\t")
-        for row in tsv_rows:  # `start`'s own write left only the header
-            w.writerow(row)
+        # The winner run[s] the full corner set (design.md 4) - not just
+        # the tt-only evaluator every trial above used for speed. A winner
+        # that only looks good at typical (gates.yaml's own sim_pvt fault:
+        # "meets at typical, loses headroom at slow and hot") used to ship
+        # straight to disk with nothing here ever checking another corner;
+        # a caller running `optimise.py numeric` on its own, without also
+        # chasing it with a separate `sim_pvt` gate step, would never find
+        # out. `kept_final` is already ON DISK at this point either way
+        # (write_sizing_yaml above, or untouched from `start` otherwise),
+        # so this is the exact same corner set/sizing a real sim_pvt gate
+        # run would score - reusing sim_run.run_workspace_benches directly,
+        # never a re-implementation of it.
+        default_names = [c["name"] for c in
+                         corners_mod.default_corners(corners_mod.load())]
+        full_corner_names = check_sim_pvt.corner_names_for_spec(spec, default_names)
+        full_corner = sim_run.run_workspace_benches(
+            ws, eda_bin=eda_bin, corner_names=full_corner_names,
+            timeout=args.timeout, check="sim_pvt")
+        full_corner_pass = not full_corner["violations"]
+        write_row(trial_counter["n"], kept_final,
+                 full_corner_margin(full_corner["results"], benches),
+                 full_corner_pass, "winner, full corner set")
+        trial_counter["n"] += 1
+    finally:
+        tsv_file.close()
 
+    # status stays keyed on the tt-only evaluator alone (design.md 4: "an
+    # evaluator that is the spec bench at typical" - and the M8 done
+    # criteria name full-corner sim_pvt success for the MIRROR rung only,
+    # never the DAC's own optimise done-criterion, which is typical-only
+    # by design). full_corner_pass is reported, not gated on: a winner
+    # that only holds at typical is now always visible in the payload/TSV
+    # (this finding's own point) rather than silently unchecked, but a
+    # corpus rung whose own bounds were never written to be corner-
+    # tolerant (r2r_dac's a known case: an absolute-volt bound against a
+    # ratiometric divider with a +-10% VDD sweep) does not regress a
+    # `numeric` run that otherwise met its documented scope.
     all_in_bounds = best["score"] is not None and best["score"] >= 0
     payload = {
-        "script": SCRIPT, "status": "pass" if all_in_bounds else "violations",
+        "script": SCRIPT,
+        "status": "pass" if all_in_bounds else "violations",
         "trials": trial_counter["n"], "start_score": round(start_score, 6),
         "best_score": round(best["score"], 6) if best["score"] is not None else None,
         "improved": improved, "written": improved, "kept_sizing": kept_final,
+        "full_corner_pass": full_corner_pass,
+        "full_corner_corners": full_corner["corners"],
+        "full_corner_violations": full_corner["violations"],
         "tsv": str(tsv_path), "scipy_message": result.message,
     }
     return payload, args.out

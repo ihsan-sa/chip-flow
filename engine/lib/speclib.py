@@ -164,6 +164,70 @@ def lint_spec_ade(spec: dict, rel_path: str = "spec/spec.yaml") -> list[dict]:
     return out
 
 
+def lint_measures_vs_bench_bounds(spec: dict, bench_bounds: dict[str, list[dict]],
+                                  rel_path: str = "spec/spec.yaml") -> list[dict]:
+    """Cross-check spec.yaml's own `measures:` list against every tb/*.bounds.json
+    sidecar's own measure names. design.md 1.3: "The bench-writer, in fresh
+    context, writes tb/*.cir ... and a .bounds.json sidecar per bench" -
+    independently of spec.yaml, so the two declarations of "what gets
+    measured, with what bound" can silently drift apart with nothing
+    catching it: a spec measure no bench ever scores (a requirement sim_pvt
+    never actually checks, at any corner, yet the spec claims it is
+    covered) or a bench bound the spec never named (scored and enforced
+    every run, but not a declared requirement at all - undeclared scope no
+    reviewer reading spec.yaml alone would ever see). gates.yaml's ade
+    spec_lint row fault ("a measure without bounds") widened one notch:
+    a measure without a BENCH bound is the same failure shape, and so is
+    its mirror.
+
+    `bench_bounds` is {bench filename: [bounds sidecar entries, already
+    simlib.load_bounds()-validated]} - built by the caller (this module
+    never touches the filesystem or imports sim_run/simlib, kept a plain
+    lib/scripts boundary same as the rest of this file); an empty dict
+    (no benches written yet - spec_lint runs right after spec-writer,
+    before any bench-writer step in skills/ade/reference/tasks.yaml's own
+    `spec` verb) means nothing to reconcile against yet, not a violation."""
+    from checklib import violation
+
+    out: list[dict] = []
+    if not bench_bounds:
+        return out
+
+    measures = spec.get("measures")
+    if not isinstance(measures, list):
+        return out  # lint_spec_ade's own no_measures violation covers this
+
+    def bad(kind: str, msg: str, refs=None, severity="error"):
+        out.append(violation("spec_lint", severity, rel_path, None, kind,
+                             refs or [], msg, "speclib"))
+
+    spec_names = {m["name"] for m in measures
+                 if isinstance(m, dict) and isinstance(m.get("name"), str)
+                 and m["name"].strip()}
+    bench_names: dict[str, list[str]] = {}
+    for bench_name, bounds in bench_bounds.items():
+        for b in bounds:
+            name = b.get("measure")
+            if isinstance(name, str) and name.strip():
+                bench_names.setdefault(name, []).append(bench_name)
+
+    for name in sorted(spec_names - bench_names.keys()):
+        bad("measure_no_bench_bound",
+           f"measure {name!r} is declared in spec.yaml's 'measures' but no "
+           "tb/*.bounds.json sidecar scores it - a requirement with "
+           "nothing actually checking it", refs=[name])
+
+    for name in sorted(bench_names.keys() - spec_names):
+        benches = ", ".join(sorted(set(bench_names[name])))
+        bad("bench_bound_no_spec_measure",
+           f"measure {name!r} has a tb/*.bounds.json bound ({benches}) but "
+           "spec.yaml's own 'measures' list never declares it - an "
+           "undeclared requirement being silently enforced every run",
+           refs=[name])
+
+    return out
+
+
 def load_spec(path: Path) -> dict:
     """Parse spec.yaml. Anything that is not a YAML mapping raises - a lint
     violation needs a dict to report fields against, so a malformed file is

@@ -132,3 +132,54 @@ def test_ade_lint_does_not_require_requirements():
     spec = dict(GOOD_SPEC)
     assert "requirements" not in spec
     assert speclib.lint_spec_ade(spec) == []
+
+
+# --------------------------------------------- lint_measures_vs_bench_bounds
+# The bench-writer works in fresh context (docs/design.md 1.3) and writes
+# tb/*.bounds.json independently of spec.yaml's own 'measures' list - these
+# two declarations of "what gets checked" can drift apart with nothing else
+# catching it.
+
+def test_no_bench_bounds_yet_is_not_a_violation():
+    # right after spec-writer runs, before any bench-writer step - nothing
+    # to reconcile against yet is the ordinary state, not a fault.
+    assert speclib.lint_measures_vs_bench_bounds(GOOD_SPEC, {}) == []
+
+
+def test_matching_spec_and_bench_measures_is_clean():
+    bench_bounds = {"mirror_tb.cir": [{"measure": "iout_ratio", "min": 1.8, "max": 2.2}]}
+    assert speclib.lint_measures_vs_bench_bounds(GOOD_SPEC, bench_bounds) == []
+
+
+def test_spec_measure_with_no_bench_bound_is_a_violation():
+    # spec.yaml declares 'iout_ratio' but no tb/*.bounds.json sidecar
+    # scores it - a requirement nothing actually checks.
+    violations = speclib.lint_measures_vs_bench_bounds(GOOD_SPEC, {})
+    assert violations == []  # {} means "no benches yet", not this case
+    bench_bounds = {"mirror_tb.cir": [{"measure": "some_other_measure", "min": 1}]}
+    violations = speclib.lint_measures_vs_bench_bounds(GOOD_SPEC, bench_bounds)
+    kinds = {v["kind"] for v in violations}
+    assert "measure_no_bench_bound" in kinds
+    v = next(v for v in violations if v["kind"] == "measure_no_bench_bound")
+    assert v["refs"] == ["iout_ratio"]
+
+
+def test_bench_bound_with_no_spec_measure_is_a_violation():
+    # the reverse: tb/*.bounds.json scores and enforces a measure spec.yaml
+    # never declares - an undeclared requirement silently enforced.
+    bench_bounds = {"mirror_tb.cir": [
+        {"measure": "iout_ratio", "min": 1.8, "max": 2.2},
+        {"measure": "extra_measure", "min": 0, "max": 1},
+    ]}
+    violations = speclib.lint_measures_vs_bench_bounds(GOOD_SPEC, bench_bounds)
+    kinds = {v["kind"] for v in violations}
+    assert "bench_bound_no_spec_measure" in kinds
+    v = next(v for v in violations if v["kind"] == "bench_bound_no_spec_measure")
+    assert v["refs"] == ["extra_measure"]
+
+
+def test_both_directions_can_fire_at_once():
+    bench_bounds = {"mirror_tb.cir": [{"measure": "extra_measure", "min": 0, "max": 1}]}
+    kinds = {v["kind"] for v in
+            speclib.lint_measures_vs_bench_bounds(GOOD_SPEC, bench_bounds)}
+    assert kinds == {"measure_no_bench_bound", "bench_bound_no_spec_measure"}

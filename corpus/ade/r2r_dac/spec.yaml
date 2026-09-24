@@ -1,7 +1,7 @@
 top: r2r_dac
 supply:
   vdd: 3.3
-devices: [rmsb, rlsb]
+devices: [xrmsb, xr2lsb, xrlsb, xr2msb]
 corners: default
 measures:
   - name: vout_lsb

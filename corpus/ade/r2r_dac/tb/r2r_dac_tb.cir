@@ -1,14 +1,20 @@
 * r2r_dac_tb.cir - the r2r_dac bench (docs/design.md 1.3/5's .bounds.json
 * sidecar shape, section 4's optimise target, "### M8."). {{PDK}}/{{CORNER}}/
-* {{TEMP_C}}/{{VDD}}/{{NETLIST}}/{{SIZING}} are sim_run.py's own deck
-* placeholders (engine/lib/simlib.py:materialize). {{SIZING}} must land
-* BEFORE the `xdac` instantiation line below: it is a `.param r_unit=...
-* r2_unit=...` line (engine/lib/simlib.py:sizing_param_line) that `xdac`'s
-* own `r_unit={r_unit} r2_unit={r2_unit}` args reference as bare globals -
-* with no sizing/sizing.yaml present those names are undefined and ngspice
-* refuses the deck outright (confirmed empirically - never trust that a
-* missing override silently falls back to the subckt's own default; it
-* does not, once the CALLER explicitly names the param).
+* {{RES_CORNER}}/{{TEMP_C}}/{{VDD}}/{{NETLIST}}/{{SIZING}} are sim_run.py's
+* own deck placeholders (engine/lib/simlib.py:materialize). {{RES_CORNER}}
+* (sim_run.py's RES_LIB_SECTION) is a SECOND `.lib` section, separate from
+* {{CORNER}}'s transistor one: this PDK keeps a passive device's sheet
+* resistance (rm1's own `r_rsh0=rsh_rm1` default) in its own
+* `.lib res_<corner> ... .endl` block, and rm1 never resolves without it
+* (netlist/r2r_dac.cir's own comment has the confirmed error and the fix).
+* {{SIZING}} must land BEFORE the `xdac` instantiation line below: it is a
+* `.param r_length=... r2_length=...` line (engine/lib/simlib.py:
+* sizing_param_line) that `xdac`'s own `r_length={r_length}
+* r2_length={r2_length}` args reference as bare globals - with no
+* sizing/sizing.yaml present those names are undefined and ngspice refuses
+* the deck outright (confirmed empirically - never trust that a missing
+* override silently falls back to the subckt's own default; it does not,
+* once the CALLER explicitly names the param).
 *
 * Operating-point start, no `uic`: same reasoning as corpus/ade/mirror's
 * own bench - though this ladder is pure resistors (no active devices, no
@@ -21,6 +27,7 @@
 * an unloaded R2R ladder at code 00 is trivially 0V either way).
 .include '{{PDK}}/libs.tech/ngspice/design.spice'
 .lib '{{PDK}}/libs.tech/ngspice/sm141064.spice' {{CORNER}}
+.lib '{{PDK}}/libs.tech/ngspice/sm141064.spice' {{RES_CORNER}}
 .temp {{TEMP_C}}
 {{SIZING}}
 .include '{{NETLIST}}'
@@ -28,7 +35,7 @@
 vdd_src vdd 0 {{VDD}}
 vbmsb bmsb 0 PWL(0 0 19.9n 0 20n {{VDD}} 40n {{VDD}})
 vblsb blsb 0 PWL(0 0 9.9n 0 10n {{VDD}} 19.9n {{VDD}} 20n 0 29.9n 0 30n {{VDD}} 40n {{VDD}})
-xdac bmsb blsb vout r2r_dac r_unit={r_unit} r2_unit={r2_unit}
+xdac bmsb blsb vout r2r_dac r_length={r_length} r2_length={r2_length}
 
 .tran 0.1n 40n
 .measure tran vout_lsb  FIND v(vout) AT=15n

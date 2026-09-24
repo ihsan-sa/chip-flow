@@ -15,13 +15,18 @@ reads the resulting divided voltage - measured empirically on this design
 
 ## Interface
 
-`r2r_dac(bmsb, blsb, vout, r_unit=..., r2_unit=...)` - `r_unit`/`r2_unit`
-are the R and 2R leg values, a plain ngspice `R` element each (not this
-PDK's `rm1` resistor subcircuit - see netlist/r2r_dac.cir's own comment on
-why: `rm1`'s corner-dependent sheet resistance did not resolve inside a
-further-nested subcircuit call on this box, and this rung's own point - a
-wrong RATIO breaking the transfer function, then the sizing loop fixing it
-- only needs a real, tunable resistor VALUE, not this PDK's physical model).
+`r2r_dac(bmsb, blsb, vout, r_length=..., r2_length=...)` - each leg is this
+PDK's own `rm1` poly resistor (`devices: [xrmsb, xr2lsb, xrlsb, xr2msb]`
+in spec.yaml, real gf180mcu_fd_pr instantiations netlist_lint checks
+against, not a plain ngspice `R` element with a bare numeric value - see
+netlist/r2r_dac.cir's own comment for the earlier version of this rung and
+why it changed). `r_length`/`r2_length` are the R/2R leg lengths (meters)
+at a shared, fixed width; the R:2R ratio the transfer function depends on
+is the length ratio (rm1's sheet resistance cancels out of it regardless
+of corner), which is also why `corners: default`'s 5-corner sweep passes
+identically at every corner - a real, corner-dependent device whose
+ratio-based design is meant to reject that dependence, not a claim with
+nothing behind it.
 
 ## Requirement, and this rung's own twist
 
