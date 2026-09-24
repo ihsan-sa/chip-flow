@@ -33,7 +33,8 @@ Schema (version 3):
                            stale: [mark]?}},
       "open_issues": [{id, gate, phase, fixer, kinds[], severity, count,
                        work_order, status: open|fixing|fixed|escalated|
-                       waived, agent, attempts, opened, closed}],
+                       waived, agent, attempts, opened, closed,
+                       note?, approved_by?}],
       "next_issue_id": int, "next_job_id": int,
       "budgets": {"fix_loops": {gate_name: remaining}, ...},
       "decisions": [{what, why, phase, ts}],
@@ -65,6 +66,7 @@ CLI (docs/design.md 1.1 script contract: argparse, JSON to stdout, exit 0 ok
     state.py decision --what W --why Y ...
     state.py human --checkpoint H1 --status approved [--note N] ...
     state.py issue --id 3 --status fixed [--agent fixer-1] [--bump-attempts] ...
+    state.py issue --id 3 --status waived --note TEXT --approved-by WHO ...
     state.py budget --path fix_loops.lint [--consume] ...
     state.py log --event name [--data JSON] ...
     state.py snapshot --label L [--files F ...] / restore --label L ...
@@ -610,18 +612,33 @@ class State:
         return rec
 
     def update_issue(self, iid: int, status: str | None = None,
-                     agent: str | None = None, bump: bool = False) -> dict:
+                     agent: str | None = None, bump: bool = False,
+                     note: str | None = None,
+                     approved_by: str | None = None) -> dict:
         for rec in self.data["open_issues"]:
             if rec["id"] == iid:
                 if status:
                     if status not in ("open", "fixing", "fixed", "escalated",
                                       "waived"):
                         raise CheckError(f"bad issue status {status!r}")
+                    if status == "waived" and not (
+                            (note or rec.get("note"))
+                            and (approved_by or rec.get("approved_by"))):
+                        raise CheckError(
+                            "issue --status waived requires --note and "
+                            "--approved-by: a waiver that closes an issue "
+                            "with no recorded reason and no recorded "
+                            "approver is exactly the silent-waive this "
+                            "field pair exists to refuse")
                     rec["status"] = status
                     if status in ("fixed", "waived"):
                         rec["closed"] = now()
                 if agent:
                     rec["agent"] = agent
+                if note is not None:
+                    rec["note"] = note
+                if approved_by is not None:
+                    rec["approved_by"] = approved_by
                 if bump:
                     rec["attempts"] += 1
                 self._log("issue", id=iid, status=rec["status"],
@@ -964,6 +981,9 @@ def run(argv=None):
     p.add_argument("--status")
     p.add_argument("--agent")
     p.add_argument("--bump-attempts", action="store_true")
+    p.add_argument("--note", help="required with --status waived: why")
+    p.add_argument("--approved-by", dest="approved_by",
+                   help="required with --status waived: who")
 
     p = sub.add_parser("budget")
     common(p)
@@ -1079,7 +1099,8 @@ def _mutate(st: "State", args, result: dict):
         result.update(checkpoint=args.checkpoint, status=args.status)
     elif args.cmd == "issue":
         rec = st.update_issue(args.id, args.status, args.agent,
-                              args.bump_attempts)
+                              args.bump_attempts, args.note,
+                              args.approved_by)
         result.update(issue=rec)
     elif args.cmd == "budget":
         remaining = st.budget(args.bpath, args.consume)

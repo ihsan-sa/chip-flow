@@ -251,9 +251,18 @@ def build(ws: Path, max_report_age_h: float = 24.0) -> tuple[dict | None, list[s
     # resolved - it is the fix loop's own outcome for a finding a human
     # has to decide on, and release refusing to notice one would be
     # exactly the silent-failure class docs/design.md section 2 exists to
-    # answer. Only "fixed"/"waived" are genuinely closed.
+    # answer. Only "fixed"/"waived" are genuinely closed - and a "waived"
+    # issue only counts as closed when state.py's own --note/--approved-by
+    # requirement is actually satisfied on the record (M5, found the hard
+    # way: `issue --status waived` used to close one with neither):
+    # trusting the status LABEL alone here would let a hand-edited
+    # state.json, or a waiver written before that requirement landed,
+    # close an issue with no recorded reason or approver, which is exactly
+    # the kind of gap release exists to refuse.
     open_issues = [i for i in data.get("open_issues", [])
-                   if i.get("status") in ("open", "fixing", "escalated")]
+                   if i.get("status") in ("open", "fixing", "escalated")
+                   or (i.get("status") == "waived"
+                       and not (i.get("note") and i.get("approved_by")))]
     if open_issues:
         problems.append(f"{len(open_issues)} open issue(s) unresolved")
     if problems:

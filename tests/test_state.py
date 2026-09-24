@@ -119,6 +119,60 @@ def test_ws_empty_init_edit_freshness_resume(tmp_path):
     assert r5["gates_stale"] == ["lint"]
 
 
+def test_resume_summary_open_issues_includes_escalated_not_fixed_or_waived(tmp_path):
+    """Same rule as attest.py's build() and task_router.py's resume_view
+    (M5, found running the fix loop for real): a resumed session must still
+    see an escalated (human-decision-pending) issue, but not one genuinely
+    closed as fixed or (properly) waived."""
+    ws = ws_empty(tmp_path)
+    st = state_mod.State.init(ws, "vde", "counter8")
+    a = st.open_issue({"gate": "mutate", "fixer": "testbench"})
+    b = st.open_issue({"gate": "lint", "fixer": "rtl"})
+    c = st.open_issue({"gate": "cover", "fixer": "testbench"})
+    st.update_issue(a["id"], status="escalated")
+    st.update_issue(b["id"], status="fixed")
+    st.update_issue(c["id"], status="waived", note="x", approved_by="alice")
+    st.save()
+    summary = st.resume_summary()
+    ids = {i["id"] for i in summary["open_issues"]}
+    assert ids == {a["id"]}
+
+
+def test_formal_gate_hash_covers_a_spec_yaml_depth_edit(tmp_path):
+    """invalidation.yaml's `formal: [rtl, formal, spec_yaml]` (M5 - commit
+    "invalidation: formal's own depth is a real gate input"):
+    check_formal.py reads spec.yaml's own `formal: {depth}` field too, so a
+    depth-only edit - no file under rtl/ or formal/ touched at all - must
+    still show up as an input-hash change on the `formal` gate. Without
+    spec_yaml in this gate's own input list, a recorded pass would keep
+    reading fresh after the depth it actually ran against had moved."""
+    ws = ws_empty(tmp_path)
+    state_mod.run(["init", "--workspace", str(ws), "--skill", "vde",
+                  "--block", "counter8"])
+    (ws / "spec" / "spec.yaml").write_text(
+        "top: counter8\nrequirements: []\nformal:\n  depth: 20\n",
+        encoding="utf-8")
+    (ws / "formal" / "counter8_formal.sv").write_text("// wrapper\n",
+                                                       encoding="utf-8")
+    (ws / "rtl" / "counter8.v").write_text("module counter8; endmodule\n",
+                                           encoding="utf-8")
+    result_path = ws / "formal-result.json"
+    result_path.write_text(json.dumps({"status": "pass", "failing_count": 0,
+                                       "counts": {"total": 0}}),
+                           encoding="utf-8")
+    state_mod.run(["record-gate", "--workspace", str(ws), "--gate", "formal",
+                  "--result", str(result_path)])
+    fresh_before, _ = state_mod.run(["freshness", "--workspace", str(ws)])
+    assert fresh_before["gates"]["formal"]["fresh"] is True
+
+    (ws / "spec" / "spec.yaml").write_text(
+        "top: counter8\nrequirements: []\nformal:\n  depth: 40\n",
+        encoding="utf-8")
+    fresh_after, _ = state_mod.run(["freshness", "--workspace", str(ws)])
+    assert fresh_after["gates"]["formal"]["hash_valid"] is False
+    assert "spec_yaml" in fresh_after["gates"]["formal"]["changed_inputs"]
+
+
 # --------------------------------------------------------- gate recording
 
 def test_record_gate_requires_pass_or_fail(tmp_path):
@@ -276,6 +330,80 @@ def test_snapshot_refuses_state_json_itself(tmp_path):
     st = state_mod.State.load(ws / "state.json")
     with pytest.raises(safelib.ContainmentError):
         st.snapshot("bad", files=["state.json"])
+
+
+def test_snapshot_default_expands_directory_artifacts_into_files(tmp_path):
+    """M5, found running the fix loop for real: a directory-kind artifact
+    (rtl/, tb/, formal/, holdout/, ...) used to protect NOTHING under a
+    bare `snapshot` with no explicit --files, because _default_snapshot_rels
+    only ever checked is_file() - true for zero of /vde's own design
+    artifacts. A default snapshot must expand every registered directory
+    artifact to the files it actually contains, and skip a bytecode cache
+    the design never wrote."""
+    ws = ws_empty(tmp_path)
+    state_mod.State.init(ws, "vde", "counter8")
+    (ws / "rtl" / "counter8.v").write_text("v1\n", encoding="utf-8")
+    (ws / "rtl" / "sub").mkdir()
+    (ws / "rtl" / "sub" / "helper.v").write_text("h1\n", encoding="utf-8")
+    pycache = ws / "rtl" / "__pycache__"
+    pycache.mkdir()
+    (pycache / "x.pyc").write_bytes(b"junk")
+
+    st = state_mod.State.load(ws / "state.json")
+    st.set_artifact("rtl", "rtl")
+    st.save()
+
+    st = state_mod.State.load(ws / "state.json")
+    out = st.snapshot("pre-fix-dir")
+    st.save()
+
+    paths = {f["path"] for f in out["files"]}
+    assert "rtl/counter8.v" in paths
+    assert "rtl/sub/helper.v" in paths
+    assert not any("__pycache__" in p or p.endswith(".pyc") for p in paths)
+
+    (ws / "rtl" / "counter8.v").write_text("v2 - broken\n", encoding="utf-8")
+    st = state_mod.State.load(ws / "state.json")
+    restored = st.restore("pre-fix-dir")
+    st.save()
+    assert "rtl/counter8.v" in restored["restored"]
+    assert (ws / "rtl" / "counter8.v").read_text(encoding="utf-8") == "v1\n"
+
+
+# ------------------------------------------------------------------ issues
+
+def test_issue_waived_requires_note_and_approved_by(tmp_path):
+    """A waiver that closes an issue with no recorded reason and no
+    recorded approver is exactly the silent-waive the fix loop's own rule
+    (no path may skip/waive/close a gate or issue without a recorded,
+    approved reason) refuses."""
+    ws = ws_empty(tmp_path)
+    st = state_mod.State.init(ws, "vde", "counter8")
+    rec = st.open_issue({"gate": "mutate", "fixer": "testbench"})
+    with pytest.raises(CheckError, match="note.*approved-by"):
+        st.update_issue(rec["id"], status="waived")
+    with pytest.raises(CheckError, match="note.*approved-by"):
+        st.update_issue(rec["id"], status="waived", note="reason only")
+    with pytest.raises(CheckError, match="note.*approved-by"):
+        st.update_issue(rec["id"], status="waived", approved_by="alice")
+    waived = st.update_issue(rec["id"], status="waived",
+                             note="proven equivalent mutant",
+                             approved_by="alice")
+    assert waived["status"] == "waived"
+    assert waived["note"] == "proven equivalent mutant"
+    assert waived["approved_by"] == "alice"
+    assert waived["closed"]
+
+
+def test_issue_cli_waive_requires_both_flags(tmp_path):
+    ws = ws_empty(tmp_path)
+    state_mod.State.init(ws, "vde", "counter8")
+    st = state_mod.State.load(ws / "state.json")
+    rec = st.open_issue({"gate": "mutate", "fixer": "testbench"})
+    st.save()
+    code = state_mod.main(["issue", "--workspace", str(ws), "--id",
+                          str(rec["id"]), "--status", "waived"])
+    assert code == 2
 
 
 # ----------------------------------------------------------------- CLI
