@@ -8,6 +8,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[1]
 ENGINE = REPO / "engine"
 SCRIPTS = ENGINE / "scripts"
@@ -57,6 +59,7 @@ def make_ws(tmp_path: Path, rtl_text: str, top: str = "top") -> Path:
     return ws
 
 
+@pytest.mark.slow
 def test_clean_design_synths(tmp_path, capsys):
     ws = make_ws(tmp_path, CLEAN_V)
     code = check_synth.main(["--workspace", str(ws)])
@@ -69,6 +72,7 @@ def test_clean_design_synths(tmp_path, capsys):
     assert (ws / "synth" / "top.v").is_file()
 
 
+@pytest.mark.slow
 def test_combinational_loop_fails(tmp_path, capsys):
     ws = make_ws(tmp_path, LOOP_V)
     code = check_synth.main(["--workspace", str(ws)])
@@ -78,6 +82,52 @@ def test_combinational_loop_fails(tmp_path, capsys):
     assert "combinational_loop" in kinds
     gate_result = gate.evaluate("synth", _synth_gate_row(), out)
     assert gate_result["status"] == "fail"
+
+
+# a net read but never driven (`dangling` here) - proved empirically to
+# print through yosys's ORDINARY synth/opt flow, same as LOOP_V's own loop
+# (no `check -assert` needed, and none run: see check_synth.py's own header
+# on why that specific pass was rejected).
+NO_DRIVER_V = """\
+module top (input wire clk, input wire rst, output reg [3:0] count,
+            output wire dangling);
+  wire [3:0] unused_net;
+  assign dangling = unused_net[0];
+  always @(posedge clk) count <= rst ? 4'd0 : count + 4'd1;
+endmodule
+"""
+
+
+@pytest.mark.slow
+def test_undriven_net_fails(tmp_path, capsys):
+    ws = make_ws(tmp_path, NO_DRIVER_V)
+    code = check_synth.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 1, out
+    kinds = {v["kind"] for v in out["violations"]}
+    assert "no_driver" in kinds
+    gate_result = gate.evaluate("synth", _synth_gate_row(), out)
+    assert gate_result["status"] == "fail"
+
+
+def test_empty_netlist_is_refused(tmp_path, capsys, monkeypatch):
+    # cell_histogram returns {} whenever the LAST "<N> <area> cells" summary
+    # line reports zero rows under it - defense in depth, since a
+    # genuinely-zero-cell design never reaches this far in practice
+    # (run_yosys's own "no area line" guard refuses it first, proved
+    # empirically: yosys's `stat -liberty` prints neither a cells summary
+    # nor a Chip area line at all for a true zero-cell design). Faked
+    # directly so the explicit empty-netlist refusal is tested on its own.
+    ws = make_ws(tmp_path, CLEAN_V)
+    fake_output = ("        1 wires\n"
+                  "        0 0.0 cells\n\n"
+                  "   Chip area for module '\\top': 0.0\n")
+    monkeypatch.setattr(check_synth, "run_yosys",
+                        lambda *a, **k: fake_output)
+    code = check_synth.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 2, out
+    assert "no cells" in out["remediation"]
 
 
 def test_missing_spec_yaml_is_an_error(tmp_path, capsys):

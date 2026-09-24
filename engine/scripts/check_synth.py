@@ -64,6 +64,12 @@ LIBERTY_REL = ("foss/pdks/gf180mcuD/libs.ref/gf180mcu_fd_sc_mcu9t5v0/lib/"
               "gf180mcu_fd_sc_mcu9t5v0__tt_025C_5v00.lib")
 
 LOOP_RE = re.compile(r"found logic loop in module (\S+?):")
+# yosys's own `synth`/`opt` passes print this for a net that is read but
+# never driven, same as LOOP_RE's own logic-loop warning - no extra `check`
+# pass needed (and `check -assert` was rejected above for false-positiving
+# on every clean design's own flop-driven outputs; this text, from the
+# ORDINARY flow, does not - proved empirically, same discipline as LOOP_RE).
+NO_DRIVER_RE = re.compile(r"Wire (\S+?) is used but has no driver")
 # `stat -liberty <lib>` prints a THREE-column breakdown (count, per-cell
 # area, name - proved empirically; plain `stat` with no liberty prints only
 # two) under a summary line of its own shape ("<N> <total-area> cells");
@@ -184,7 +190,16 @@ def run(argv=None):
             f"yosys found a combinational logic loop in module {mod}",
             "yosys"))
 
+    undriven = sorted(set(NO_DRIVER_RE.findall(output)))
+    for wire in undriven:
+        violations.append(checklib.violation(
+            "synth", "error", None, None, "no_driver", [],
+            f"yosys found {wire} used but never driven", "yosys"))
+
     cells = cell_histogram(output)
+    if not cells:
+        raise CheckError("yosys's synthesized netlist has no cells at all "
+                         "- an empty netlist is a refusal, never a pass")
     unmapped = sorted(name for name in cells if name.startswith("$"))
     for name in unmapped:
         violations.append(checklib.violation(
