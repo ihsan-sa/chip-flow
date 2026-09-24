@@ -98,12 +98,17 @@ gate_inputs:
     formal:    [rtl, formal, spec_yaml]
     cover:     [rtl, tb]
     synth:     [rtl]
-    harden:    [rtl, harden_config, harden_info]
-    timing:    [harden]
-    drc:       [harden]
-    lvs:       [harden]
-    glsim:     [harden, tb]
-    precheck:  [harden, harden_info]
+    # spec_yaml (M4 review): harden reads tt_pins and clock.period_ns from
+    # spec.yaml to build the wrapper and CLOCK_PERIOD, and timing, drc, lvs,
+    # glsim and precheck all read `top` (and glsim tt_pins) from it too. A
+    # period-only edit touches nothing under rtl/ or harden/, so without it
+    # a recorded pass on the old period would still read fresh.
+    harden:    [rtl, harden_config, harden_info, spec_yaml]
+    timing:    [harden, spec_yaml]
+    drc:       [harden, spec_yaml]
+    lvs:       [harden, spec_yaml]
+    glsim:     [harden, tb, spec_yaml]
+    precheck:  [harden, harden_info, spec_yaml]
     release:   [rtl, harden]
   ade:
     spec_lint:      [spec_yaml]
