@@ -1,0 +1,23 @@
+top: uart_tx
+requirements:
+  - id: REQ-FRAME
+    text: a frame is start(0), 8 data bits LSB-first, an even-parity bit
+      (XOR of the 8 data bits) and stop(1), each held CLKS_PER_BIT clocks
+    check: sim
+  - id: REQ-BUSY
+    text: busy is asserted from the start pulse until the stop bit's hold
+      completes, then returns low
+    check: sim
+ports:
+  clk: {dir: input, width: 1}
+  rst: {dir: input, width: 1}
+  start: {dir: input, width: 1}
+  data: {dir: input, width: 8}
+  tx: {dir: output, width: 1}
+  busy: {dir: output, width: 1}
+clock:
+  period_ns: 10
+  domains: [clk]
+mutate:
+  size: 24
+  seed: 2

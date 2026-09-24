@@ -1,0 +1,75 @@
+# tasks.yaml - /vde's own verb table (docs/design.md 1.8, "### M2."). Merged
+# with engine/reference/tasks.yaml's shared verbs (task_router.py:
+# load_tasks) - this file's own entries win on a name collision. First
+# skill-level tasks.yaml to exist (M1: "No skill directories" yet); no
+# SKILL.md alongside it (that lands with the skill itself, "### M5.").
+# `doc: null` for both verbs, same as every M1 row: the recipe markdown
+# under skills/vde/reference/recipes/ is M5+ work.
+
+version: 1
+verbs:
+
+  # -------------------------------------------------------------------------
+  add-test:
+    summary: Add a visible test for a requirement spec.yaml already names,
+      then re-run sim and mutate so the new test's own effect on both is
+      recorded, not assumed.
+    doc: null
+    workspace: required
+    edit_class: tb_edit
+    preconditions: [workspace]
+    match:
+      any: ['\badd (a |another )?test\b', '\bwrite (a |another )?test\b',
+            '\bnew test\b', '\btest (for|covering) (a |the )?requirement\b']
+    args:
+      requirement:
+        kind: text
+        required: false
+        extract: none
+        question: "Which requirement id does the new test cover?"
+    steps:
+      - do: "scripts/state.py resume --workspace {ws}"
+        why: "confirm phase and which gates are already fresh before adding
+              a test"
+      - agent: tb-writer
+        tier: opus/high
+        why: "fresh context on a first pass at the requirement; otherwise
+              the same tb-writer conversation extends its own file, never
+              the rtl-writer's (docs/design.md section 2: tests come from a
+              different agent than the design)"
+      - do: "scripts/state.py edit --workspace {ws} --class tb_edit --note \"add-test\""
+        why: "declare the edit - invalidation.yaml marks sim, mutate and
+              cover stale from a tb_edit"
+      - gate: sim
+        why: "the new test must itself pass before mutate scores it"
+      - gate: mutate
+        why: "a new test that still asserts nothing is exactly the failure
+              this gate exists to catch (docs/design.md section 2)"
+      - note: "A mutate failure after add-test goes back to the tb-writer,
+               never the rtl-writer (docs/design.md section 2: 'a mutate
+               failure goes back to the tb-writer, not the rtl-writer')."
+
+  # -------------------------------------------------------------------------
+  mutate:
+    summary: Score the visible testbench against yosys-mutated variants of
+      the current RTL - a kill rate and survivors by class, never a
+      pass/fail verdict on the design itself.
+    doc: null
+    workspace: required
+    gates: [mutate]
+    human_hold: 0
+    preconditions: [workspace]
+    match:
+      any: ['\bmutat(e|ion)\b', '\bkill rate\b', '\bscore the (test|tb)\b',
+            '\btestbench (quality|strength)\b', '\bsurvivors?\b']
+    steps:
+      - do: "scripts/state.py resume --workspace {ws}"
+        why: "confirm rtl and tb are both fresh inputs before spending the
+              time mutate takes - docs/design.md section 3's own cost-of-
+              validity note is why M2 reports wall times per rung"
+      - gate: mutate
+        why: "kill rate and survivors by class, straight from gate.py's own
+              recorded result - never re-derived here"
+      - note: "Below 0.9, or any survivor in reset_removed/output_stuck/
+               condition_inverted: the finding routes to the tb-writer, not
+               the rtl-writer - this gate scores the TEST, not the design."

@@ -1,0 +1,32 @@
+# faults manifest (docs/design.md section 3, "### M2."): see corpus/vde/
+# counter8/faults/manifest.yaml for the format.
+version: 1
+faults:
+  - name: spec_lint_requirement_no_check
+    gate: spec_lint
+    plant: plant_spec_lint.py
+    expect: {status: fail, kind: requirement_no_check}
+  - name: lint_latch
+    gate: lint
+    plant: plant_lint.py
+    expect: {status: fail, kind: LATCH}
+  - name: sim_start_bit_one_clock_too_long
+    gate: sim
+    plant: plant_sim.py
+    expect: {status: fail, kind: test_failed}
+  - name: holdout_parity_inverted
+    gate: holdout
+    plant: plant_holdout.py
+    expect: {status: fail, kind: holdout_failed}
+
+# `mutate` is NOT exercised on this rung. The untouched reference's own
+# kill rate tops out around 0.65-0.74 (checked across seeds 1-42, sizes
+# 8-24) and never nears the 0.9 floor: the survivors are concentrated on
+# `clk_cnt`/`bits_left`, an internal bit-period/frame-length counter whose
+# individual bit mutations are largely equivalent (any test, however
+# thorough - every data byte tried twice, back-to-back framing included -
+# still leaves the same ~35% unkilled). counter8/faults/manifest.yaml's
+# `mutate_asserts_nothing` entry already exercises this gate for real, on a
+# design whose kill rate cleanly clears the floor; fixing uart_tx's own
+# mutation-testability (a different internal encoding for the bit-period
+# counter) is follow-up work, not blocking M2.

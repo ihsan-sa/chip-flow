@@ -49,7 +49,16 @@ def main(argv=None) -> int:
         idx, mutate_cmd = line.split(None, 1)
         mutated_v = taskdir / f"mutated_{idx}.v"
         ys = taskdir / f"mutate_{idx}.ys"
-        ys.write_text(f"read_rtlil {design_il}\n{mutate_cmd}\n"
+        # techmap before write_verilog: a design with an un-lowered
+        # $procmux cell (proc's own output, needed as-is for `mutate -list`
+        # to pick meaningful cells/ports) writes out as a bare
+        # "$procmux$N(...)" call Icarus refuses ("System function ... not
+        # defined") - harmless on a small design like counter8's single
+        # mux, fatal on uart_tx's nested case statement. techmap lowers it
+        # to primitives write_verilog can actually emit as legal Verilog,
+        # with no effect on which cell/port the mutation itself targeted
+        # (that was already fixed by the `mutate` line above).
+        ys.write_text(f"read_rtlil {design_il}\n{mutate_cmd}\ntechmap\n"
                       f"write_verilog -norename {mutated_v}\n",
                       encoding="utf-8")
         yosys_rc = subprocess.run(

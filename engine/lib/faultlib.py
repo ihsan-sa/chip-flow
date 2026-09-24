@@ -61,10 +61,31 @@ def strip_requirement_check(spec_yaml_path: Path, req_id: str | None = None) -> 
 def weaken_all_tests(tb_dir: Path) -> None:
     """Replace every top-level 'assert ...' statement under tb_dir's
     test_*.py files with a harmless 'assert True'. Fault gates.yaml names
-    for `mutate`: "a testbench that asserts nothing"."""
+    for `mutate`: "a testbench that asserts nothing".
+
+    A backslash-continued assert's continuation line(s) are dropped along
+    with it - replacing only the first line and leaving a continuation
+    behind produces a dangling, more-indented expression statement with no
+    block opener before it: a SyntaxError, not a weaker test. That failure
+    mode is a trap in itself (every mutant's test module then fails to
+    import and every mutant looks "killed" - a 100% kill rate from a broken
+    harness, the exact opposite of the fault this function plants) rather
+    than a loud one, so plant_mutate.py corpus tests are written without
+    backslash continuations in their asserts precisely to avoid relying on
+    this being airtight - but this handles it either way."""
     assert_re = re.compile(r"^(\s*)assert\b.*$")
     for py in sorted(tb_dir.glob("test_*.py")):
         lines = py.read_text(encoding="utf-8").splitlines()
-        out = [f"{m.group(1)}assert True" if (m := assert_re.match(line))
-              else line for line in lines]
+        out: list[str] = []
+        i = 0
+        while i < len(lines):
+            m = assert_re.match(lines[i])
+            if m:
+                out.append(f"{m.group(1)}assert True")
+                while lines[i].rstrip().endswith("\\"):
+                    i += 1
+                i += 1
+                continue
+            out.append(lines[i])
+            i += 1
         py.write_text("\n".join(out) + "\n", encoding="utf-8")

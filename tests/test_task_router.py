@@ -39,9 +39,20 @@ def test_registry_validates_clean_for_every_skill(skill):
 
 
 def test_shared_verb_set_is_exactly_the_six_named():
-    tasks = tr.load_tasks("vde")
+    # ade/msde have no skills/<skill>/reference/tasks.yaml yet (M1: "No
+    # skill directories"), so load_tasks on either still reflects the
+    # engine's own shared table alone - unlike vde, which merged its own
+    # tasks.yaml in at M2 (see test_vde_adds_its_own_m2_verbs below).
+    tasks = tr.load_tasks("ade")
     assert sorted(tasks["verbs"]) == sorted(
         ["full-run", "review", "fix-finding", "resume", "release", "learn"])
+
+
+def test_vde_adds_its_own_m2_verbs():
+    tasks = tr.load_tasks("vde")
+    assert sorted(tasks["verbs"]) == sorted(
+        ["full-run", "review", "fix-finding", "resume", "release", "learn",
+         "add-test", "mutate"])
 
 
 def test_gates_and_holds_are_never_restated_in_the_recipe():
