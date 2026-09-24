@@ -173,6 +173,37 @@ def test_formal_gate_hash_covers_a_spec_yaml_depth_edit(tmp_path):
     assert "spec_yaml" in fresh_after["gates"]["formal"]["changed_inputs"]
 
 
+@pytest.mark.parametrize("gate", ["harden", "timing", "drc", "lvs", "glsim",
+                                  "precheck"])
+def test_m4_gate_hash_covers_a_spec_yaml_period_edit(tmp_path, gate):
+    """harden reads clock.period_ns and tt_pins from spec.yaml, and the
+    five signoff gates read `top` from it: a period-only edit, with nothing
+    under rtl/ or harden/ touched, must stale a recorded pass."""
+    ws = ws_empty(tmp_path)
+    state_mod.run(["init", "--workspace", str(ws), "--skill", "vde",
+                  "--block", "counter8"])
+    (ws / "spec" / "spec.yaml").write_text(
+        "top: counter8\nrequirements: []\nclock: {period_ns: 20}\n",
+        encoding="utf-8")
+    (ws / "rtl" / "counter8.v").write_text("module counter8; endmodule\n",
+                                           encoding="utf-8")
+    result_path = ws / f"{gate}-result.json"
+    result_path.write_text(json.dumps({"status": "pass", "failing_count": 0,
+                                       "counts": {"total": 0}}),
+                           encoding="utf-8")
+    state_mod.run(["record-gate", "--workspace", str(ws), "--gate", gate,
+                  "--result", str(result_path)])
+    fresh_before, _ = state_mod.run(["freshness", "--workspace", str(ws)])
+    assert fresh_before["gates"][gate]["fresh"] is True
+
+    (ws / "spec" / "spec.yaml").write_text(
+        "top: counter8\nrequirements: []\nclock: {period_ns: 10}\n",
+        encoding="utf-8")
+    fresh_after, _ = state_mod.run(["freshness", "--workspace", str(ws)])
+    assert fresh_after["gates"][gate]["hash_valid"] is False
+    assert "spec_yaml" in fresh_after["gates"][gate]["changed_inputs"]
+
+
 # --------------------------------------------------------- gate recording
 
 def test_record_gate_requires_pass_or_fail(tmp_path):

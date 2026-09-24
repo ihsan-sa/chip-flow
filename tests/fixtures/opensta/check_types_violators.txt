@@ -1,0 +1,59 @@
+worst slack max -57.69
+worst slack min 37.83
+max slew
+
+Pin                                    Limit    Slew   Slack
+------------------------------------------------------------
+y[0]                                    0.50  118.79 -118.29 (VIOLATED)
+y[1]                                    0.50  118.79 -118.29 (VIOLATED)
+y[2]                                    0.50  118.79 -118.29 (VIOLATED)
+y[3]                                    0.50  118.79 -118.29 (VIOLATED)
+y[4]                                    0.50  118.79 -118.29 (VIOLATED)
+y[5]                                    0.50  118.79 -118.29 (VIOLATED)
+y[6]                                    0.50  118.79 -118.29 (VIOLATED)
+y[7]                                    0.50  118.79 -118.29 (VIOLATED)
+b0/ZN                                   0.50  118.79 -118.29 (VIOLATED)
+b1/ZN                                   0.50  118.79 -118.29 (VIOLATED)
+b2/ZN                                   0.50  118.79 -118.29 (VIOLATED)
+b3/ZN                                   0.50  118.79 -118.29 (VIOLATED)
+b4/ZN                                   0.50  118.79 -118.29 (VIOLATED)
+b5/ZN                                   0.50  118.79 -118.29 (VIOLATED)
+b6/ZN                                   0.50  118.79 -118.29 (VIOLATED)
+b7/ZN                                   0.50  118.79 -118.29 (VIOLATED)
+b0/I                                    0.50    0.95   -0.45 (VIOLATED)
+b1/I                                    0.50    0.95   -0.45 (VIOLATED)
+b2/I                                    0.50    0.95   -0.45 (VIOLATED)
+b3/I                                    0.50    0.95   -0.45 (VIOLATED)
+b4/I                                    0.50    0.95   -0.45 (VIOLATED)
+b5/I                                    0.50    0.95   -0.45 (VIOLATED)
+b6/I                                    0.50    0.95   -0.45 (VIOLATED)
+b7/I                                    0.50    0.95   -0.45 (VIOLATED)
+u0/ZN                                   0.50    0.95   -0.45 (VIOLATED)
+
+max fanout
+
+Pin                                   Limit Fanout  Slack
+---------------------------------------------------------
+u0/ZN                                     4      8     -4 (VIOLATED)
+
+max capacitance
+
+Pin                                    Limit     Cap   Slack
+------------------------------------------------------------
+b0/ZN                                   0.35    5.00   -4.65 (VIOLATED)
+
+b1/ZN                                   0.35    5.00   -4.65 (VIOLATED)
+
+b2/ZN                                   0.35    5.00   -4.65 (VIOLATED)
+
+b3/ZN                                   0.35    5.00   -4.65 (VIOLATED)
+
+b4/ZN                                   0.35    5.00   -4.65 (VIOLATED)
+
+b5/ZN                                   0.35    5.00   -4.65 (VIOLATED)
+
+b6/ZN                                   0.35    5.00   -4.65 (VIOLATED)
+
+b7/ZN                                   0.35    5.00   -4.65 (VIOLATED)
+
+chipflow_violation_counts slew 25 cap 8 fanout 1

@@ -161,12 +161,12 @@ def test_evaluate_no_facts_key_when_report_has_no_extras():
 # ------------------------------------------------------------------ stub
 
 def test_stub_gate_is_always_exit_2(tmp_path, capsys):
-    # `lint`/`sim`/.../`formal`/`cover`/`synth`/`release` are real gates now
-    # (M2, M3) - `harden` is still an M1 stub (docs/design.md "### M4."), so
-    # it is what still proves this row's own point: a gate whose tool is
+    # Every /vde gate is a real, built check now (M1-M4), and M9 built
+    # `ade`'s drc. `msde`'s top_drc is still a stub until M10's second half,
+    # so it is what now proves this row's own point: a gate whose tool is
     # not built is exit 2, never a pass.
-    ws = make_ws(tmp_path)
-    code = gate.main(["--gate", "harden", "--workspace", str(ws)])
+    ws = make_ws(tmp_path, skill="msde", block="sensor_counted")
+    code = gate.main(["--gate", "top_drc", "--workspace", str(ws)])
     assert code == 2
     out = json.loads(capsys.readouterr().out)
     assert out["status"] == "error"

@@ -23,7 +23,12 @@ eda_bin() {
 
 EDA_BIN="$(eda_bin)"
 cd "$REPO_ROOT"
-# The cap catches a hang, not a slow box: the marked set (mutate is the
-# slowest single gate, ~20-25 s per run, several times over) measured
-# ~146 s of wall time under load (uptime 20-30 on 6 cores).
-exec timeout 900 "$EDA_BIN" python -m pytest tests/ -q -m slow
+# The cap catches a hang, not a slow box: M1-M3's own marked set (mutate is
+# the slowest single gate there, ~20-25 s per run, several times over)
+# measured ~146 s of wall time under load (uptime 20-30 on 6 cores). M4
+# added one real end-to-end proof (test_check_harden.py's
+# test_harden_job_killed_halfway_..., two full real LibreLane harden runs
+# plus five real signoff gates) that alone measured ~815 s under load - the
+# old 900 s cap left the rest of the slow set almost no room and one busy
+# box away from a false-red timeout kill, not a real hang.
+exec timeout 1800 "$EDA_BIN" python -m pytest tests/ -q -m slow

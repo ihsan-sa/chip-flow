@@ -88,10 +88,23 @@ def test_release_records_tool_and_version_per_gate(tmp_path, capsys):
     checks_doc = json.loads((ws / "reports" / "checks.json").read_text())
     by_gate = {c["gate"]: c for c in checks_doc["checks"]}
     assert by_gate["formal"]["tool"] == "formal"     # a real, built gate
-    assert by_gate["harden"]["tool"] == "stub"        # not yet built
-    assert by_gate["release"]["tool"] == "release"    # release itself
+    assert by_gate["harden"]["tool"] == "harden"      # M4: built, no longer a stub
+    assert "release" not in by_gate    # release is what decides, not a check
     assert all(c["version"] == checklib.CHECKER_VERSION
               for c in checks_doc["checks"])
+
+
+def test_first_release_passes_with_no_earlier_release(tmp_path, capsys):
+    # release calls attest's build(); a release that owed itself could never
+    # pass the first time.
+    ws = make_vde_ws(tmp_path)
+    st = state_mod.State.load(ws / "state.json")
+    for g in statelib.load_map()["gate_inputs"]["vde"]:
+        if g != "release":
+            st.record_gate(g, {"status": "pass"})
+    st.save()
+    code = check_release.main(["--workspace", str(ws)])
+    assert code == 0, json.loads(capsys.readouterr().out)
 
 
 def test_release_refuses_after_rtl_edit_then_passes_once_regated(tmp_path, capsys):
