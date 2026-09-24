@@ -320,6 +320,13 @@ else
   report "opensta-timing" false "no synthesized netlist available (yosys step produced none)"
 fi
 
+# the engine's own tests (M1 onward)
+if (cd "$REPO" && bash tests/check-engine.sh) >&2; then
+  report "engine-tests" true "pytest via eda python"
+else
+  report "engine-tests" false "check-engine.sh failed; see stderr"
+fi
+
 echo "== summary ==" >&2
 printf 'check.sh: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
