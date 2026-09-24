@@ -204,6 +204,16 @@ def classify_property(label: str, rid: str, smt_case: dict,
             "formal", "error", None, None, "property_failed", [rid],
             f"requirement {rid} (property {label}): sby found a "
             "counterexample", "sby-smtbmc")
+    if pdr_status not in ("PASS", "FAIL"):
+        # ERROR or UNKNOWN (a solver crash, a timeout, an unusable model)
+        # used to fall through to the `basecase == "pass"` check below and
+        # come back "bounded" - a passing outcome - even though the second
+        # opinion gates.yaml calls for (pdr as corroboration) never actually
+        # ran. Refused here, before that fallback ever sees it.
+        raise CheckError(
+            f"sby (pdr task) reached no verdict for property {label} "
+            f"(requirement {rid}): pdr_status={pdr_status!r} is neither "
+            "PASS nor FAIL - never silently folded into bounded/proven")
     if pdr_status == "FAIL":
         return "failed", checklib.violation(
             "formal", "error", None, None, "engine_disagreement", [rid],
@@ -290,11 +300,21 @@ def run(argv=None):
         config = sby_dir / f"{name}.sby"
         write_sby(config, sv_files, rtl_files, formal_top, mode, engine, depth)
         output, workdir = run_sby(sby_dir, config, name)
+        # DONE (ERROR) still matches DONE_RE - run_sby's own check only
+        # catches a launcher that never reached DONE at all - but a task
+        # that DID reach DONE and reached it as ERROR (a solver crash, an
+        # unusable model) is refused here too, before any per-property
+        # classification gets a chance to fold it into bounded/proven.
+        if done_status(output) == "ERROR":
+            raise CheckError(
+                f"sby ({name} task) reached DONE (ERROR): "
+                f"{output[-2000:]}")
         outputs[name] = output
         xml_path = workdir / f"{name}.xml"
         testcases[name] = parse_testcases(xml_path)
 
     smt_cases, pdr_status = testcases["smt"], done_status(outputs["pdr"])
+    smt_status = done_status(outputs["smt"])
     smt_sub = task_substatus(outputs["smt"])
 
     missing = [label for label in props if label not in smt_cases]
@@ -305,6 +325,23 @@ def run(argv=None):
             "assert's Verilog label matches spec.yaml's 'property' exactly, "
             "and that it is reached (not behind a `bind`, which yosys's "
             "-formal frontend silently drops)")
+
+    # A `property:` label spec.yaml names must be the ASSERT it claims to
+    # be - a COVER testcase (or one sby itself skipped) appears in the smt
+    # task's own model too (cover points are enumerated there, just never
+    # evaluated in prove mode), so `label not in smt_cases` above would not
+    # catch it: it would sail through classify_property's own basecase/
+    # induction/pdr checks and come back "proven" without anything ever
+    # having been proven about it.
+    wrong_kind = [label for label in props
+                 if smt_cases[label].get("type") != "ASSERT"
+                 or smt_cases[label].get("skipped")]
+    if wrong_kind:
+        raise CheckError(
+            f"spec.yaml 'property' label(s) {', '.join(sorted(wrong_kind))} "
+            "do not name an ASSERT in sby's own model (a cover point, or an "
+            "assert sby itself skipped) - check: formal|both must point at "
+            "an assert's own Verilog label, never a cover's")
 
     violations = []
     proven, bounded, failed = [], [], []
@@ -331,7 +368,7 @@ def run(argv=None):
     payload = checklib.report(
         SCRIPT, ws / "rtl", violations, top=top, formal_top=formal_top,
         depth=depth, proven=sorted(proven), bounded=sorted(bounded),
-        failed=sorted(failed), pdr_status=pdr_status,
+        failed=sorted(failed), smt_status=smt_status, pdr_status=pdr_status,
         cover_points=sorted(covers))
     return payload, args.out
 

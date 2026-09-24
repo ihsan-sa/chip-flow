@@ -8,6 +8,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[1]
 ENGINE = REPO / "engine"
 SCRIPTS = ENGINE / "scripts"
@@ -78,6 +80,7 @@ def make_ws(tmp_path: Path, rtl_text: str) -> Path:
     return ws
 
 
+@pytest.mark.slow
 def test_clean_design_proves_with_both_engines(tmp_path, capsys):
     ws = make_ws(tmp_path, RTL_OK)
     code = check_formal.main(["--workspace", str(ws)])
@@ -85,11 +88,13 @@ def test_clean_design_proves_with_both_engines(tmp_path, capsys):
     assert code == 0, out
     assert out["status"] == "pass"
     assert out["proven"] == ["REQ-RESET"]
+    assert out["smt_status"] == "PASS"
     assert out["pdr_status"] == "PASS"
     assert out["cover_points"] == ["COVER_MAX"]
     assert out["bounded"] == [] and out["failed"] == []
 
 
+@pytest.mark.slow
 def test_register_with_no_reset_fails(tmp_path, capsys):
     ws = make_ws(tmp_path, RTL_NO_RESET)
     code = check_formal.main(["--workspace", str(ws)])
@@ -98,8 +103,53 @@ def test_register_with_no_reset_fails(tmp_path, capsys):
     kinds = {v["kind"] for v in out["violations"]}
     assert "property_failed" in kinds
     assert out["failed"] == ["REQ-RESET"]
+    assert out["smt_status"] == "FAIL"
     gate_result = gate.evaluate("formal", _formal_gate_row(), out)
     assert gate_result["status"] == "fail"
+
+
+SPEC_PROPERTY_IS_A_COVER = """\
+top: top
+requirements:
+  - id: REQ-RESET
+    text: reset proven for all time, not just what a sim test tries
+    check: formal
+    property: COVER_MAX
+formal:
+  depth: 12
+"""
+
+
+@pytest.mark.slow
+def test_property_naming_a_cover_point_is_refused(tmp_path, capsys):
+    # a `property:` label must be the ASSERT it claims to be - COVER_MAX is
+    # a real label in formal/*.sv's own model (FORMAL_SV's `cover`), so
+    # `label not in smt_cases` would not catch this; without the type/
+    # skipped check this sails through classify_property and comes back
+    # "proven" with nothing actually proven about it.
+    ws = make_ws(tmp_path, RTL_OK)
+    (ws / "spec" / "spec.yaml").write_text(SPEC_PROPERTY_IS_A_COVER,
+                                           encoding="utf-8")
+    code = check_formal.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 2, out
+    assert "COVER_MAX" in out["remediation"]
+
+
+def test_sby_done_error_is_refused_for_any_task(tmp_path, capsys, monkeypatch):
+    # DONE (ERROR) still matches DONE_RE (run_sby's own guard is only for a
+    # launcher that never reaches DONE at all) - an ERRORed task must be
+    # refused too, not silently folded into bounded/proven downstream.
+    ws = make_ws(tmp_path, RTL_OK)
+    fake_eda = tmp_path / "fake-eda.sh"
+    fake_eda.write_text("#!/bin/sh\necho 'DONE (ERROR)'\nexit 0\n",
+                        encoding="utf-8")
+    fake_eda.chmod(0o755)
+    monkeypatch.setattr(check_formal, "EDA_BIN", fake_eda)
+    code = check_formal.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 2, out
+    assert "DONE (ERROR)" in out["remediation"]
 
 
 def test_no_formal_requirement_is_an_error(tmp_path, capsys):
@@ -115,6 +165,7 @@ def test_no_formal_requirement_is_an_error(tmp_path, capsys):
     assert "empty property set" in out["remediation"]
 
 
+@pytest.mark.slow
 def test_missing_property_label_is_an_error(tmp_path, capsys):
     # a 'property' spec.yaml names that formal/*.sv never defines (a typo,
     # or a `bind` that silently failed to attach - see check_formal.py's own
@@ -209,6 +260,26 @@ def test_classify_property_bounded_when_induction_does_not_converge(capsys):
         "formal", _formal_gate_row(),
         {"violations": [violation], "counts": {"total": 1}})
     assert gate_result["status"] == "pass"  # info severity never fails the gate
+
+
+def test_classify_property_pdr_error_raises():
+    # pdr's own DONE reached ERROR (a solver crash) - never silently
+    # dropped through to "bounded" just because smtbmc's basecase passed.
+    import pytest
+    from checklib import CheckError
+    with pytest.raises(CheckError):
+        check_formal.classify_property(
+            "P", "REQ", CASE_OK, {"basecase": "pass", "induction": "pass"},
+            "ERROR", 20)
+
+
+def test_classify_property_pdr_unknown_raises():
+    import pytest
+    from checklib import CheckError
+    with pytest.raises(CheckError):
+        check_formal.classify_property(
+            "P", "REQ", CASE_OK, {"basecase": "pass", "induction": None},
+            "UNKNOWN", 20)
 
 
 def test_classify_property_no_verdict_at_all_is_an_error():
