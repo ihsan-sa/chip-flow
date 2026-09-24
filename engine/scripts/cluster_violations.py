@@ -1,0 +1,126 @@
+"""cluster_violations.py - group open findings for fixer dispatch.
+
+Ported from /hwde's scripts/cluster_violations.py, domain swapped (docs/
+design.md 1.3): "the clustering key becomes file, module and finding kind" -
+a PCB finding sits at a board (x, y) and clusters by spatial radius; a
+chip-flow finding sits in a text artifact (an RTL file, a SPICE netlist, a
+spec.yaml requirement) with no geometry, so clustering groups by the triple
+(file, module, kind) directly - no spatial union-find, no bbox/region.
+
+CLI: --input report.json  (any report with a `violations` list)
+     [--out clusters.json]
+Exit: 0 no clusters, 1 clusters present (work to do), 2 error.
+
+Cluster schema:
+    {"id", "file", "module", "kinds"[], "checks"[], "severity", "count",
+     "fixer": "<domain>", "violations": [ ...the raw findings... ]}
+"""
+from __future__ import annotations
+
+import argparse
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+import checklib  # noqa: E402
+
+SCRIPT = "cluster_violations"
+SEV_RANK = {"error": 2, "warning": 1, "info": 0}
+
+# The fixer domains fix_dispatch.py defines (kept in sync by
+# tests/test_fix_dispatch.py; not imported - fix_dispatch imports this
+# module). A finding carrying an explicit "domain" (a reviewer agent
+# transcribes one per finding) routes there directly - reviewer kinds are
+# free slugs FIXER_HINTS cannot enumerate.
+FIXER_DOMAINS = frozenset({
+    "rtl", "testbench", "formal", "synth", "harden", "layout", "sizing",
+    "review"})
+
+# kind -> the fixer domain best suited to resolve it. Empty at M1 (every
+# gate is a stub, so no real finding kind exists yet); each milestone that
+# lands a real check_<gate>.py adds its finding kinds here as it learns
+# them (docs/design.md 1.5's "planted fault" column is the source for each
+# one). A finding without a matching kind falls back to its `check` name,
+# then to 'review'.
+FIXER_HINTS: dict[str, str] = {}
+
+
+def _uf_find(parent, i):
+    while parent[i] != i:
+        parent[i] = parent[parent[i]]
+        i = parent[i]
+    return i
+
+
+def kind_of(v: dict) -> str | None:
+    """A finding's dispatch kind: explicit `kind`, else its `check` name."""
+    return v.get("kind") or v.get("check")
+
+
+def cluster(violations: list[dict], *_ignored) -> list[dict]:
+    """Group by (file, module, kind) - the whole clustering key (docs/
+    design.md 1.3). Extra positional args (radius) are accepted and ignored
+    so callers written against the PCB-era spatial signature still work."""
+    by_key: dict[tuple, list] = {}
+    for v in violations:
+        key = (v.get("file"), v.get("module"), kind_of(v))
+        by_key.setdefault(key, []).append(v)
+    clusters: list[dict] = []
+    for (file, module, kind), group in by_key.items():
+        sev = max((g.get("severity", "info") for g in group),
+                  key=lambda s: SEV_RANK.get(s, 0))
+        kinds = sorted({k for g in group if (k := kind_of(g))})
+        checks = sorted({c for g in group
+                         if (c := g.get("source") or g.get("check"))})
+        # explicit per-finding domain wins when the group agrees on exactly
+        # one valid name; else the kind-keyed hint table
+        doms = {d for g in group if (d := g.get("domain")) in FIXER_DOMAINS}
+        fixer = doms.pop() if len(doms) == 1 else FIXER_HINTS.get(kind, "review")
+        clusters.append({
+            "file": file, "module": module, "kinds": kinds, "checks": checks,
+            "severity": sev, "count": len(group), "fixer": fixer,
+            "violations": group,
+        })
+    clusters.sort(key=lambda c: (-SEV_RANK.get(c["severity"], 0), -c["count"]))
+    for i, c in enumerate(clusters):
+        c["id"] = i
+    return clusters
+
+
+def load_violations(path) -> list[dict]:
+    data = checklib.load_json(path, "input report")
+    if isinstance(data, list):
+        return data
+    return data.get("violations", [])
+
+
+def run(argv=None):
+    ap = argparse.ArgumentParser(
+        description="Cluster open findings by (file, module, kind).")
+    ap.add_argument("--input", required=True,
+                    help="a check_<gate>.py report or any report with "
+                         "a violations list")
+    ap.add_argument("--out", help="write JSON here instead of stdout")
+    args = ap.parse_args(argv)
+
+    violations = load_violations(args.input)
+    clusters = cluster(violations)
+    by_sev: dict[str, int] = {}
+    for c in clusters:
+        by_sev[c["severity"]] = by_sev.get(c["severity"], 0) + 1
+    payload = {
+        "script": SCRIPT,
+        "status": "violations" if clusters else "pass",
+        "counts": {"clusters": len(clusters), "violations": len(violations),
+                   "by_severity": by_sev},
+        "clusters": clusters,
+    }
+    return payload, args.out
+
+
+def main(argv=None) -> int:
+    return checklib.cli_wrap(SCRIPT, lambda: run(argv))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

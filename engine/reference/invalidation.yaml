@@ -1,0 +1,195 @@
+# invalidation.yaml - freshness-aware state: artifact kinds, gate inputs, and
+# the edit-class invalidation map (docs/design.md 1.6).
+#
+# Ported from /hwde's reference/invalidation.yaml, domain swapped: a PCB's
+# s-expression/gerber artifact kinds are gone; a chip-flow block's artifacts
+# are HDL/SPICE directories and YAML/JSON specs and configs (see
+# engine/lib/statelib.py's normalizer docstrings).
+#
+# Consumed by engine/lib/statelib.py (hashing + freshness) and
+# engine/scripts/state.py (record-gate input capture, `edit` application,
+# `freshness` reports).
+#
+# Two-layer staleness semantics (statelib.freshness_report):
+#   1. HASH layer - record-gate stores a normalized content hash of every
+#      input artifact; a gate is hash-valid iff every recorded input hash
+#      matches the artifact's current hash. This catches ANY edit, declared
+#      or not.
+#   2. MARK layer - `state.py edit --class <c>` stamps the mapped stale
+#      gates/artifacts with an explicit stale mark. This catches DERIVED
+#      artifacts whose files have not changed yet (a GDS after an RTL edit)
+#      and gates whose inputs an edit will change only after regeneration.
+#   A gate is FRESH iff it has recorded input hashes, they all match, and it
+#   carries no stale mark. Marks clear when the gate re-runs (record-gate) or
+#   the artifact is re-registered (artifact/rehash).
+#   The `gates` list per edit class is the SEMANTICALLY REQUIRED re-run set;
+#   the hash layer may additionally invalidate other gates when a real edit
+#   touches a shared file. That is by design: the map states what MUST
+#   re-run, hashes guarantee nothing silently survives.
+#
+# human_hold weight (scales with blast radius):
+#   0  none     - proceed silently; gates are the whole story
+#   1  log      - record a decision line; no human interaction
+#   2  review   - summarize the edit + gate deltas at the next human hold
+#   3  approve  - explicit human approval before the result is trusted again
+#
+# artifact_kinds is FLAT - `state.py init` scaffolds the same subdirectories
+# (docs/design.md 1.4) for every block regardless of skill, so path kinds are
+# shared vocabulary; gate_inputs and edit_classes are PER SKILL because gate
+# names collide across /vde, /ade, /msde with different meanings (drc, lvs,
+# release, spec_lint all appear in more than one skill's gate table, 1.5).
+#
+# norm names are statelib normalizers:
+#   text_eol         text with CRLF/CR normalized to LF (HDL, SPICE, SDC,
+#                    generator code - a comment edit re-runs gates, accepted).
+#   json_canonical   parsed YAML-or-JSON re-serialized with sorted keys
+#                    (spec.yaml, config.json, info.yaml, sizing.yaml,
+#                    interface.yaml - whitespace and key order invisible).
+#   dir_text         all files under a directory, name-sorted, each text_eol
+#                    normalized (rtl/, tb/, holdout/, formal/, ...).
+# `gds_geometry` (a hardened GDS hashed through klayout's python module,
+# timestamps stripped) lands with M4/M9, the first milestone with a real GDS;
+# until then `harden`/`layout` hash as dir_text, which is fail-safe (over-
+# invalidates on export-only churn, never under-invalidates).
+# Every stored hash is prefixed "<norm>:" so a normalizer change can never
+# false-match an old hash. Unparsable input falls back to raw bytes.
+
+version: 1
+
+artifact_kinds:
+  spec_md:       {path: "spec/spec.md", norm: text_eol}
+  spec_yaml:     {path: "spec/spec.yaml", norm: json_canonical}
+  rtl:           {path: "rtl", norm: dir_text}
+  netlist:       {path: "netlist", norm: dir_text}
+  tb:            {path: "tb", norm: dir_text}
+  holdout:       {path: "holdout", norm: dir_text}
+  formal:        {path: "formal", norm: dir_text}
+  synth:         {path: "synth", norm: dir_text}
+  harden_config: {path: "harden/config.json", norm: json_canonical}
+  harden_info:   {path: "harden/info.yaml", norm: json_canonical}
+  harden:        {path: "harden", norm: dir_text}
+  layout:        {path: "layout", norm: dir_text}
+  sizing:        {path: "sizing/sizing.yaml", norm: json_canonical}
+  optimise:      {path: "optimise", norm: dir_text}
+  interface:     {path: "interface.yaml", norm: json_canonical}
+
+# What each gate reads, per skill (docs/design.md 1.5 tables). Every gate a
+# skill's edit_classes name must have an entry here, even a stub's - it is
+# the freshness key gate.py's record-gate stamps, so an unmapped gate can
+# never be reported "fresh" (statelib.gate_freshness: hash_valid None).
+gate_inputs:
+  vde:
+    spec_lint: [spec_yaml]
+    lint:      [rtl]
+    sim:       [rtl, tb]
+    holdout:   [rtl, holdout]
+    mutate:    [rtl, tb]
+    formal:    [rtl, formal]
+    cover:     [rtl, tb]
+    synth:     [rtl]
+    harden:    [rtl, harden_config, harden_info]
+    timing:    [harden]
+    drc:       [harden]
+    lvs:       [harden]
+    glsim:     [harden, tb]
+    precheck:  [harden, harden_info]
+    release:   [rtl, harden]
+  ade:
+    spec_lint:      [spec_yaml]
+    netlist_lint:   [netlist]
+    sim_tt:         [netlist, tb]
+    sim_pvt:        [netlist, tb]
+    bench_strength: [netlist, tb]
+    mc:             [netlist, tb]
+    drc:            [layout]
+    lvs:            [layout, netlist]
+    pex_sim:        [layout, tb]
+    release:        [netlist, layout]
+  msde:
+    split:    [interface]
+    cosim:    [interface, tb]
+    top_drc:  [layout]
+    top_lvs:  [layout]
+    release:  [interface, layout]
+
+# Edit-class taxonomy -> what an edit of that class makes stale (docs/
+# design.md 1.6, one block per skill).
+#   mutates          artifacts the edit itself rewrites (the new truth - NOT
+#                    marked stale; their hash change is what invalidates gates)
+#   stale_artifacts  DERIVED artifacts that no longer derive from the mutated
+#                    ones and must be regenerated before they are trusted
+#   gates            gate results that must be re-established (marks land on
+#                    gates that have recorded results; the full list is still
+#                    reported so a router can schedule unrun gates)
+#   human_hold       ceremony weight, see header
+edit_classes:
+  vde:
+    spec_edit:
+      # "marks everything including holdout, which the testbench writer
+      # must rewrite" (1.6)
+      mutates: [spec_yaml, spec_md]
+      stale_artifacts: [holdout]
+      gates: [spec_lint, lint, sim, holdout, mutate, formal, cover, synth,
+              harden, timing, drc, lvs, glsim, precheck, release]
+      human_hold: 2
+    rtl_edit:
+      mutates: [rtl]
+      stale_artifacts: []
+      gates: [lint, sim, holdout, mutate, formal, cover, synth, harden,
+              timing, drc, lvs, glsim, precheck, release]
+      human_hold: 1
+    tb_edit:
+      mutates: [tb]
+      stale_artifacts: []
+      gates: [sim, mutate, cover]
+      human_hold: 1
+    formal_edit:
+      mutates: [formal]
+      stale_artifacts: []
+      gates: [formal, mutate]
+      human_hold: 1
+    harden_config_edit:
+      mutates: [harden_config, harden_info]
+      stale_artifacts: []
+      gates: [harden, timing, drc, lvs, glsim, precheck, release]
+      human_hold: 2
+  ade:
+    spec_edit:
+      mutates: [spec_yaml, spec_md]
+      stale_artifacts: []
+      gates: [spec_lint, netlist_lint, sim_tt, sim_pvt, bench_strength, mc,
+              drc, lvs, pex_sim, release]
+      human_hold: 2
+    netlist_edit:
+      # "marks every analog gate" (1.6); hold matches rtl_edit's weight - a
+      # code edit to the design itself, not a spec change.
+      mutates: [netlist]
+      stale_artifacts: []
+      gates: [netlist_lint, sim_tt, sim_pvt, bench_strength, mc, drc, lvs,
+              pex_sim, release]
+      human_hold: 1
+    sizing_edit:
+      mutates: [sizing]
+      stale_artifacts: []
+      gates: [sim_tt, sim_pvt, bench_strength, mc, lvs, pex_sim, release]
+      human_hold: 1
+    layout_code_edit:
+      mutates: [layout]
+      stale_artifacts: []
+      gates: [drc, lvs, pex_sim, release]
+      human_hold: 1
+  msde:
+    spec_edit:
+      mutates: [spec_yaml, spec_md]
+      stale_artifacts: []
+      gates: [split, cosim, top_drc, top_lvs, release]
+      human_hold: 2
+    interface_edit:
+      # "marks the top gates and both nested runs' spec_edit" (1.6). The
+      # nested-run cascade (re-running spec_edit inside each child
+      # workspace) is msde orchestration, M10's job; this class marks the
+      # top-level gates a plain `state.py edit` can reach on its own.
+      mutates: [interface]
+      stale_artifacts: []
+      gates: [split, cosim, top_drc, top_lvs, release]
+      human_hold: 2

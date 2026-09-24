@@ -1,0 +1,237 @@
+# tasks.yaml - the engine's SHARED verb table (docs/design.md 1.8): full-run,
+# review, fix-finding, resume, release, learn. A skill's own
+# skills/<skill>/reference/tasks.yaml (none exist yet - M1 has "No skill
+# directories") adds its own verbs and may override any of these by name;
+# task_router.py --skill <s> merges the two, the skill's entry winning.
+#
+# Ported from /hwde's reference/tasks.yaml (docs/design.md 1.3): the step
+# vocabulary, precondition names and the "gates/human_hold come from
+# invalidation.yaml, never restated" rule are unchanged (1.8: "Gates and
+# human holds come from the edit class in invalidation.yaml, never restated
+# in the verb"). PCB-only argument kinds (refdes/net/lcsc) are gone - a
+# chip-flow task names a path, a gate, or free text. `doc: null` for every
+# verb here: the recipe markdown under reference/recipes/ is skill/M5+ work
+# (docs/design.md, "### M5."); task_router.py's doc-file check only runs
+# when `doc` is truthy.
+#
+# Step forms (exactly one key per step, plus the shared `why`):
+#   do:     "scripts/x.py --flag {slot}"  a concrete command; {slots} bind
+#           from the workspace + extracted args. Unbound required slots
+#           become plan `needs` and block the plan (exit 1).
+#   gate:   <name from gates.yaml, for this skill>   run it via gate.py; the
+#           router appends every remaining mapped gate after the last step.
+#   agent:  <role>              spawn it; role prompts live under
+#           skills/<skill>/agents/ (M5+; not checked to exist at M1).
+#   human:  <H1..>               a hold; see invalidation.yaml weights.
+#   recipe: <verb>                run that recipe here (composition).
+#   note:   "..."                judgment the orchestrator must apply.
+# Optional per step: `when` (free text condition), `optional: true`.
+#
+# PLACEHOLDERS bound by the router: {ws} {block} {skill} {state} {reports}
+# {log} plus one slot per invalidation.yaml artifact_kind (e.g. {rtl} {tb}
+# {spec_yaml} {harden}). {work} is a scratch path the caller picks.
+#
+# preconditions: workspace (a state.json must exist), gates_fresh:<g> (gate
+# <g> must be pass AND hash-fresh AND unmarked), no_open_issues.
+
+version: 1
+
+verbs:
+
+  # -------------------------------------------------------------------------
+  resume:
+    summary: Pick a run back up where it stopped - the state file decides,
+      not memory.
+    doc: null
+    workspace: required
+    edit_class: null
+    gates: []
+    human_hold: 0
+    preconditions: [workspace]
+    match:
+      any: ['\bresume\b', '\bcontinue\b', '\bpick (it|this|the run) up\b',
+            '\bcarry on\b', '\bwhere (did|were) (we|you|i)\b',
+            '\bnext (step|phase|gate)\b', '\bkeep going\b',
+            '\bfinish (the|this) (run|block|design)\b']
+    steps:
+      - do: "scripts/state.py resume --workspace {ws}"
+        why: "phase, gates_passed, gates_passed_fresh, gates_stale,
+              gates_freshness_unknown, human_hold_pending, next_gate,
+              running_jobs, open issues"
+      - do: "scripts/jobs.py status --workspace {ws} --all"
+        why: "a job left running when the session ended may have finished
+              or died since - reconcile before trusting resume's
+              running_jobs list"
+      - do: "scripts/state.py log --workspace {ws} --event resumed"
+        why: "the audit trail must show the seam"
+      - note: "Never redo a gate that is passed AND fresh - its result is
+               committed. Re-run exactly the stale/unknown ones. A job
+               reported dead restarts (jobs.py start); LibreLane resumes
+               from its last completed step."
+      - recipe: full-run
+        why: "re-enter the pipeline at the phase state.json reports"
+
+  # -------------------------------------------------------------------------
+  full-run:
+    summary: The whole pipeline, spec to release-ready package. A recipe
+      like any other - the phases are its steps. This is the engine's
+      placeholder (M1, no skill directories yet); a skill's own tasks.yaml
+      (M5+) overrides it with the real phase sequence and gate order.
+    doc: null
+    workspace: created
+    edit_class: null
+    gates: []
+    human_hold: 0
+    match:
+      any: ['\bdesign (me )?an?\b', '\bbuild (me )?an?\b', '\bnew block\b',
+            '\bfrom scratch\b', '\bfull (run|pipeline)\b',
+            '\bend[- ]to[- ]end\b', '\bwhole pipeline\b']
+      weight: 1
+    steps:
+      - do: "scripts/state.py init --workspace {ws} --skill {skill} --block {block}"
+        why: "workspace + subdirs, in-repo so gate commits work"
+      - do: "scripts/state.py resume --workspace {ws}"
+        why: "confirm the scaffold and starting phase"
+      - note: "This engine placeholder stops here (M1: every gate is a
+               stub). A skill's real full-run (M5+) drives P1..P8 through
+               its own agents and gates in order."
+
+  # -------------------------------------------------------------------------
+  review:
+    summary: Re-establish every gate on a workspace already here, as a
+      baseline for a second opinion.
+    doc: null
+    workspace: required
+    edit_class: null
+    gates: []
+    human_hold: 0
+    preconditions: [workspace]
+    match:
+      any: ['\breview\b', '\baudit\b', '\bsecond opinion\b',
+            '\bsanity[- ]check\b', '\bcritique\b', '\bassess\b',
+            '\bwhat.s wrong with\b']
+      not: ['\bfix\b']
+    steps:
+      - do: "scripts/state.py resume --workspace {ws}"
+        why: "phase, gates, freshness - the baseline the review reports
+              against"
+      - do: "scripts/task_router.py --skill {skill} --validate"
+        why: "the registry itself must be clean before trusting any plan
+              it produces"
+      - note: "Re-run every gate this skill owes (task_router.py --skill
+               {skill} --list shows the order) - a stale pass is not
+               evidence."
+      - do: "scripts/attest.py disposition --workspace {ws}"
+        why: "the current derived state, to report as the review's baseline"
+      - agent: reviewer
+        tier: fable/high
+        why: "fresh-context judgment over the gate table and disposition"
+      - human: H1
+        why: "present findings; ask which to fix"
+
+  # -------------------------------------------------------------------------
+  fix-finding:
+    summary: Fix findings from a gate result or check report through the
+      standard dispatch -> fixer -> re-gate loop.
+    doc: null
+    workspace: required
+    edit_class: null
+    gates: []
+    human_hold: 0
+    args:
+      findings: {kind: path, required: true,
+                 question: "Which report holds the findings? (a gate result
+                            or a check_<gate>.py report JSON)"}
+      gate: {kind: text, required: false, extract: none,
+             question: "Which gate failed?"}
+    preconditions: [workspace]
+    match:
+      any: ['\bfix\b', '\brepair\b', '\bclear\b', '\bviolations?\b',
+            '\bfindings?\b', '\bfailing gate\b', '\bwork ?order\b',
+            '\bmake .* (pass|clean|green)\b', '\bgate .* (fails?|failed|failing)\b']
+    steps:
+      - do: "scripts/state.py budget --workspace {ws} --path fix_loops.{gate} --consume"
+        why: "exit 2 = budget exhausted -> escalate, never loop again"
+      - do: "scripts/fix_dispatch.py --input {findings} --workspace {ws} --state {state}"
+        why: "clusters by (file, module, kind), writes one work order per
+              cluster, registers open issues"
+      - agent: fixer
+        tier: opus/high
+        why: "one per work order; orders inside one parallel_groups entry
+              may run concurrently, groups run in sequence"
+      - do: "scripts/state.py edit --workspace {ws} --class {edit_class} --note \"fix {gate}\""
+        why: "declare what the fix actually changed - the edit class marks
+              the gates/artifacts that must re-establish"
+      - gate: "{gate}"
+        why: "re-run the gate that failed; record EVERY attempt"
+      - note: "A fixer that introduced NEW failures: restore its snapshot
+               (state.py restore), mark the issue escalated, continue with
+               the rest."
+
+  # -------------------------------------------------------------------------
+  release:
+    summary: Attempt release - every applicable gate fresh-pass, the record
+      of what ran written and signed off.
+    doc: null
+    workspace: required
+    edit_class: null
+    gates: [release]
+    human_hold: 0
+    preconditions: [workspace]
+    match:
+      any: ['\brelease\b', '\bsign[- ]?off\b', '\bready to submit\b',
+            '\battest\b', '\bship it\b']
+    steps:
+      - do: "scripts/state.py resume --workspace {ws}"
+        why: "confirm every gate the skill owes before attempting release"
+      - gate: release
+        why: "release is strict (docs/design.md 1.5) - it refuses rather
+              than pass on a gap"
+      - do: "scripts/attest.py build --workspace {ws}"
+        why: "assembles reports/checks.json only when every applicable gate
+              is fresh-pass; lists every miss at once otherwise"
+      - do: "scripts/attest.py disposition --workspace {ws}"
+        why: "the derived, never-hand-set release state"
+      - human: H2
+        why: "the person signs off before anything is submitted (docs/
+              design.md 1.4: submitting to a shuttle is always the
+              person's)"
+
+  # -------------------------------------------------------------------------
+  learn:
+    summary: Teaching session (owner present) - a learner agent iterates one
+      stage's artifact set against owner grading on frozen inputs.
+    doc: null
+    workspace: optional
+    edit_class: null
+    gates: []
+    human_hold: 0
+    args:
+      stage: {kind: text, required: true, extract: none,
+              question: "Which stage is being taught (P0-P8, e.g. P4 RTL,
+                         P1 spec)?"}
+    match:
+      any: ['\bteach(ing)?\b', '\blearn\b', '\blearning (mode|session|cycle)\b',
+            '\btrain(ing)?\b.*\b(stage|gate|scorer)\b',
+            '\btuning (loop|session)\b', '\bgraded fixtures?\b']
+      not: ['\blearnings\b']
+    steps:
+      - agent: learner
+        tier: fable/max
+        why: "owns ONE stage's artifact set; loop = isolated stage agent on
+              frozen input -> render -> owner grades -> classed artifact
+              edit -> fresh re-run"
+      - human: H3
+        why: "the OWNER is the scorer: grades every cycle; no owner present
+              = no learning session"
+      - note: "Exit checklist (bench.py/learnings.py land M6+): freeze the
+               owner-approved output as a graded fixture, record the
+               baseline, re-run the stage's other frozen fixtures for
+               regressions, validate the learnings queue. None of that
+               tooling exists yet at M1 - until it lands, close a session
+               with a plain state.py decision recording what changed and
+               why."
+      - do: "scripts/state.py decision --workspace {ws} --what \"learning session on {stage}\" --why \"owner-graded artifact edit\""
+        why: "the record a promotion-queue entry will later compile from"
+        optional: true
+        when: "a workspace is bound"

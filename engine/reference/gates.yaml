@@ -1,0 +1,320 @@
+# gates.yaml - pipeline gates, machine pass/fail criteria evaluated by
+# engine/scripts/gate.py (docs/design.md 1.5).
+#
+# M1 (docs/design.md, "### M1."): every gate from section 1.5's three tables
+# is registered here now, so the registry validates and task_router.py /
+# invalidation.yaml can reference real gate names - but every `tool` is the
+# stub (engine/scripts/check_stub.py), which always exits 2 "not built".
+# Later milestones replace a row's `tool` with its real check_<gate>.py stem
+# (e.g. `tool: lint` -> engine/scripts/check_lint.py) as that gate is built;
+# `future_tool` and `description` already carry the real tool and pass
+# criteria from the design doc so nothing is lost in the meantime.
+#
+# gate.py resolves which skill's row a bare `--gate <name>` means from the
+# workspace's state.json (`skill`), or from an explicit `--skill` override
+# for a corpus/scratch input with no workspace.
+#
+# Gate fields:
+#   skill            vde | ade | msde
+#   phase            pipeline phase this gate guards (docs/design.md 1.4)
+#   tool             check_<tool>.py under engine/scripts/ to run. `stub`
+#                    (check_stub.py) for every M1 row.
+#   future_tool      the real tool this gate will run once built (doc only)
+#   fail_severities  finding severities that count toward failure
+#   max_count        max counted findings still allowed to pass (default 0)
+#   strict           release-context coverage mode: every applicable check
+#                    must RUN - a missing input is a coverage failure and the
+#                    gate refuses (exit 2), never a pass. M1: registered on
+#                    the three `release` rows; enforced starting M3.
+#   job              true when the gate runs detached via jobs.py (1.7).
+#                    Only `harden` (LibreLane) is a job.
+#   fault            the corpus fault this gate must catch (1.5's third
+#                    column; consumed by faults.py, M2+).
+#   description      the real gate's pass criteria (1.5's second column).
+#
+# Evaluation (gate.py): a gate FAILS when the count of findings whose
+# severity is in fail_severities exceeds max_count. A gate whose tool could
+# not run (missing script, non-JSON output, or the M1 stub) is exit 2 -
+# never recorded as a pass.
+
+version: 1
+
+gates:
+  vde:
+    spec_lint:
+      phase: P1
+      tool: stub
+      future_tool: speclib
+      fail_severities: [error]
+      max_count: 0
+      fault: "a requirement with no way to check it"
+      description: >-
+        Every requirement has an id, a check kind and, for `measure`,
+        bounds; tt_pins fit the tile.
+    lint:
+      phase: P4
+      tool: stub
+      future_tool: "verilator --lint-only -Wall"
+      fail_severities: [error]
+      max_count: 0
+      fault: "an always @* missing an else (latch)"
+      description: "No errors; warnings only from an allowlist with reasons."
+    sim:
+      phase: P4
+      tool: stub
+      future_tool: "cocotb 2 on Icarus"
+      fail_severities: [error]
+      max_count: 0
+      fault: "counter wraps one early"
+      description: >-
+        Every test passes and every requirement id has a test tagged with it.
+    holdout:
+      phase: P4
+      tool: stub
+      future_tool: "cocotb on holdout/"
+      fail_severities: [error]
+      max_count: 0
+      fault: "UART parity inverted where the visible tests do not look"
+      description: >-
+        Every held-out test passes; the result names requirement ids only.
+    mutate:
+      phase: P4
+      tool: stub
+      future_tool: "yosys mutate via mcy, fixed seed, N mutants"
+      fail_severities: [error]
+      max_count: 0
+      fault: "a testbench that asserts nothing"
+      description: >-
+        Kill rate at or above 0.9; no survivor in the must-kill classes.
+    formal:
+      phase: P4
+      tool: stub
+      future_tool: "SymbiYosys: smtbmc k-induction and abc pdr, plus cover"
+      fail_severities: [error]
+      max_count: 0
+      fault: "a register with no reset: sim passes, formal fails"
+      description: >-
+        Every property proven, or bounded to at least the depth the spec
+        asks; every cover point reached.
+    cover:
+      phase: P4
+      tool: stub
+      future_tool: "verilator --coverage, same tests"
+      fail_severities: [error]
+      max_count: 0
+      fault: "an unreachable state"
+      description: >-
+        Line at or above 95%, toggle at or above 90% on the DUT; exclusions
+        carry reasons.
+    synth:
+      phase: P5
+      tool: stub
+      future_tool: "yosys synth to the gf180 liberty"
+      fail_severities: [error]
+      max_count: 0
+      fault: "a combinational loop"
+      description: "No latches, unmapped cells or combinational loops."
+    harden:
+      phase: P6
+      tool: stub
+      future_tool: "LibreLane 3, TT config, gf180mcuD"
+      job: true
+      fail_severities: [error]
+      max_count: 0
+      fault: "a design too large for the tile"
+      description: >-
+        The flow finishes with no failing step and produces GDS, LEF,
+        netlist, SDF, metrics.
+    timing:
+      phase: P6
+      tool: stub
+      future_tool: "OpenSTA on the hardened netlist at LibreLane's corners"
+      fail_severities: [error]
+      max_count: 0
+      fault: "a chain that misses the spec's clock"
+      description: >-
+        Setup and hold slack at or above 0 at every corner; no fanout or
+        slew violations.
+    drc:
+      phase: P6
+      tool: stub
+      future_tool: "magic DRC and klayout DRC, PDK decks"
+      fail_severities: [error]
+      max_count: 0
+      fault: "a metal spacing violation planted in the GDS"
+      description: "0 violations from both."
+    lvs:
+      phase: P6
+      tool: stub
+      future_tool: "netgen, magic-extracted layout versus the hardened netlist"
+      fail_severities: [error]
+      max_count: 0
+      fault: "one via removed from the GDS"
+      description: "Match."
+    glsim:
+      phase: P6
+      tool: stub
+      future_tool: "the sim suite on the gate-level netlist, then with SDF"
+      fail_severities: [error]
+      max_count: 0
+      fault: >-
+        a register read before it is written, which only X-propagation
+        exposes
+      description: "Every test passes both ways."
+    precheck:
+      phase: P6
+      tool: stub
+      future_tool: "tt-support-tools precheck, pinned"
+      fail_severities: [error]
+      max_count: 0
+      fault: "a wrong top module name in info.yaml"
+      description: "Passes."
+    release:
+      phase: P8
+      tool: stub
+      future_tool: "attest, strict"
+      strict: true
+      fail_severities: [error]
+      max_count: 0
+      fault: "an RTL edit after harden, which must refuse"
+      description: >-
+        Every applicable gate has a fresh recorded pass on the current
+        inputs; waivers carry reason, approval and durability.
+
+  ade:
+    spec_lint:
+      phase: P1
+      tool: stub
+      future_tool: speclib
+      fail_severities: [error]
+      max_count: 0
+      fault: "a measure without bounds"
+      description: >-
+        Every measure has bounds and a corner set; supply and devices
+        declared.
+    netlist_lint:
+      phase: P4
+      tool: stub
+      future_tool: "ngspice dry run"
+      fail_severities: [error]
+      max_count: 0
+      fault: "a model not in the PDK"
+      description: >-
+        Every device uses a gf180mcu_fd_pr model, no floating node,
+        subcircuit pins match the spec.
+    sim_tt:
+      phase: P4
+      tool: stub
+      future_tool: "sim_run at typical"
+      fail_severities: [error]
+      max_count: 0
+      fault: "W and L swapped on a mirror's output device"
+      description: "Every .measure inside its bound."
+    sim_pvt:
+      phase: P4
+      tool: stub
+      future_tool: "sim_run over the corner set"
+      fail_severities: [error]
+      max_count: 0
+      fault: "meets at typical, loses headroom at slow and hot"
+      description: "Every measure inside its bound at every corner."
+    bench_strength:
+      phase: P4
+      tool: stub
+      future_tool: >-
+        faults.py device mutants (size doubled, connection removed, type
+        flipped, bias halved)
+      fail_severities: [error]
+      max_count: 0
+      fault: "bounds wide enough to pass anything"
+      description: "Every mutant pushes a measure out of bounds."
+    mc:
+      phase: P4
+      tool: stub
+      future_tool: "ngspice Monte Carlo, only when the spec asks"
+      fail_severities: [error]
+      max_count: 0
+      fault: "not applicable by default"
+      description: "Yield at or above the spec."
+    drc:
+      phase: P5
+      tool: stub
+      future_tool: "magic and klayout"
+      fail_severities: [error]
+      max_count: 0
+      fault: "a planted spacing violation"
+      description: "0."
+    lvs:
+      phase: P5
+      tool: stub
+      future_tool: "netgen, extracted layout versus the sized netlist"
+      fail_severities: [error]
+      max_count: 0
+      fault: "a device sized differently in the generator than in the netlist"
+      description: "Match."
+    pex_sim:
+      phase: P5
+      tool: stub
+      future_tool: >-
+        magic ext2spice with parasitics (klayout_pex second), then the bench
+        at typical and the worst corner
+      fail_severities: [error]
+      max_count: 0
+      fault: "an output routed on a long minimum-width metal1 line"
+      description: "Every measure inside post_layout_bounds."
+    release:
+      phase: P6
+      tool: stub
+      future_tool: "attest, strict"
+      strict: true
+      fail_severities: [error]
+      max_count: 0
+      fault: "as digital"
+      description: "As digital."
+
+  msde:
+    split:
+      phase: P1
+      tool: stub
+      future_tool: "speclib over interface.yaml"
+      fail_severities: [error]
+      max_count: 0
+      fault: "a control word width that differs between the two"
+      description: >-
+        Every crossing signal appears in both specs with matching
+        direction, level and domain.
+    cosim:
+      phase: P3
+      tool: stub
+      future_tool: >-
+        ngspice d_cosim running the Icarus-compiled digital side inside the
+        analog bench
+      fail_severities: [error]
+      max_count: 0
+      fault: "control word polarity inverted"
+      description: "Every top-level measure inside its bound."
+    top_drc:
+      phase: P3
+      tool: stub
+      future_tool: "magic and klayout on the assembled GDS"
+      fail_severities: [error]
+      max_count: 0
+      fault: "a planted spacing violation"
+      description: "0."
+    top_lvs:
+      phase: P3
+      tool: stub
+      future_tool: "netgen on the assembled GDS, the analog block as a subcircuit"
+      fail_severities: [error]
+      max_count: 0
+      fault: "a macro pin left unconnected"
+      description: "Match."
+    release:
+      phase: P4
+      tool: stub
+      future_tool: "attest, strict"
+      strict: true
+      fail_severities: [error]
+      max_count: 0
+      fault: "a stale nested release"
+      description: "Both nested runs released, top gates fresh."
