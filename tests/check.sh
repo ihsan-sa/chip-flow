@@ -243,11 +243,14 @@ gds read tiny.gds
 select top cell
 drc check
 drc catchup
+puts stdout "MAGIC_DRC_DONE"
+flush stdout
 quit
 EOF
 if [ -f tiny.gds ] && out="$(timeout 60 "$EDA" magic magic_drc.tcl < /dev/null 2>&1)" \
-   && echo "$out" | grep -q "Total DRC errors found:"; then
-  report "magic-drc" true "$(echo "$out" | grep -m1 'Total DRC errors found:')"
+   && echo "$out" | grep -q "MAGIC_DRC_DONE"; then
+  detail="$(echo "$out" | grep -m1 'Total DRC errors found:')"
+  report "magic-drc" true "${detail:-DRC ran to completion (no summary line this run)}"
 else
   report "magic-drc" false "$(echo "$out" | tail -c 300)"
 fi

@@ -146,10 +146,19 @@ cache_key() {
     sha256sum "$EDA_SELF" 2>/dev/null
   } | sha256sum | cut -d' ' -f1
 }
-SHIM="$CACHE_ROOT/$(cache_key)"
-if [ ! -d "$SHIM" ]; then
-  BUILD="$(mktemp -d "$CACHE_ROOT/.build.XXXXXX")"
-  SHIM="$BUILD"
+# SHIM_FINAL is where the cache will live once built, known up front and
+# never anything else -- every wrap*/gcc_shims/etc function below embeds
+# *this* path into the scripts it writes (an LD_PRELOAD value, a gcc -B
+# flag), because that is where those scripts will actually be sitting when
+# something execs them later. $SHIM is where those same functions physically
+# write to *right now*, which on a cold cache is a private temp directory,
+# not $SHIM_FINAL -- conflating the two was an earlier bug here: a wrapper
+# built during a cold run had the temp build directory's own name baked
+# into its LD_PRELOAD line, correct until the rename below made it stale.
+SHIM_FINAL="$CACHE_ROOT/$(cache_key)"
+SHIM="$SHIM_FINAL"
+if [ ! -d "$SHIM_FINAL" ]; then
+  SHIM="$(mktemp -d "$CACHE_ROOT/.build.XXXXXX")"
   populate_shim_cache_later=1
 else
   populate_shim_cache_later=0
@@ -169,13 +178,17 @@ fi
 FAKEEXE_SO=""
 fakeexe_so() {
   [ -n "$FAKEEXE_SO" ] && { echo "$FAKEEXE_SO"; return; }
-  local src="$SHIM/.fakeexe.c" so="$SHIM/.fakeexe.so"
+  # $so is where the .so is physically written *right now* (the cache, or a
+  # cold-build temp dir); $so_final is the path embedded into any script
+  # that references it, i.e. where it will be sitting once a cold build's
+  # temp dir is renamed into place. The two differ only mid-build.
+  local src="$SHIM/.fakeexe.c" so="$SHIM/.fakeexe.so" so_final="$SHIM_FINAL/.fakeexe.so"
   if [ -e "$so" ]; then
     # already built into the cache by an earlier eda run (or earlier in this
     # one's own build pass) -- the whole point of caching is not repeating
     # this compile on every single invocation.
-    FAKEEXE_SO="$so"
-    echo "$so"
+    FAKEEXE_SO="$so_final"
+    echo "$so_final"
     return
   fi
   cat > "$src" <<'EOF'
@@ -202,8 +215,8 @@ ssize_t readlink(const char *path, char *buf, size_t bufsiz) {
 EOF
   "$LD" --library-path "$BASE_LIBPATH" "$T/usr/bin/gcc-$GCC_VER" \
     -shared -fPIC -o "$so" "$src" -ldl >&2
-  FAKEEXE_SO="$so"
-  echo "$so"
+  FAKEEXE_SO="$so_final"
+  echo "$so_final"
 }
 
 # run_elf <real-absolute-path> [args...] -- exec an image ELF through the
@@ -330,7 +343,7 @@ gcc_shims() {
     [ -e "$real" ] || continue
     cat > "$SHIM/$n" <<EOF
 #!/bin/sh
-exec "$LD" --library-path "$BASE_LIBPATH:$(dirname "$real")" "$real" -B"$SHIM" "\$@"
+exec "$LD" --library-path "$BASE_LIBPATH:$(dirname "$real")" "$real" -B"$SHIM_FINAL" "\$@"
 EOF
     chmod +x "$SHIM/$n"
   done
@@ -383,13 +396,12 @@ populate_shim_cache() {
 
 if [ "$populate_shim_cache_later" = "1" ]; then
   populate_shim_cache
-  FINAL="$CACHE_ROOT/$(cache_key)"
-  if mv -T "$SHIM" "$FINAL" 2>/dev/null; then
-    SHIM="$FINAL"
+  if mv -T "$SHIM" "$SHIM_FINAL" 2>/dev/null; then
+    :
   else
     rm -rf "$SHIM"
-    SHIM="$FINAL"
   fi
+  SHIM="$SHIM_FINAL"
 fi
 export PATH="$SHIM:$PATH"
 
@@ -516,9 +528,13 @@ case "$TOOL" in
     # stays in one place, their own case below, however they're reached.
     wrap_recurse magic
     wrap_recurse netgen
-    wrap klayout "$T/foss/tools/klayout/klayout"
+    wrap_recurse klayout
     wrap openroad "$T/foss/tools/openroad-librelane/bin/openroad"
     wrap sta "$T/foss/tools/openroad-librelane/bin/sta"
+    # LibreLane's own klayout step doesn't only run `klayout -r <script>` --
+    # for at least one check (XOR) it spawns "ruby" directly to run a
+    # standalone .rb script outside klayout entirely.
+    wrap ruby "$T/usr/bin/ruby3.2"
     export PATH="$SHIM:$SHIM/.verilator-root/bin:$T/foss/tools/openroad-librelane/bin:$PATH"
     export VERILATOR_ROOT="$T/foss/tools/verilator/share/verilator"
     export TOOLS="$T/foss/tools"
