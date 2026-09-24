@@ -42,7 +42,97 @@ FIXER_DOMAINS = frozenset({
 # them (docs/design.md 1.5's "planted fault" column is the source for each
 # one). A finding without a matching kind falls back to its `check` name,
 # then to 'review'.
-FIXER_HINTS: dict[str, str] = {}
+#
+# vde's own kinds land at M5 (docs/design.md, "### M5."): every kind M2/M3's
+# check_<gate>.py scripts actually emit (grep checklib.violation( call sites
+# under engine/scripts/check_*.py) gets a routing rule here, so the fix loop
+# (skills/vde/SKILL.md) dispatches to the right fixer domain without a human
+# in the loop for the common case. The judgment calls, spelled out once:
+#   - `sim`/`holdout` test FAILURES read as the DESIGN being wrong against a
+#     testbench written first, in fresh context, from the spec alone (docs/
+#     design.md section 2) - they route to "rtl". A test that never ran
+#     (skipped) or a requirement with no test tagged to it is a TESTBENCH
+#     gap - "testbench".
+#   - `mutate` scores the testbench, never the design ("a mutate failure
+#     goes back to the tb-writer, not the rtl-writer", docs/design.md
+#     section 2) - every survivor_* class and the kill-rate rollup route to
+#     "testbench".
+#   - `formal` property failures are exactly what formal exists to catch
+#     that sim cannot ("formal is the answer to tests that pass too
+#     easily") - "rtl". A second-engine disagreement or an unreached cover
+#     point is a property-writer/property concern, not a design one -
+#     "formal" (whose own guidance in fix_dispatch.DOMAINS already says
+#     "widen the induction depth or fix the property, never loosen it").
+#   - `cover` gaps are what the tests never reached - "testbench", matching
+#     "Coverage says what the tests never reached" (docs/design.md
+#     section 2).
+#   - `synth` findings (latch, unmapped cell, combinational loop, undriven
+#     net) are "almost always an RTL defect surfacing late" (fix_dispatch's
+#     own synth-domain guidance) - "rtl".
+#   - `lint` findings are RTL text defects - "rtl"; an unrecognized
+#     verilator rule (a kind this table has never seen) still falls back to
+#     "review" by design, same as any other unmapped kind.
+#   - `release`'s own `gate_not_ready` is attest.py's coverage refusal, not
+#     a design defect - "review" (the human/orchestrator reads which gate
+#     is missing and re-enters the right phase; no script fixes this).
+FIXER_HINTS: dict[str, str] = {
+    # lint (engine/scripts/check_lint.py) - verilator rule kinds, plus the
+    # rule-less fallbacks the script itself uses.
+    "compile_error": "rtl",
+    "warning": "rtl",
+    "LATCH": "rtl",
+    "CASEINCOMPLETE": "rtl",
+    "CASEOVERLAP": "rtl",
+    "CASEX": "rtl",
+    "WIDTH": "rtl",
+    "WIDTHEXPAND": "rtl",
+    "WIDTHTRUNC": "rtl",
+    "UNUSEDSIGNAL": "rtl",
+    "UNDRIVEN": "rtl",
+    "MULTIDRIVEN": "rtl",
+    "BLKSEQ": "rtl",
+    "COMBDLY": "rtl",
+    "SYNCASYNCNET": "rtl",
+
+    # sim (check_sim.py)
+    "test_failed": "rtl",
+    "test_skipped": "testbench",
+    "requirement_no_test": "testbench",
+
+    # holdout (check_holdout.py) - "test_skipped" is shared with sim above.
+    "holdout_failed": "rtl",
+    "untagged_holdout_test": "testbench",
+
+    # mutate (check_mutate.py) - every mutate_runner.classify() class.
+    "kill_rate_below_threshold": "testbench",
+    "survivor_reset_removed": "testbench",
+    "survivor_output_stuck": "testbench",
+    "survivor_condition_inverted": "testbench",
+    "survivor_stuck_other": "testbench",
+    "survivor_conditional_stuck": "testbench",
+    "survivor_other": "testbench",
+
+    # formal (check_formal.py)
+    "property_failed": "rtl",
+    "engine_disagreement": "formal",
+    "bounded_not_proven": "formal",
+    "cover_not_reached": "formal",
+
+    # cover (check_cover.py)
+    "line_coverage_below_threshold": "testbench",
+    "toggle_coverage_below_threshold": "testbench",
+    "line_not_covered": "testbench",
+    "toggle_not_covered": "testbench",
+
+    # synth (check_synth.py)
+    "combinational_loop": "rtl",
+    "no_driver": "rtl",
+    "unmapped_cell": "rtl",
+    "latch": "rtl",
+
+    # release (check_release.py, via attest.py build())
+    "gate_not_ready": "review",
+}
 
 
 def _uf_find(parent, i):
