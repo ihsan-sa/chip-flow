@@ -93,7 +93,20 @@ def run_verilator(ws: Path, top: str, files: list[Path]) -> str:
     except subprocess.TimeoutExpired as exc:
         raise CheckError(f"verilator --lint-only timed out after "
                          f"{TIMEOUT_S:g}s: {exc}") from exc
-    return (proc.stdout or "") + (proc.stderr or "")
+    output = (proc.stdout or "") + (proc.stderr or "")
+    # A real verilator error still prints %Error lines even under
+    # -Wno-fatal (parse_violations below reports those as findings); a
+    # launcher that never reached verilator at all (bin/eda misconfigured,
+    # a missing binary, exit 127) exits nonzero too but leaves no %Error to
+    # explain it - that used to fall straight through to parse_violations,
+    # which found nothing to parse and reported zero violations: a launcher
+    # failure passing lint clean. Caught here instead, before parsing.
+    if proc.returncode != 0 and "%Error" not in output:
+        raise CheckError(
+            f"verilator --lint-only exited {proc.returncode} with no "
+            f"%Error line to explain it (the launcher likely never reached "
+            f"verilator): {output[-2000:]}")
+    return output
 
 
 def parse_violations(output: str, allow: dict[str, str]) -> list[dict]:

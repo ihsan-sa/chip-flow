@@ -123,6 +123,23 @@ def test_missing_spec_yaml_is_an_error(tmp_path, capsys):
     assert out["remediation"]
 
 
+def test_launcher_failure_with_no_percent_lines_is_an_error(
+        tmp_path, capsys, monkeypatch):
+    # a launcher that exits nonzero without ever reaching verilator (a bad
+    # bin/eda, EDA_TOOLCHAIN pointed nowhere, exit 127) used to leave
+    # parse_violations nothing to parse -> zero violations -> a clean pass.
+    ws = make_ws(tmp_path, CLEAN_V)
+    bad_eda = tmp_path / "bad-eda.sh"
+    bad_eda.write_text("#!/bin/sh\nexit 127\n", encoding="utf-8")
+    bad_eda.chmod(0o755)
+    monkeypatch.setattr(check_lint, "EDA_BIN", bad_eda)
+    code = check_lint.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 2, out
+    assert out["status"] == "error"
+    assert "127" in out["remediation"]
+
+
 def test_no_rtl_files_is_an_error(tmp_path, capsys):
     ws = tmp_path / "ws"
     (ws / "rtl").mkdir(parents=True)
