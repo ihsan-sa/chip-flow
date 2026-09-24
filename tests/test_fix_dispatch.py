@@ -66,6 +66,85 @@ def test_orders_register_as_open_issues_when_state_given(tmp_path):
     assert wo["role_prompt"] == "skills/vde/agents/fixer.md"
 
 
+def test_info_severity_findings_never_become_their_own_issue(tmp_path):
+    """A gate result carrying `criteria.fail_severities` (gate.py's own
+    evaluate() envelope) alongside info-severity findings (mutate survivor
+    detail, most commonly) must dispatch ONE order for the failing-severity
+    cluster and fold the info-severity ones into it as `info_context` -
+    never open a second, unclosable issue for an info finding on its own.
+    Three violations per survivor kind (not one or two) so
+    merge_small_clusters' own small-cluster batching (<=2) does not fold
+    them into the same cluster as the lone error finding first - this test
+    is about the SEVERITY split, not the batching."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    findings = {
+        "gate": "mutate", "phase": "P4",
+        "criteria": {"fail_severities": ["error"], "max_count": 0},
+        "violations": [
+            _v("kill_rate_below_threshold", "tb/counter8_tb.py", sev="error"),
+            *[_v("survivor_reset_removed", "rtl/counter8.v", sev="info")
+              for _ in range(3)],
+            *[_v("survivor_other", "rtl/counter8.v", sev="info")
+              for _ in range(3)],
+        ],
+    }
+    inp = tmp_path / "r.json"
+    inp.write_text(json.dumps(findings), encoding="utf-8")
+    payload, _ = fix_dispatch.run(["--input", str(inp), "--workspace", str(ws),
+                                   "--out-dir", str(tmp_path / "wo")])
+    assert payload["counts"]["orders"] == 1
+    assert payload["counts"]["info_only_clusters"] == 2
+    order = payload["orders"][0]
+    assert order["info_context_clusters"] == 2
+    wo = json.loads(Path(order["work_order"]).read_text(encoding="utf-8"))
+    assert wo["cluster"]["severity"] == "error"
+    info_kinds = {k for c in wo["info_context"] for k in c["kinds"]}
+    assert info_kinds == {"survivor_reset_removed", "survivor_other"}
+
+
+def test_info_only_input_dispatches_nothing(tmp_path):
+    """Every finding below the gate's own fail_severities: nothing to fix
+    (the gate did not fail on any of it) - no order, no issue, status pass,
+    never a silent info-only issue nothing can ever close."""
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    findings = {
+        "gate": "cover", "phase": "P4",
+        "criteria": {"fail_severities": ["error"], "max_count": 0},
+        "violations": [_v("line_not_covered", "rtl/counter8.v", sev="info")],
+    }
+    inp = tmp_path / "r.json"
+    inp.write_text(json.dumps(findings), encoding="utf-8")
+    payload, _ = fix_dispatch.run(["--input", str(inp), "--workspace", str(ws),
+                                   "--out-dir", str(tmp_path / "wo")])
+    assert payload["status"] == "pass"
+    assert payload["counts"]["orders"] == 0
+    assert payload["counts"]["info_only_clusters"] == 1
+
+
+def test_info_severity_findings_no_open_issue_registered(tmp_path):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    sys.path.insert(0, str(ENGINE / "scripts"))
+    import state as state_mod
+    state_mod.State.init(ws, "vde", "counter8")
+    findings = {
+        "gate": "mutate",
+        "criteria": {"fail_severities": ["error"], "max_count": 0},
+        "violations": [
+            _v("kill_rate_below_threshold", "tb/a_tb.py", sev="error"),
+            *[_v("survivor_other", "rtl/a.v", sev="info") for _ in range(3)],
+        ],
+    }
+    inp = tmp_path / "r.json"
+    inp.write_text(json.dumps(findings), encoding="utf-8")
+    fix_dispatch.run(["--input", str(inp), "--workspace", str(ws)])
+    data = json.loads((ws / "state.json").read_text(encoding="utf-8"))
+    assert len(data["open_issues"]) == 1
+    assert data["open_issues"][0]["severity"] == "error"
+
+
 def test_merge_respects_cap():
     singles = [
         {"file": f"rtl/f{i}.v", "module": None, "kinds": [f"k{i}"],
