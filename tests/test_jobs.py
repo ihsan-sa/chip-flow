@@ -133,7 +133,7 @@ def test_status_all_reconciles_every_job(tmp_path):
                                  SLEEPY_CHECK.format(sleep_s=0.1))
     gates_yaml = make_gates_yaml(tmp_path, "sleepy")
     rec1 = jobs_mod.start("harden", ws, "vde", str(gates_yaml), str(checks_dir))
-    time.sleep(1.0)   # let it finish
+    poll_until_not_running(ws, rec1["job"])   # a fixed sleep flaked under load
     out = jobs_mod.status(ws, None, True)
     assert rec1["job"] in out
     assert out[rec1["job"]]["status"] == "done"
@@ -150,7 +150,7 @@ def test_cli_main_start_and_status(tmp_path, capsys):
     assert code == 0
     out = json.loads(capsys.readouterr().out)
     jid = out["job"]
-    time.sleep(1.0)
+    poll_until_not_running(ws, jid)   # a fixed sleep flaked under load
     code2 = jobs_mod.main(["status", "--workspace", str(ws), "--job", jid])
     assert code2 == 0
     out2 = json.loads(capsys.readouterr().out)
