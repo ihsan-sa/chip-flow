@@ -204,17 +204,25 @@ def _poll_until_not_running(jobs_mod, ws: Path, job_id: str, timeout: float) -> 
 
 
 def make_real_counter8_ws(tmp_path: Path) -> Path:
-    import state as state_mod
-    ws = tmp_path / "ws"
-    state_mod.State.init(ws, "vde", "counter8")
-    for name in ("spec.md", "spec.yaml"):
-        (ws / "spec" / name).write_text(
-            (CORPUS_COUNTER8 / name).read_text(encoding="utf-8"), encoding="utf-8")
-    for f in (CORPUS_COUNTER8 / "rtl").glob("*.v"):
-        (ws / "rtl" / f.name).write_text(f.read_text(encoding="utf-8"), encoding="utf-8")
-    for f in (CORPUS_COUNTER8 / "tb").glob("*.py"):
-        (ws / "tb" / f.name).write_text(f.read_text(encoding="utf-8"), encoding="utf-8")
-    return ws
+    """A full copy of the counter rung (spec, rtl, tb, holdout, formal) -
+    the same one faults.py builds, so every digital gate has its inputs and
+    release can be asked at the end."""
+    import faults
+    return faults.make_scratch_workspace(tmp_path, CORPUS_COUNTER8, "vde",
+                                         "counter8")
+
+
+def _gate_passes(ws: Path, name: str, out_dir: Path) -> dict:
+    """Run one gate through gate.py, which records it in state.json, and
+    return its result."""
+    import gate as gate_mod
+    import json as _json
+    out = out_dir / f"gate-{name}.json"
+    code = gate_mod.main(["--gate", name, "--workspace", str(ws),
+                          "--skill", "vde", "--out", str(out)])
+    result = _json.loads(out.read_text(encoding="utf-8"))
+    assert code == 0 and result["status"] == "pass", f"{name}: {result}"
+    return result
 
 
 @pytest.mark.slow
@@ -235,7 +243,16 @@ def test_harden_job_killed_halfway_reports_dead_then_restart_finishes_and_signof
     import check_precheck
     import check_timing
 
+    import check_release
+
     ws = make_real_counter8_ws(tmp_path)
+    out_dir = tmp_path / "gate-results"
+    out_dir.mkdir()
+    # every digital gate before harden, in pipeline order, recorded - so the
+    # release check at the end sees the whole pipeline fresh, not just M4.
+    for name in ("spec_lint", "lint", "sim", "holdout", "mutate", "formal",
+                 "cover", "synth"):
+        _gate_passes(ws, name, out_dir)
 
     rec = jobs_mod.start("harden", ws, "vde", None, None)
     pid = rec["pid"]
@@ -278,11 +295,27 @@ def test_harden_job_killed_halfway_reports_dead_then_restart_finishes_and_signof
                      (check_lvs, "lvs"), (check_glsim, "glsim"),
                      (check_precheck, "precheck")):
         _, before = statelib.hash_kind(ws, "harden", imap)
-        payload, _out = mod.run(["--workspace", str(ws)])
-        assert payload["status"] == "pass", f"{name}: {payload}"
+        # through gate.py (it imports and runs `mod` and records the pass)
+        # so release below sees each one recorded.
+        assert mod.SCRIPT == f"check_{name}"
+        _gate_passes(ws, name, out_dir)
         _, after = statelib.hash_kind(ws, "harden", imap)
         assert after == before, (
             f"{name}: running this gate changed the 'harden' artifact-kind "
             "hash - it wrote a scratch/report file inside harden/ instead "
             "of ws/log/<gate>_work/, which would falsely stale every "
             "sibling gate that also reads 'harden'")
+
+    # docs/design.md's M4 done-criterion: release passes on the counter with
+    # every digital gate fresh. check_release reads state.json's recorded
+    # results through attest.build, so this fails if any gate above did not
+    # record, or if a later gate staled an earlier one's inputs.
+    import state as state_mod
+    fresh, _ = state_mod.run(["freshness", "--workspace", str(ws)])
+    stale = {g: v for g, v in fresh["gates"].items()
+             if g != "release" and not v.get("fresh")}
+    assert not stale, stale
+    release_out = out_dir / "release.json"
+    code = check_release.main(["--workspace", str(ws), "--out", str(release_out)])
+    release = _json.loads(release_out.read_text(encoding="utf-8"))
+    assert code == 0 and release["status"] == "pass", release
