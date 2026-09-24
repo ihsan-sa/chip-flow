@@ -35,23 +35,31 @@ ports:
   count: {dir: output}
 """
 
-# a real, discriminating testbench: checks every cycle's value.
+# a real, discriminating testbench: checks every cycle's value. Drives and
+# samples right after a FallingEdge, never RisingEdge (same discipline as
+# corpus/vde/counter8/tb/test_counter8.py's own note): a write scheduled
+# right at a RisingEdge races the DUT's own posedge NBA update, and check_
+# mutate.py's own check_baseline() now catches exactly that kind of
+# flakiness - this fixture used to fail mcy's "-none" baseline (an
+# unrelated race, not a real testbench defect) under the yosys techmap
+# round-trip mutate_runner.py puts every mutant, baseline included,
+# through.
 TB_STRONG = """\
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import RisingEdge
+from cocotb.triggers import FallingEdge
 
 # req: REQ-WRAP
 @cocotb.test()
 async def test_counts_every_cycle(dut):
     cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
+    await FallingEdge(dut.clk)
     dut.rst.value = 1
-    await RisingEdge(dut.clk)
+    await FallingEdge(dut.clk)
     dut.rst.value = 0
-    await RisingEdge(dut.clk)
     prev = int(dut.count.value)
     for _ in range(10):
-        await RisingEdge(dut.clk)
+        await FallingEdge(dut.clk)
         cur = int(dut.count.value)
         assert cur == (prev + 1) % 16, f"expected {(prev + 1) % 16} got {cur}"
         prev = cur
@@ -69,6 +77,15 @@ async def test_does_nothing(dut):
     cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
     for _ in range(10):
         await RisingEdge(dut.clk)
+"""
+
+# a tb that doesn't even import - every mutant, baseline included, crashes
+# in mutate_runner.py's own build/test step and is scored "FAIL"/"KILLED"
+# for a reason that has nothing to do with the design.
+TB_SYNTAX_ERROR = """\
+import cocotb
+
+def broken(
 """
 
 # small on purpose: this is the slow gate, and the unit test only needs
@@ -108,6 +125,18 @@ def test_testbench_that_asserts_nothing_fails_mutate(tmp_path, capsys):
     assert out["kill_rate"] == 0.0, out
     kinds = {v["kind"] for v in out["violations"]}
     assert "kill_rate_below_threshold" in kinds
+
+
+def test_tb_that_does_not_import_fails_via_the_baseline(tmp_path, capsys):
+    # every crashed run counts as a "kill" under mcy's own [logic] block -
+    # without check_baseline(), this passed at kill_rate 1.0.
+    ws = make_ws(tmp_path, TB_SYNTAX_ERROR)
+    code = check_mutate.main(["--workspace", str(ws), "--size", str(SMALL_SIZE),
+                              "--seed", "1"])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 2, out
+    assert out["status"] == "error"
+    assert "unmutated design fails the visible tests" in out.get("remediation", "")
 
 
 def test_no_tb_modules_is_an_error(tmp_path, capsys):

@@ -36,7 +36,12 @@ Pass criteria (gates.yaml `mutate` row): kill rate >= 0.9, and no survivor in
 survivor outside those classes is reported at severity "info" - visible, not
 failing). Fault this gate must catch: "a testbench that asserts nothing" (a
 tb/ that never fails, however hard the design is mutated, drives kill rate
-to ~0 and every survivor class fires).
+to ~0 and every survivor class fires) - and, just as fatal in the other
+direction, "a testbench that doesn't even run" (an import error, a broken
+fixture): every mutant crashes the same way the unmutated design does, mcy's
+own `[logic]` counts every crash as a kill, and kill rate reads a false 1.0.
+check_baseline() below catches that one, off mcy's own `-none` baseline row
+(mutation id 1) rather than off any real mutant.
 """
 from __future__ import annotations
 
@@ -143,6 +148,50 @@ def run_mcy(mcy_dir: Path, mcy_real: Path, nproc: int) -> None:
                          f"{(ran.stderr or ran.stdout)[-2000:]}")
 
 
+def check_baseline(db_path: Path) -> None:
+    """mcy's own `-none` do-nothing baseline is always mutation id 1 (the
+    first line `mutate -list ... -none ...` writes to mutations.txt, read
+    back in insertion order by mcy's own `init` - see mcy's own script,
+    "Importing mutations."). classify()/read_mutants() both treat it as "not
+    a mutant" and skip it (module docstring above), so nothing else in this
+    script ever looks at its result.
+
+    That baseline result is exactly what a testbench that never even
+    imports (a syntax error, a bad fixture) breaks: mutate_runner.py's own
+    `[test sim]` step crashes for EVERY mutation, baseline included, and
+    mcy's own `[logic]` block (`result("sim")=="FAIL" -> tag("KILLED")`)
+    treats every crash as a kill - including the unmutated design's. Kill
+    rate over the REAL mutants alone then reads 1.0 (every one "killed",
+    for a reason that has nothing to do with the design), and the gate
+    passes a tb that tests nothing. This is the one place that baseline's
+    own tag is read, so it must PASS (mcy's "SURVIVED": the unmutated
+    design behaves, as expected, under the visible tests) before a kill
+    rate computed from anything else is trusted at all."""
+    con = sqlite3.connect(str(db_path))
+    try:
+        row = con.execute(
+            "SELECT mutation FROM mutations WHERE mutation_id = 1").fetchone()
+        if row is None:
+            raise CheckError("mcy database has no mutation id 1 (expected "
+                             "its own '-mode none' baseline row)")
+        mode_m = MODE_RE.search(row[0])
+        if not mode_m or mode_m.group(1) != "none":
+            raise CheckError("mcy mutation id 1 is not the '-mode none' "
+                             f"baseline mcy always inserts first (got: "
+                             f"{row[0]!r}) - cannot tell whether the "
+                             "unmutated design passes the visible tests")
+        tags = {t for (t,) in con.execute(
+            "SELECT tag FROM tags WHERE mutation_id = 1")}
+        if "KILLED" in tags:
+            raise CheckError("the unmutated design fails the visible tests")
+        if "SURVIVED" not in tags:
+            raise CheckError("mcy's own baseline (mutation id 1) never got "
+                             "a KILLED/SURVIVED tag - mcy run did not "
+                             "finish cleanly")
+    finally:
+        con.close()
+
+
 def classify(mutation: str, output_ports: set[str]) -> str | None:
     mode_m = MODE_RE.search(mutation)
     mode = mode_m.group(1) if mode_m else None
@@ -230,7 +279,9 @@ def run(argv=None):
     run_mcy(mcy_dir, mcy_real, nproc)
     wall_s = time.monotonic() - t0
 
-    mutants = read_mutants(mcy_dir / "database" / "db.sqlite3", output_ports)
+    db_path = mcy_dir / "database" / "db.sqlite3"
+    check_baseline(db_path)
+    mutants = read_mutants(db_path, output_ports)
     if not mutants:
         raise CheckError("mcy produced no mutants to score (check spec.yaml "
                          "mutate.size and the design's own size)")
