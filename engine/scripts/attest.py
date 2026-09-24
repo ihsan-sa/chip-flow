@@ -16,9 +16,16 @@ M3.") is where a real release can happen, and where a scoped-down waiver/
 durability mechanism lands (load_waivers/waiver_problems below) - scoped
 down because a board's fab/order concepts (/hwde releaselib's durable-waiver
 required fields beyond reason+approved, its manufacturing-option waivers)
-don't port, but the CORE idea does: a waiver binds to the gate's own last
-recorded input hashes and to checklib.CHECKER_VERSION, so an artifact edit
-or a checker semantics bump invalidates it and it must be re-approved.
+don't port, but the CORE idea does: a waiver binds to the gate's CURRENT
+input hashes (freshness_report's current_inputs, re-hashed from the files on
+disk every call - never the gate's own last RECORDED inputs, which stay
+frozen at record time and so would let a waiver approved on RTL A silently
+keep covering the gate after the RTL moves to B with no re-run in between)
+and to checklib.CHECKER_VERSION, so an artifact edit or a checker semantics
+bump invalidates it and it must be re-approved. A waiver is also refused
+outright whenever the gate's own hash_valid is False (its last recorded run
+no longer matches the current files): a waiver never covers a gate that has
+not actually run against the inputs it is being asked to cover.
 
 Subcommands:
   build        Assemble + write reports/checks.json. Refuses (status
@@ -54,6 +61,7 @@ sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(ENGINE / "lib"))
 
 import checklib  # noqa: E402
+import gate as gate_mod  # noqa: E402
 import statelib  # noqa: E402
 
 SCRIPT = "attest"
@@ -81,26 +89,33 @@ def load_waivers(ws: Path) -> list[dict]:
     return data
 
 
-def waiver_inputs_sha256(entry: dict) -> str | None:
-    """The durability binding: a canonical hash of the gate's own last
-    RECORDED input hashes (state.json's gates.<g>.last.inputs, the same map
-    gate.py's record_gate stamped in) - not the gate's current inputs. A
-    waiver approved against yesterday's inputs says nothing about today's;
-    it is invalidated the moment record_gate's own hashes move, same as any
-    other gate result would be."""
-    inputs = (entry.get("last") or {}).get("inputs")
-    if not isinstance(inputs, dict) or not inputs:
+def waiver_inputs_sha256(current_inputs: dict | None) -> str | None:
+    """The durability binding: a canonical hash of the gate's CURRENT input
+    hashes (freshness_report's current_inputs for this gate - re-hashed from
+    the files on disk every call) - never the gate's own last RECORDED
+    inputs (state.json's gates.<g>.last.inputs), which stay frozen at record
+    time. Binding to the recorded value let a waiver approved while the RTL
+    read A silently keep covering the gate after the RTL moved to B, with no
+    re-run in between - entry.last.inputs never moved, so the old hash kept
+    matching. Binding to current_inputs instead means the hash itself moves
+    the moment a file does; waiver_problems below additionally refuses
+    outright whenever hash_valid is False, so a waiver can never be written
+    against a hypothetical "current" state the gate has not actually run
+    against either."""
+    if not isinstance(current_inputs, dict) or not current_inputs:
         return None
     return hashlib.sha256(
-        json.dumps(inputs, sort_keys=True).encode("utf-8")).hexdigest()
+        json.dumps(current_inputs, sort_keys=True).encode("utf-8")).hexdigest()
 
 
-def waiver_problems(w: dict, gate: str, entry: dict) -> list[str]:
+def waiver_problems(w: dict, gate: str, entry: dict, verdict: dict) -> list[str]:
     """Durability problems for one candidate waiver against the gate entry
     it claims to cover - every one raises the release refusal, none of them
     silently drop the waiver back to "no waiver" (a malformed or stale
     waiver is worse than none: it looks like cover for a gate nobody
-    actually re-approved)."""
+    actually re-approved). `verdict` is this gate's own statelib.
+    gate_freshness verdict (fresh["gates"][gate]) - the same one gate_check
+    already computed, so this never re-derives freshness on its own."""
     label = f"{gate}"
     missing = [f for f in REQUIRED_WAIVER_FIELDS if not w.get(f)]
     if missing:
@@ -108,13 +123,19 @@ def waiver_problems(w: dict, gate: str, entry: dict) -> list[str]:
                 f"{'/'.join(missing)} (a release waiver must bind reason, "
                 "approval and the gate's own input hashes)"]
     problems = []
-    current = waiver_inputs_sha256(entry)
+    if verdict.get("hash_valid") is False:
+        problems.append(
+            f"waiver [{label}]: the gate's inputs changed since its last "
+            "recorded run (" + ", ".join(verdict.get("changed_inputs") or [])
+            + ") - a waiver never covers a gate that has not actually run "
+            "against its current inputs; re-run the gate first")
+    current = waiver_inputs_sha256(verdict.get("current_inputs"))
     if current is None:
-        problems.append(f"waiver [{label}]: the gate has no recorded input "
+        problems.append(f"waiver [{label}]: the gate has no current input "
                         "hashes to bind against - nothing durable to waive")
     elif w["inputs_sha256"] != current:
         problems.append(f"waiver [{label}]: approved against different "
-                        "inputs than the gate's own last recorded run - "
+                        "inputs than the gate's current ones - "
                         "re-approve under the current inputs")
     checker_version = w.get("checker_version")
     if checker_version != checklib.CHECKER_VERSION:
@@ -149,10 +170,19 @@ def applicable_gates(skill: str, imap: dict | None = None) -> list[str]:
 
 
 def gate_check(ws: Path, skill: str, gate: str, data: dict,
-              imap: dict, fresh: dict, waivers: list[dict] | None = None) -> dict:
+              imap: dict, fresh: dict, waivers: list[dict] | None = None,
+              gates_row: dict | None = None) -> dict:
+    """`gates_row` is this gate's own gates.yaml row (build() looks it up
+    per-skill) - its `tool` names the check that ran, alongside `version`
+    (checklib.CHECKER_VERSION, the checker SEMANTICS version every gate in
+    one attestation shares, same one a waiver binds against): "the record
+    of what ran is ... gate, tool and version" (docs/design.md section 2)."""
+    tool = (gates_row or {}).get("tool")
+    version = checklib.CHECKER_VERSION
     entry = (data.get("gates") or {}).get(gate)
     if entry is None or not entry.get("status"):
         return {"gate": gate, "applies": True, "ran": False,
+                "tool": tool, "version": version,
                 "reason": "no recorded result"}
     verdict = fresh["gates"].get(gate, {})
     ok = entry.get("status") == "pass" and verdict.get("fresh")
@@ -168,6 +198,7 @@ def gate_check(ws: Path, skill: str, gate: str, data: dict,
         else:
             reason = "stale: marked by a later edit"
     result = {"gate": gate, "applies": True, "ran": True, "ok": bool(ok),
+             "tool": tool, "version": version,
              "status": entry.get("status"),
              "attempts": entry.get("attempts"),
              "ts": (entry.get("last") or {}).get("ts"),
@@ -182,7 +213,7 @@ def gate_check(ws: Path, skill: str, gate: str, data: dict,
     for w in waivers or []:
         if w.get("gate") != gate:
             continue
-        problems = waiver_problems(w, gate, entry)
+        problems = waiver_problems(w, gate, entry, verdict)
         if problems:
             result["waiver_problems"] = problems
             continue
@@ -202,11 +233,13 @@ def build(ws: Path, max_report_age_h: float = 24.0) -> tuple[dict | None, list[s
         return None, ["state.json has no 'skill'"]
     imap = statelib.load_map()
     fresh = statelib.freshness_report(data, ws, imap)
+    skill_rows = gate_mod.load_gates(gate_mod.DEFAULT_GATES).get(skill) or {}
     try:
         waivers = load_waivers(ws)
     except ValueError as exc:
         return None, [str(exc)]
-    checks = [gate_check(ws, skill, g, data, imap, fresh, waivers)
+    checks = [gate_check(ws, skill, g, data, imap, fresh, waivers,
+                         skill_rows.get(g))
              for g in applicable_gates(skill, imap)]
     problems = []
     for c in checks:

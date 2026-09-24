@@ -49,6 +49,14 @@ def write_waivers(ws: Path, waivers: list[dict]) -> None:
         json.dumps(waivers), encoding="utf-8")
 
 
+def current_inputs_sha(ws: Path, gate: str) -> str | None:
+    """The waiver durability hash bound to `gate`'s CURRENT inputs (never
+    its last recorded ones) - what a real approval would capture."""
+    data = checklib.load_json(ws / "state.json", "state.json")
+    fresh = statelib.freshness_report(data, ws)
+    return attest_mod.waiver_inputs_sha256(fresh["gates"][gate]["current_inputs"])
+
+
 def test_release_refuses_on_a_fresh_workspace(tmp_path, capsys):
     ws = make_vde_ws(tmp_path)
     code = check_release.main(["--workspace", str(ws)])
@@ -68,6 +76,22 @@ def test_release_passes_once_every_gate_is_fresh(tmp_path, capsys):
     assert out["status"] == "pass"
     assert (ws / "reports" / "checks.json").is_file()
     assert out["waived"] == []
+
+
+def test_release_records_tool_and_version_per_gate(tmp_path, capsys):
+    # docs/design.md section 2: "The record of what ran is ... gate, tool
+    # and version, inputs and hashes, result, timestamp."
+    ws = make_vde_ws(tmp_path)
+    pass_every_gate(ws)
+    code = check_release.main(["--workspace", str(ws)])
+    assert code == 0, json.loads(capsys.readouterr().out)
+    checks_doc = json.loads((ws / "reports" / "checks.json").read_text())
+    by_gate = {c["gate"]: c for c in checks_doc["checks"]}
+    assert by_gate["formal"]["tool"] == "formal"     # a real, built gate
+    assert by_gate["harden"]["tool"] == "stub"        # not yet built
+    assert by_gate["release"]["tool"] == "release"    # release itself
+    assert all(c["version"] == checklib.CHECKER_VERSION
+              for c in checks_doc["checks"])
 
 
 def test_release_refuses_after_rtl_edit_then_passes_once_regated(tmp_path, capsys):
@@ -96,8 +120,7 @@ def test_release_refuses_after_rtl_edit_then_passes_once_regated(tmp_path, capsy
 def test_durable_waiver_covers_a_failing_gate(tmp_path, capsys):
     ws = make_vde_ws(tmp_path)
     pass_every_gate(ws, fail="mutate")
-    data = checklib.load_json(ws / "state.json", "state.json")
-    inputs_sha = attest_mod.waiver_inputs_sha256(data["gates"]["mutate"])
+    inputs_sha = current_inputs_sha(ws, "mutate")
     write_waivers(ws, [{
         "gate": "mutate",
         "reason": "kill rate below floor on a tiny design; tracked in a "
@@ -110,6 +133,65 @@ def test_durable_waiver_covers_a_failing_gate(tmp_path, capsys):
     out = json.loads(capsys.readouterr().out)
     assert code == 0, out
     assert out["waived"] == ["mutate"], out
+
+
+def test_waiver_is_refused_once_the_rtl_moves_past_what_it_covered(tmp_path, capsys):
+    # review finding: waiver_inputs_sha256 used to hash the gate's own LAST
+    # RECORDED inputs (frozen at record time), so a waiver approved while
+    # mutate failed against RTL A kept covering mutate even after the RTL
+    # moved to B, as long as mutate itself was never re-recorded - "a waiver
+    # outlives its input". docs/design.md's own done criterion: "mutate
+    # fails on A, it's waived, the RTL moves to B, every other gate
+    # re-runs, and release must refuse."
+    ws = make_vde_ws(tmp_path)
+    pass_every_gate(ws, fail="mutate")           # mutate fails against RTL A
+    inputs_sha = current_inputs_sha(ws, "mutate")
+    write_waivers(ws, [{
+        "gate": "mutate", "reason": "kill rate below floor on RTL A",
+        "approved_by": "a reviewer", "inputs_sha256": inputs_sha,
+        "checker_version": checklib.CHECKER_VERSION,
+    }])
+    code = check_release.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0, out                        # the waiver covers it on A
+    assert out["waived"] == ["mutate"], out
+
+    (ws / "rtl" / "top.v").write_text(RTL_B, encoding="utf-8")   # RTL -> B
+    st = state_mod.State.load(ws / "state.json")
+    for g in statelib.load_map()["gate_inputs"]["vde"]:
+        if g == "mutate":
+            continue                             # mutate itself never re-runs
+        st.record_gate(g, {"status": "pass"})    # "every other gate re-runs"
+    st.save()
+
+    code = check_release.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 1, out
+    assert any(v.get("module") == "mutate" for v in out["violations"]), out
+
+
+def test_waiver_is_refused_when_hash_valid_is_false_even_if_bound_to_current(
+        tmp_path, capsys):
+    # a waiver written against the gate's CURRENT inputs directly, while the
+    # gate's own last recorded run is against a DIFFERENT, older input - the
+    # gate has never actually run against what this waiver claims to cover.
+    # Comparing hashes alone would not catch this (the waiver's hash and the
+    # current hash agree); only the explicit hash_valid check does.
+    ws = make_vde_ws(tmp_path)
+    pass_every_gate(ws, fail="mutate")            # mutate recorded against A
+    (ws / "rtl" / "top.v").write_text(RTL_B, encoding="utf-8")  # RTL -> B,
+                                                   # mutate never re-run
+    inputs_sha = current_inputs_sha(ws, "mutate")  # hashes CURRENT (B) directly
+    write_waivers(ws, [{
+        "gate": "mutate",
+        "reason": "approved against a state the gate never actually ran",
+        "approved_by": "x", "inputs_sha256": inputs_sha,
+        "checker_version": checklib.CHECKER_VERSION,
+    }])
+    code = check_release.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 1, out
+    assert any("has not actually run" in v["msg"] for v in out["violations"]), out
 
 
 def test_waiver_missing_fields_is_not_durable(tmp_path, capsys):
@@ -138,8 +220,7 @@ def test_waiver_bound_to_different_inputs_is_rejected(tmp_path, capsys):
 def test_waiver_under_a_stale_checker_version_is_rejected(tmp_path, capsys):
     ws = make_vde_ws(tmp_path)
     pass_every_gate(ws, fail="mutate")
-    data = checklib.load_json(ws / "state.json", "state.json")
-    inputs_sha = attest_mod.waiver_inputs_sha256(data["gates"]["mutate"])
+    inputs_sha = current_inputs_sha(ws, "mutate")
     write_waivers(ws, [{
         "gate": "mutate", "reason": "because", "approved_by": "x",
         "inputs_sha256": inputs_sha, "checker_version": checklib.CHECKER_VERSION - 1,
@@ -153,8 +234,7 @@ def test_waiver_under_a_stale_checker_version_is_rejected(tmp_path, capsys):
 def test_expired_waiver_is_rejected(tmp_path, capsys):
     ws = make_vde_ws(tmp_path)
     pass_every_gate(ws, fail="mutate")
-    data = checklib.load_json(ws / "state.json", "state.json")
-    inputs_sha = attest_mod.waiver_inputs_sha256(data["gates"]["mutate"])
+    inputs_sha = current_inputs_sha(ws, "mutate")
     write_waivers(ws, [{
         "gate": "mutate", "reason": "because", "approved_by": "x",
         "inputs_sha256": inputs_sha, "checker_version": checklib.CHECKER_VERSION,

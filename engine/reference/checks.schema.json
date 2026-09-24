@@ -24,10 +24,18 @@
   "$defs": {
     "check": {
       "type": "object",
-      "required": ["gate", "applies", "ran"],
+      "required": ["gate", "tool", "version", "applies", "ran"],
       "additionalProperties": false,
       "properties": {
         "gate": {"type": "string", "minLength": 1},
+        "tool": {
+          "type": ["string", "null"],
+          "description": "the gates.yaml row's own `tool` (the check_<tool>.py stem that ran, or `stub` for a gate not yet built) - null only when the gate has no gates.yaml row for this skill at all."
+        },
+        "version": {
+          "type": ["integer", "null"],
+          "description": "checklib.CHECKER_VERSION at attestation time - the checker SEMANTICS version every gate in this attestation shares, the same one a waiver binds against (attest.waiver_problems)."
+        },
         "applies": {
           "type": "boolean",
           "const": true,
