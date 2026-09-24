@@ -56,6 +56,7 @@ sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(ENGINE / "lib"))
 
 import checklib  # noqa: E402
+import safelib  # noqa: E402
 import statelib  # noqa: E402
 
 import yaml  # noqa: E402
@@ -202,7 +203,21 @@ find_workspace = statelib.find_workspace
 
 def record_gate_result(skill: str, gate_name: str, gate: dict, result: dict,
                        workspace: Path | None) -> dict:
-    """Record the result in the workspace's state.json."""
+    """Record the result in the workspace's state.json.
+
+    Holds the state.json writer lock across load -> record_gate -> save, not
+    just around save() itself: State.save() is a compare-and-swap that only
+    takes the lock for the write, so two gates recording into the same
+    workspace at once (two jobs.py jobs, or two `gate.py` invocations from
+    parallel skill runs) could both load the same base bytes, both mutate,
+    and have the second's save() raise StaleWriteError even though nothing
+    else touched the file in between - a race, not a real conflict. state.py's
+    own CLI (`record-gate` and every other mutator) already wraps its
+    load/mutate/save in exactly this lock (state.py main(), "one OS-exclusive
+    hold across load -> mutate -> save"); this mirrors it so gate.py's own
+    self-recording path gets the same safety. safelib.writer_lock is
+    re-entrant per-thread/per-process, so State.save()'s own internal
+    `with writer_lock(...)` nests for free."""
     ws = find_workspace(None, str(workspace) if workspace else None)
     if ws is None:
         return {"ok": True, "recorded": False,
@@ -216,11 +231,13 @@ def record_gate_result(skill: str, gate_name: str, gate: dict, result: dict,
                           f"skill {skill!r} in invalidation.yaml - a result "
                           "with no input hashes is not evidence, so it is "
                           "not recorded"}
+    state_path = ws / "state.json"
     try:
         import state as state_mod  # sibling script
-        st = state_mod.State.load(ws / "state.json")
-        g = st.record_gate(gate_name, result, gate.get("phase"))
-        st.save()
+        with safelib.writer_lock(state_path, what="state.json"):
+            st = state_mod.State.load(state_path)
+            g = st.record_gate(gate_name, result, gate.get("phase"))
+            st.save()
     except Exception as exc:  # noqa: BLE001 - reported, never swallowed
         return {"ok": False, "recorded": False,
                 "workspace": str(ws).replace("\\", "/"),
