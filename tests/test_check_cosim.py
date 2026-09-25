@@ -241,3 +241,28 @@ def test_ring_osc_div_wrong_divide_ratio_fault_caught(tmp_path, capsys):
     assert code == 1, out
     kinds = {v["kind"] for v in out["violations"]}
     assert "measure_out_of_bounds" in kinds
+
+
+def test_msde_cosim_hashes_the_sides_its_bench_reads(tmp_path):
+    # regression (msde H2 review): the cosim bench .includes the analog
+    # netlist, applies the analog sizing and compiles the digital RTL, so an
+    # edit to any of them must change cosim's input hashes
+    import statelib
+    imap = statelib.load_map()
+    kinds = imap["gate_inputs"]["msde"]["cosim"]
+    assert kinds[0] == "interface"
+    ws = tmp_path
+    files = {"analog_netlist": "analog/netlist/a.cir",
+             "analog_sizing": "analog/sizing/sizing.yaml",
+             "digital_rtl": "digital/rtl/d.v"}
+    for rel in files.values():
+        (ws / rel).parent.mkdir(parents=True, exist_ok=True)
+        (ws / rel).write_text("w: 1\n", encoding="utf-8")
+    for kind, rel in files.items():
+        assert kind in kinds
+        before = statelib.hash_kind(ws, kind, imap)[1]
+        (ws / rel).write_text("w: 2\n", encoding="utf-8")
+        assert statelib.hash_kind(ws, kind, imap)[1] != before, kind
+    # an unrelated side file stays out of cosim's inputs
+    (ws / "analog" / "layout").mkdir(parents=True)
+    assert "analog_layout" not in kinds

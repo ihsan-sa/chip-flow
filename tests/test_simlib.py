@@ -205,6 +205,19 @@ def test_load_bounds_nan_rejected(tmp_path):
         simlib.load_bounds(p)
 
 
+def test_load_bounds_corners_field(tmp_path):
+    p = tmp_path / "b.bounds.json"
+    p.write_text(json.dumps([{"measure": "x", "min": 1, "corners": ["tt"]},
+                             {"measure": "y", "min": 1, "corners": "all"}]),
+                 encoding="utf-8")
+    assert [b["corners"] for b in simlib.load_bounds(p)] == [["tt"], "all"]
+    for bad in ([], "tt", [1], "default"):
+        p.write_text(json.dumps([{"measure": "x", "min": 1, "corners": bad}]),
+                     encoding="utf-8")
+        with pytest.raises(CheckError):
+            simlib.load_bounds(p)
+
+
 # ------------------------------------------------------------ compare_bounds
 
 BOUNDS = [
@@ -254,6 +267,27 @@ def test_compare_bounds_warning_severity_carried_through():
     b = [{"measure": "x", "min": 1, "max": 2, "severity": "warning"}]
     out = simlib.compare_bounds(b, {"x": 5}, "tb/x.cir")
     assert out[0]["severity"] == "warning"
+
+
+def test_compare_bounds_tt_only_bound_skipped_at_other_corners():
+    # a spec measure scored at [tt] only (an oscillator's typical-band
+    # frequency): out of range at ss is not a finding, nor is never
+    # printing it there; the same value at tt is.
+    b = [{"measure": "fosc", "min": 9e6, "max": 11e6, "severity": "error",
+          "corners": ["tt"]}]
+    assert simlib.compare_bounds(b, {"fosc": 6e6}, "tb/osc.cir",
+                                 corner="ss") == []
+    assert simlib.compare_bounds(b, {}, "tb/osc.cir", corner="ss") == []
+    out = simlib.compare_bounds(b, {"fosc": 6e6}, "tb/osc.cir", corner="tt")
+    assert [v["kind"] for v in out] == ["sim_bound_fail"]
+    assert out[0]["refs"] == ["fosc", "tt"]
+
+
+def test_compare_bounds_corners_all_scores_every_corner():
+    b = [{"measure": "x", "min": 1, "max": 2, "severity": "error",
+          "corners": "all"}]
+    out = simlib.compare_bounds(b, {"x": 5}, "tb/x.cir", corner="ff")
+    assert out[0]["refs"] == sorted(["x", "ff"])
 
 
 # ---------------------------------------------------------------- materialize

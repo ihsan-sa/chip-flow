@@ -73,13 +73,21 @@ artifact_kinds:
   harden_override: {path: "harden/config.override.json", norm: json_canonical}
   harden:        {path: "harden", norm: dir_text}
   layout:        {path: "layout", norm: dir_text}
+  # ade (M9): the post-layout bench pex_sim runs (layout_ref/<block>_pex_tb
+  # .cir + .bounds.json), written by the bench-writer, not the generator
+  layout_ref:    {path: "layout_ref", norm: dir_text}
   sizing:        {path: "sizing/sizing.yaml", norm: json_canonical}
   optimise:      {path: "optimise", norm: dir_text}
   interface:     {path: "interface.yaml", norm: json_canonical}
+  # the owner's per-mutant rulings on mutate/bench_strength survivors
+  # (engine/lib/rulingslib.py); optional - absent hashes to None
+  mutant_rulings: {path: "spec/mutant_rulings.yaml", norm: json_canonical}
   # msde (M10): the nested sides an msde block's top gates read, and the
   # assembled top's hardened GDS (engine/scripts/check_top_harden.py).
   digital_rtl:   {path: "digital/rtl", norm: dir_text}
   analog_layout: {path: "analog/layout", norm: dir_text}
+  analog_netlist: {path: "analog/netlist", norm: dir_text}
+  analog_sizing: {path: "analog/sizing/sizing.yaml", norm: json_canonical}
   top_gds:       {path: "top/harden/runs/run/final/gds", norm: dir_text}
 
 # What each gate reads, per skill (docs/design.md 1.5 tables). Every gate a
@@ -97,7 +105,7 @@ gate_inputs:
     lint:      [rtl, spec_yaml]
     sim:       [rtl, tb, spec_yaml]
     holdout:   [rtl, holdout, spec_yaml]
-    mutate:    [rtl, tb, spec_yaml]
+    mutate:    [rtl, tb, spec_yaml, mutant_rulings]
     # spec_yaml (M5, added): check_formal.py also reads `top` and this
     # block's own `formal: {depth}` from spec.yaml - a depth-only edit
     # (the fix loop's own sanctioned way to close a bounded-not-proven or
@@ -120,19 +128,28 @@ gate_inputs:
     precheck:  [harden, harden_info, spec_yaml]
     release:   [rtl, harden]
   ade:
+    # kinds[0] is each script's own stamp path; the rest is what it reads
+    # besides. spec_yaml: every gate below reads spec.yaml (top, supply,
+    # corners, devices, mc, footprint_um; release via attest's mc reason).
+    # sizing: sim_run.load_sizing()'s callers (sim_tt, sim_pvt,
+    # bench_strength, mc, lvs), and release, which attests the sized
+    # design (netlist + sizing + layout). pex_sim does not read sizing.yaml - the
+    # generator bakes sizes into the GDS - but reads the reference netlist
+    # for pins and its bench from tb/ or layout_ref/.
     spec_lint:      [spec_yaml]
-    netlist_lint:   [netlist]
-    sim_tt:         [netlist, tb]
-    sim_pvt:        [netlist, tb]
-    bench_strength: [netlist, tb]
-    mc:             [netlist, tb]
-    drc:            [layout]
-    lvs:            [layout, netlist]
-    pex_sim:        [layout, tb]
-    release:        [netlist, layout]
+    netlist_lint:   [netlist, spec_yaml]
+    sim_tt:         [netlist, tb, spec_yaml, sizing]
+    sim_pvt:        [netlist, tb, spec_yaml, sizing]
+    bench_strength: [netlist, tb, mutant_rulings, spec_yaml, sizing]
+    mc:             [netlist, tb, spec_yaml, sizing]
+    drc:            [layout, spec_yaml]
+    lvs:            [layout, netlist, spec_yaml, sizing]
+    pex_sim:        [layout, tb, layout_ref, netlist, spec_yaml]
+    release:        [netlist, layout, sizing, spec_yaml]
   msde:
     split:    [interface]
-    cosim:    [interface, tb]
+    # the bench simulates the released RTL and the sized analog netlist
+    cosim:    [interface, tb, digital_rtl, analog_netlist, analog_sizing]
     top_harden: [digital_rtl, analog_layout]
     top_drc:  [top_gds]
     top_lvs:  [top_gds, analog_layout]
@@ -211,7 +228,9 @@ edit_classes:
       gates: [sim_tt, sim_pvt, bench_strength, mc, lvs, pex_sim, release]
       human_hold: 1
     layout_code_edit:
-      mutates: [layout]
+      # layout_ref (the post-layout bench) rides here: pex_sim is the only
+      # gate reading it, and every gate this class names re-runs anyway
+      mutates: [layout, layout_ref]
       stale_artifacts: []
       gates: [drc, lvs, pex_sim, release]
       human_hold: 1

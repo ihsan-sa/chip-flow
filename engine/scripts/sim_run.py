@@ -14,7 +14,8 @@ requested corner (default: corners.py's own default_corners(), design.md
 deck - the bench file's own `{{PDK}}`/`{{CORNER}}`/`{{TEMP_C}}`/`{{VDD}}`/
 `{{NETLIST}}`/`{{SIZING}}` placeholders filled in (simlib.materialize) -
 runs it through `eda ngspice -b`, and scores it against the sidecar
-(simlib.compare_bounds) after checking for a known ngspice failure
+(simlib.compare_bounds; a bound whose optional `corners` list does not
+name this corner is skipped there) after checking for a known ngspice failure
 signature regardless of exit code (simlib.detect_engine_errors).
 
 check_netlist_lint.py, check_sim_tt.py, check_sim_pvt.py and

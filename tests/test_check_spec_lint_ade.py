@@ -8,6 +8,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[1]
 ENGINE = REPO / "engine"
 SCRIPTS = ENGINE / "scripts"
@@ -120,3 +122,26 @@ def test_measure_scoped_to_a_corner_the_grid_never_runs_is_refused(tmp_path, cap
     ws2 = make_ws(tmp_path / "b", GOOD_YAML.replace(
         "    bounds: {min: 1.8, max: 2.2}\n", scoped))  # default five hold tt
     assert check_spec_lint_ade.main(["--workspace", str(ws2)]) == 0
+
+
+def test_positive_footprint_passes(tmp_path, capsys):
+    ws = make_ws(tmp_path, GOOD_YAML + "footprint_um: {width: 60, height: 60.5}\n")
+    code = check_spec_lint_ade.main(["--workspace", str(ws)])
+    assert code == 0, capsys.readouterr().out
+
+
+@pytest.mark.parametrize("fp", [
+    "{width: 60}",                       # height missing
+    "{width: 0, height: 60}",            # not positive
+    "{width: -5, height: 60}",
+    "{width: '60', height: 60}",         # not a number
+    "{width: true, height: 60}",
+    "{width: 60, height: 60, depth: 1}",  # unknown key
+    "[60, 60]",                           # not a mapping
+])
+def test_bad_footprint_is_refused(tmp_path, capsys, fp):
+    ws = make_ws(tmp_path, GOOD_YAML + f"footprint_um: {fp}\n")
+    code = check_spec_lint_ade.main(["--workspace", str(ws)])
+    assert code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert [v["kind"] for v in out["violations"]] == ["bad_footprint"]

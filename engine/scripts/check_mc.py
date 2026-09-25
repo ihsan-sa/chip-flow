@@ -24,7 +24,7 @@ operating point repeated - zero mismatch, zero seed variation, one sample
 wearing a yield percentage. So this gate injects `.param sw_stat_mismatch=1`
 (and, when spec.yaml's `mc.global` asks for it, `sw_stat_global=1` too) plus
 a per-run `.option seed=<mc.seed base + i>` into the GENERATED bench deck -
-right after that bench's own `.include '.../design.spice'` line, so the
+right after that bench's own `.include '.../design.spice'` (or design.ngspice) line, so the
 override lands AFTER the PDK's own zeros are parsed - never by editing the
 PDK's own read-only design.spice. Each of the `mc.runs` independent ngspice
 invocations then draws a fresh, seeded sample of the PDK's own
@@ -71,9 +71,11 @@ OUT_SUBDIR = "log/mc"
 # The bench's own `.include '.../design.spice'` line - matched BEFORE
 # simlib.materialize() runs (so `{{PDK}}` is still a literal placeholder
 # here; the regex only needs ".include" and "design.spice" on the same
-# line, not a resolved path).
+# line, not a resolved path). The PDK ships the same file twice, as
+# design.spice and design.ngspice (byte-identical, both setting the two
+# sw_stat switches to 0), and a bench may include either.
 _INCLUDE_DESIGN_RE = re.compile(
-    r"^(\.include\s+.*design\.spice.*)$", re.IGNORECASE | re.MULTILINE)
+    r"^(\.include\s+.*design\.(?:ng)?spice.*)$", re.IGNORECASE | re.MULTILINE)
 
 
 def inject_mc_params(template_text: str, seed: int, do_global: bool) -> str:
@@ -92,7 +94,8 @@ def inject_mc_params(template_text: str, seed: int, do_global: bool) -> str:
         lambda m: m.group(1) + "\n" + injected, template_text, count=1)
     if n == 0:
         raise CheckError(
-            "mc: bench template has no '.include ...design.spice' line to "
+            "mc: bench template has no '.include ...design.spice' (or "
+            "design.ngspice) line to "
             "inject sw_stat_mismatch/seed after - cannot run a real Monte "
             "Carlo sample")
     return new_text

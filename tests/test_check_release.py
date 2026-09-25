@@ -405,16 +405,19 @@ def test_ade_release_refuses_a_stale_gate_then_passes_once_regated(
     ws = make_ade_ws(tmp_path)
     record_ade(ws, ADE_OWED)
     assert release(ws, capsys)[0] == 0
-    # spec_lint is the only ade gate keyed on spec.yaml alone; the edit
-    # leaves MC off, so mc stays declared not applicable.
+    # every ade gate reads spec.yaml (invalidation.yaml's gate_inputs), so
+    # a spec edit stales all the recorded ones; the edit leaves MC off, so
+    # mc stays declared not applicable.
     spec = ws / "spec" / "spec.yaml"
     spec.write_text(spec.read_text() + "notes: edited after spec_lint\n",
                     encoding="utf-8")
     code, out = release(ws, capsys)
     assert code == 1, out
-    assert not_ready_gates(out) == {"spec_lint"}, out
+    assert not_ready_gates(out) == set(ADE_OWED), out
     assert any("stale" in v["msg"] for v in out["violations"]), out
     record_ade(ws, ["spec_lint"])
+    assert "spec_lint" not in not_ready_gates(release(ws, capsys)[1])
+    record_ade(ws, ADE_OWED)
     assert release(ws, capsys)[0] == 0
 
 
@@ -425,8 +428,9 @@ def test_ade_release_refuses_after_netlist_edit(tmp_path, capsys):
         ".subckt current_mirror a b c\n.ends\n", encoding="utf-8")
     code, out = release(ws, capsys)
     assert code == 1, out
+    # pex_sim reads the reference netlist for the extracted cell's pins
     assert not_ready_gates(out) == {"netlist_lint", "sim_tt", "sim_pvt",
-                                    "bench_strength", "lvs"}, out
+                                    "bench_strength", "lvs", "pex_sim"}, out
 
 
 def test_ade_release_owes_mc_when_the_spec_asks_for_it(tmp_path, capsys):

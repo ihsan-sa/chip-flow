@@ -127,6 +127,50 @@ def test_device_mutants_connection_removed():
     assert "xmout d2 d1 0 0 nfet_03v3 w=8e-6 l=5e-7" in out
 
 
+BULK_AT_SOURCE_NETLIST = """\
+xmtail tail clk VSS vss nfet_03v3 w=4e-6 l=5e-7
+xmin dp inp tail vss nfet_03v3 w=2e-6 l=5e-7
+"""
+
+
+def test_connection_removed_floats_the_drain_when_bulk_is_its_own_source():
+    # bulk == source (case-insensitive, as spice compares nodes): floating
+    # the bulk is a no-op, so the drain is floated instead.
+    m = next(m for m in netlistlib.device_mutants(BULK_AT_SOURCE_NETLIST, ["xmtail"])
+             if m["kind"] == "connection_removed")
+    assert m["id"] == "xmtail_connection_removed"
+    assert m["describe"] == "xmtail: drain (bulk tied to its own source) disconnected"
+    out = m["apply"](BULK_AT_SOURCE_NETLIST)
+    assert out.splitlines()[0].startswith(
+        "xmtail __floating_xmtail__ clk VSS vss nfet_03v3")
+    assert "xmin dp inp tail vss nfet_03v3" in out
+
+
+BULK_ELSEWHERE_NETLIST = """\
+xmin dp inp tail vss nfet_03v3 w=2e-6 l=5e-7
+xmtail tail clk vss vss nfet_03v3 w=4e-6 l=5e-7
+"""
+
+
+def test_connection_removed_floats_the_bulk_when_it_is_not_the_source():
+    m = next(m for m in netlistlib.device_mutants(BULK_ELSEWHERE_NETLIST, ["xmin"])
+             if m["kind"] == "connection_removed")
+    assert m["id"] == "xmin_connection_removed"
+    assert m["describe"] == "xmin: bulk disconnected"
+    out = m["apply"](BULK_ELSEWHERE_NETLIST)
+    assert out.splitlines()[0].startswith(
+        "xmin dp inp tail __floating_xmin__ nfet_03v3")
+    assert "xmtail tail clk vss vss nfet_03v3" in out
+
+
+def test_connection_removed_floats_the_last_terminal_of_a_non_mos_device():
+    text = "xr1 a b ppolyf_u w=1e-6 l=5e-6\n"
+    m = next(m for m in netlistlib.device_mutants(text, ["xr1"])
+             if m["kind"] == "connection_removed")
+    assert m["describe"] == "xr1: last terminal disconnected"
+    assert m["apply"](text).startswith("xr1 a __floating_xr1__ ppolyf_u")
+
+
 def test_device_mutants_type_flipped_same_rail():
     mutants = netlistlib.device_mutants(MIRROR_NETLIST, ["xmref"])
     m = next(m for m in mutants if m["kind"] == "type_flipped")

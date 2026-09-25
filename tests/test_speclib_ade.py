@@ -212,3 +212,79 @@ def test_both_directions_can_fire_at_once():
     kinds = {v["kind"] for v in
             speclib.lint_measures_vs_bench_bounds(GOOD_SPEC, bench_bounds)}
     assert kinds == {"measure_no_bench_bound", "bench_bound_no_spec_measure"}
+
+
+# a bound's `corners` scope must equal its spec measure's own
+
+
+def _spec_with_corners(corners):
+    m = {"name": "fosc", "bounds": {"min": 9e6, "max": 11e6}}
+    if corners is not None:
+        m["corners"] = corners
+    return {**GOOD_SPEC, "measures": [m]}
+
+
+def _bench(corners):
+    b = {"measure": "fosc", "min": 9e6, "max": 11e6}
+    if corners is not None:
+        b["corners"] = corners
+    return {"osc_tb.cir": [b]}
+
+
+def test_bound_corner_scope_matching_spec_is_clean():
+    assert speclib.lint_measures_vs_bench_bounds(
+        _spec_with_corners(["tt"]), _bench(["tt"])) == []
+
+
+def test_bound_without_corners_matches_spec_all_or_default():
+    for spec_corners in ("all", "default", None):
+        assert speclib.lint_measures_vs_bench_bounds(
+            _spec_with_corners(spec_corners), _bench(None)) == []
+    assert speclib.lint_measures_vs_bench_bounds(
+        _spec_with_corners("all"), _bench("all")) == []
+
+
+def test_bound_narrower_than_spec_is_a_violation():
+    # the spec scores fosc everywhere; a tt-only bound would hide ss/ff.
+    out = speclib.lint_measures_vs_bench_bounds(
+        _spec_with_corners("all"), _bench(["tt"]))
+    assert [v["kind"] for v in out] == ["bench_bound_corner_mismatch"]
+    assert out[0]["refs"] == ["fosc", "osc_tb.cir"]
+    out = speclib.lint_measures_vs_bench_bounds(
+        _spec_with_corners(["tt", "ss"]), _bench(["tt"]))
+    assert [v["kind"] for v in out] == ["bench_bound_corner_mismatch"]
+
+
+def test_bound_wider_than_spec_is_a_violation():
+    out = speclib.lint_measures_vs_bench_bounds(
+        _spec_with_corners(["tt"]), _bench(None))
+    assert [v["kind"] for v in out] == ["bench_bound_corner_mismatch"]
+
+
+# a bound's min/max must equal its spec measure's own bounds
+
+
+def _bench_bounds(**sides):
+    return {"osc_tb.cir": [{"measure": "fosc", **sides}]}
+
+
+def test_bound_values_matching_spec_are_clean():
+    assert speclib.lint_measures_vs_bench_bounds(
+        _spec_with_corners(None), _bench_bounds(min=9e6, max=11e6)) == []
+
+
+def test_bound_looser_than_spec_is_a_violation():
+    # spec says fosc >= 9 MHz; a bench scoring >= 8 MHz passes a miss.
+    out = speclib.lint_measures_vs_bench_bounds(
+        _spec_with_corners(None), _bench_bounds(min=8e6, max=11e6))
+    assert [v["kind"] for v in out] == ["bench_bound_value_mismatch"]
+    assert out[0]["refs"] == ["fosc", "osc_tb.cir"]
+    out = speclib.lint_measures_vs_bench_bounds(
+        _spec_with_corners(None), _bench_bounds(min=9e6))
+    assert [v["kind"] for v in out] == ["bench_bound_value_mismatch"]
+
+
+def test_bound_tighter_than_spec_is_a_violation():
+    out = speclib.lint_measures_vs_bench_bounds(
+        _spec_with_corners(None), _bench_bounds(min=9e6, max=10e6))
+    assert [v["kind"] for v in out] == ["bench_bound_value_mismatch"]

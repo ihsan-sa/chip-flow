@@ -167,9 +167,11 @@ def engine_error_violations(check: str, testbench: str, corner: str,
 def load_bounds(path: Path) -> list[dict]:
     """Load+validate a `.bounds.json` sidecar. Ported from hwde's
     simlib.load_bounds: a non-empty JSON list of {measure, min?, max?,
-    severity?, msg?} - at least one of min/max required, each a finite
-    non-bool number when present, severity in {error, warning} (default
-    error)."""
+    severity?, msg?, corners?} - at least one of min/max required, each a
+    finite non-bool number when present, severity in {error, warning}
+    (default error), corners "all" (the default) or a non-empty list of
+    corner names the bound is scored at (a spec measure scored at `[tt]`
+    only)."""
     data = load_json(path, "bounds sidecar")
     if not isinstance(data, list) or not data:
         raise CheckError(f"{path}: bounds sidecar must be a non-empty JSON "
@@ -194,6 +196,12 @@ def load_bounds(path: Path) -> list[dict]:
         if sev not in ("error", "warning"):
             raise CheckError(f"{path}[{i}] ({name}): severity must be "
                              "'error' or 'warning'")
+        corners = entry.get("corners", "all")
+        if not (corners == "all" or (isinstance(corners, list) and corners
+                                     and all(isinstance(c, str) and c
+                                             for c in corners))):
+            raise CheckError(f"{path}[{i}] ({name}): corners must be 'all' "
+                             "or a non-empty list of corner names")
         out.append({**entry, "severity": sev})
     return out
 
@@ -211,10 +219,17 @@ def compare_bounds(bounds: list[dict], measures: dict[str, float],
     printed" a failure rather than a silent pass, whether ngspice never ran
     the `.measure` at all or explicitly reported it FAILED (failed_measures,
     from parse_failed_measures - distinguished only in the message text,
-    the fault either way)."""
+    the fault either way).
+
+    A bound with a `corners` list that does not name `corner` is skipped
+    outright - not scored, not missing - so a tt-only measure is never
+    checked at ss; absent or "all" scores it at every corner."""
     failed_measures = failed_measures or set()
     out: list[dict] = []
     for b in bounds:
+        scope = b.get("corners", "all")
+        if scope != "all" and corner not in scope:
+            continue
         name = b["measure"]
         key = name.lower()
         if key in failed_measures:

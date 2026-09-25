@@ -299,6 +299,27 @@ def layer_boxes(comp, layer: tuple[int, int]) -> list[tuple[float, ...]]:
     return sorted(boxes)
 
 
+def gds_bbox_um(gds_path, topcell: str) -> dict:
+    """The bounding box of `topcell` in the GDS at `gds_path`, hierarchy
+    included, as {x0, y0, x1, y1, width, height} in um. Raises LayoutError
+    when the cell is missing or empty - a footprint that could not be
+    measured is never read as one that fits."""
+    import klayout.db as kdb
+
+    layout = kdb.Layout()
+    layout.read(str(gds_path))
+    cell = layout.cell(topcell)
+    if cell is None:
+        raise LayoutError(f"{gds_path} has no cell {topcell!r} to measure")
+    b = cell.dbbox()
+    if b.empty():
+        raise LayoutError(f"cell {topcell!r} in {gds_path} is empty - "
+                          "no footprint to measure")
+    return {"x0": round(b.left, 4), "y0": round(b.bottom, 4),
+            "x1": round(b.right, 4), "y1": round(b.top, 4),
+            "width": round(b.width(), 4), "height": round(b.height(), 4)}
+
+
 def fet_pads(fet) -> dict[str, tuple[float, ...]]:
     """The four metal1 pads of a single-finger draw_nfet()/draw_pfet():
     gate contacts above and below the channel, the two diffusion contacts

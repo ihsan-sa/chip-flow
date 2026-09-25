@@ -10,14 +10,18 @@ an hour, so it becomes a job.
     jobs.py status --job ID --workspace DIR [--kill-if-dead]
     jobs.py status --all --workspace DIR [--kill-if-dead]
 
-`start` runs `gate.py --gate <g> --workspace <ws>` detached (its own
+`start` runs `gate.py --gate <g> --workspace <ws> --out
+<ws>/reports/gate-<g>.json` detached (its own
 session, so it outlives this process) THROUGH `<repo>/bin/eda python`
 (docs/design.md 1.2) - never `sys.executable` directly, which is the
 image's own python3.12 ELF and, execve'd without eda's loader wrapping,
 hits the same host-glibc-vs-image-glibc mismatch every other image binary
 does (bin/eda's own header). Records {pid, log} in state.jobs and returns
 immediately - gate.py records the gate's result itself when it finishes,
-exactly as a foreground gate does. `status` reports running, done or dead:
+exactly as a foreground gate does, and rewrites the same gate report the
+router's foreground step does (a templated `{...}` gate names no report), so
+no earlier run's FAIL report sits beside the job's passing state. The job's
+log keeps gate.py's one-line summary. `status` reports running, done or dead:
 the job's own shell wrapper writes an exit-code sidecar next to the log
 when the subprocess finishes, and that sidecar is read FIRST and trusted
 over the pid whenever it exists - a live pid alone is not proof the job is
@@ -104,6 +108,8 @@ def start(gate: str, workspace: Path, skill: str | None,
                "--workspace", str(ws)]
         if skill:
             cmd += ["--skill", skill]
+        if "{" not in gate:
+            cmd += ["--out", str(ws / "reports" / f"gate-{gate}.json")]
         if gates_path:
             cmd += ["--gates", gates_path]
         if checks_dir:

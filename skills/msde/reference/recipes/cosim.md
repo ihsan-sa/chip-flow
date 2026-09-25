@@ -32,6 +32,6 @@ wrong polarity) is fixed in that side's nested workspace through its own
 router and gates, then `cosim` re-runs here. Never loosen a bound or edit
 `reports/cosim_measures.json` to make it pass.
 
-`cosim`'s recorded inputs are `interface.yaml` and `tb/`. Neither nested
-workspace is hashed into it, so after a fix inside a side, re-run `cosim`
-by hand.
+`cosim`'s recorded inputs are `interface.yaml`, `tb/`, `digital/rtl`,
+`analog/netlist` and `analog/sizing/sizing.yaml`, so a fix inside a side
+that touches any of those marks `cosim` stale.

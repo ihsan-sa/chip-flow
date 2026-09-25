@@ -110,6 +110,28 @@ def test_start_records_pid_status_becomes_done_state_holds_result(tmp_path):
     assert data["gates"]["harden"]["status"] == "pass"
 
 
+def test_job_rewrites_the_gate_report_like_a_foreground_gate(tmp_path):
+    # msde H2 review finding 1: a gate run through jobs left an earlier
+    # run's reports/gate-<name>.json (a FAIL) beside a passing state.
+    ws = make_ws(tmp_path)
+    checks_dir = make_checks_dir(tmp_path, "check_sleepy",
+                                 SLEEPY_CHECK.format(sleep_s=0.1))
+    gates_yaml = make_gates_yaml(tmp_path, "sleepy")
+    report = ws / "reports" / "gate-harden.json"
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text(json.dumps({"gate": "harden", "status": "fail"}),
+                      encoding="utf-8")
+    other = ws / "reports" / "gate-drc.json"
+    other.write_text(json.dumps({"gate": "drc", "status": "fail"}),
+                     encoding="utf-8")
+
+    rec = jobs_mod.start("harden", ws, "vde", str(gates_yaml), str(checks_dir))
+    assert poll_until_not_running(ws, rec["job"])["status"] == "done"
+    assert json.loads(report.read_text(encoding="utf-8"))["status"] == "pass"
+    # only the job's own gate's report is touched
+    assert json.loads(other.read_text(encoding="utf-8"))["status"] == "fail"
+
+
 def test_start_with_a_relative_workspace_runs_to_done(tmp_path, monkeypatch):
     # The router hands out `blocks/<name>`, relative to the run root; the
     # job runs with cwd=ws, so an unresolved path died at once with no log.

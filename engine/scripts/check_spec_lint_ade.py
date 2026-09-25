@@ -14,7 +14,8 @@ Fault this gate must catch (gates.yaml): "a measure without bounds" - which
 this script reads as covering BOTH halves of "bounds": spec.yaml's own
 per-measure `bounds` dict (lint_spec_ade, unchanged) and, when tb/ already
 has bench(es) written, whether each spec measure has a matching tb/*.bounds
-.json sidecar bound and vice versa (speclib.lint_measures_vs_bench_bounds -
+.json sidecar bound and vice versa, each bound's optional `corners` equal
+to its measure's own (speclib.lint_measures_vs_bench_bounds -
 the bench-writer works in fresh context, per docs/design.md 1.3, so the two
 declarations can drift apart with nothing else catching it). It also expands
 the spec's `corners` field through corners.spec_corners(), so a `{grid: ...}`

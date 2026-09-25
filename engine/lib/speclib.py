@@ -36,6 +36,7 @@ hand the list straight to checklib.report().
 """
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import yaml
@@ -80,6 +81,10 @@ CHECK_KINDS = {"sim", "formal", "both", "measure"}
 #                        global? asks check_mc.py to also force
 #                        `sw_stat_global=1` (process-level MC), not just
 #                        `sw_stat_mismatch=1` (device-level, the default)
+#     footprint_um: {width: float, height: float}   optional; the layout's
+#                        largest allowed top-cell bounding box, in um,
+#                        both positive. check_analog_drc.py measures the
+#                        regenerated GDS against it (absent: not checked)
 
 ADE_MEASURE_CORNER_KINDS = {"default", "all"}
 STD_CELL_PATTERN = r"^gf180mcu_fd_sc_mcu(7t|9t)5v0__[a-z0-9_]+$"
@@ -200,7 +205,25 @@ def lint_spec_ade(spec: dict, rel_path: str = "spec/spec.yaml") -> list[dict]:
     if mc_cfg is not None and not isinstance(mc_cfg, dict):
         bad("mc_not_a_mapping", "'mc' is present but not a mapping")
 
+    if "footprint_um" in spec and footprint_um(spec) is None:
+        bad("bad_footprint", "spec.yaml 'footprint_um' must be exactly "
+                             "{width, height}, each a positive number of um")
+
     return out
+
+
+def footprint_um(spec: dict) -> dict | None:
+    """spec.yaml's `footprint_um` as {width, height} floats, or None when
+    it is absent or malformed (lint_spec_ade refuses the malformed case)."""
+    fp = spec.get("footprint_um") if isinstance(spec, dict) else None
+    if not (isinstance(fp, dict) and set(fp) == {"width", "height"}):
+        return None
+    for k in ("width", "height"):
+        v = fp[k]
+        if isinstance(v, bool) or not isinstance(v, (int, float)) \
+                or not 0 < v < float("inf"):
+            return None
+    return {"width": float(fp["width"]), "height": float(fp["height"])}
 
 
 def lint_measures_vs_bench_bounds(spec: dict, bench_bounds: dict[str, list[dict]],
@@ -217,7 +240,11 @@ def lint_measures_vs_bench_bounds(spec: dict, bench_bounds: dict[str, list[dict]
     reviewer reading spec.yaml alone would ever see). gates.yaml's ade
     spec_lint row fault ("a measure without bounds") widened one notch:
     a measure without a BENCH bound is the same failure shape, and so is
-    its mirror.
+    its mirror. Each bound's optional `corners` scope (absent = "all") must
+    also equal its spec measure's own `corners` ("default" and "all" both
+    count as "all") - bench_bound_corner_mismatch otherwise. Its `min`/`max`
+    must equal the spec measure's own `bounds` - bench_bound_value_mismatch
+    otherwise (a looser bench passes a block that misses the spec).
 
     `bench_bounds` is {bench filename: [bounds sidecar entries, already
     simlib.load_bounds()-validated]} - built by the caller (this module
@@ -263,6 +290,55 @@ def lint_measures_vs_bench_bounds(spec: dict, bench_bounds: dict[str, list[dict]
            "spec.yaml's own 'measures' list never declares it - an "
            "undeclared requirement being silently enforced every run",
            refs=[name])
+
+    def scope(field) -> frozenset[str] | str:
+        # "default" and "all" both mean every corner the gate runs - a
+        # per-measure field narrows nothing unless it is a list.
+        return frozenset(field) if isinstance(field, list) else "all"
+
+    def show(x) -> str:
+        return "'all'" if x == "all" else str(sorted(x))
+
+    spec_scope = {m["name"]: scope(m.get("corners", "default"))
+                  for m in measures if isinstance(m, dict)
+                  and m.get("name") in spec_names}
+    for bench_name, bounds in sorted(bench_bounds.items()):
+        for b in bounds:
+            name = b.get("measure")
+            if name not in spec_scope:
+                continue
+            want, got = spec_scope[name], scope(b.get("corners", "all"))
+            if want == got:
+                continue
+            bad("bench_bound_corner_mismatch",
+               f"measure {name!r} in {bench_name}: the bound is scored at "
+               f"corners {show(got)} but spec.yaml scores it at "
+               f"{show(want)} - a narrower bound hides a corner the spec "
+               "scores, a wider one fails a corner it does not",
+               refs=[name, bench_name])
+
+    spec_bounds = {m["name"]: m.get("bounds") for m in measures
+                   if isinstance(m, dict) and m.get("name") in spec_names}
+    for bench_name, bounds in sorted(bench_bounds.items()):
+        for b in bounds:
+            name = b.get("measure")
+            want = spec_bounds.get(name)
+            if not isinstance(want, dict):
+                continue
+            for side in ("min", "max"):
+                w, g = want.get(side), b.get(side)
+                if w is None and g is None:
+                    continue
+                if (w is not None and g is not None
+                        and math.isclose(float(w), float(g),
+                                         rel_tol=1e-9, abs_tol=1e-18)):
+                    continue
+                bad("bench_bound_value_mismatch",
+                   f"measure {name!r} in {bench_name}: the bench scores "
+                   f"{side}={g!r} but spec.yaml's bound is {side}={w!r} - "
+                   "a looser bench passes a block that misses the spec, a "
+                   "tighter one fails a block that meets it",
+                   refs=[name, bench_name])
 
     return out
 
