@@ -1,0 +1,244 @@
+# tasks.yaml - /msde's own verb table (docs/design.md 1.8, "### M10.").
+# Merged with engine/reference/tasks.yaml's shared verbs (task_router.py:
+# load_tasks) - this file's own entries win on a name collision. Mirrors
+# skills/vde/reference/tasks.yaml's shape: section 1.8's three /msde verbs
+# (split, integrate, cosim) plus a real `full-run` overriding the engine's
+# placeholder. Doc files live under skills/msde/reference/recipes/.
+#
+# An msde block drives two NESTED workspaces, each through its own skill's
+# router and playbook: `<ws>/digital` (skill vde, skills/vde/SKILL.md) and
+# `<ws>/analog` (skill ade, skills/ade/SKILL.md). Their gates are recorded
+# in their own state.json, never in this one - a `do` step below that
+# names `{ws}/digital` or `{ws}/analog` is how this table reaches them.
+# Each side runs to its OWN release, the digital side including its own
+# standalone harden and signoff (its crossing signals sit on spare TT pins).
+#
+# The chip top is msde's `top_harden` gate (engine/scripts/check_top_harden
+# .py): it assembles {ws}/top/ from the two released sides and hardens it
+# with the analog GDS as a LibreLane macro. It is a `job: true` gate, so it
+# is started with jobs.py and polled, never scheduled as a `gate:` step -
+# which is also why `integrate` lists it in no `gates:` (the router would
+# append it after top_lvs).
+
+version: 1
+verbs:
+
+  # -------------------------------------------------------------------------
+  full-run:
+    summary: The whole mixed-signal pipeline, spec.md to a released tile -
+      P1 split, P2 the two nested runs (each to its own release), P3 cosim
+      and the top gates (top_harden, top_drc, top_lvs), P4 release with H2.
+      Overrides the engine's own placeholder.
+    doc: skills/msde/reference/recipes/full-run.md
+    workspace: created
+    edit_class: null
+    gates: []
+    human_hold: 0
+    match:
+      any: ['\bdesign (me )?an?\b', '\bdesign [a-z0-9_-]+ from\b',
+            '\bdesign\b.*\bspec\.md\b',
+            '\bbuild (me )?an?\b', '\bnew block\b', '\bmixed[- ]signal\b',
+            '\bfrom scratch\b', '\bfull (run|pipeline)\b',
+            '\bend[- ]to[- ]end\b', '\bwhole pipeline\b']
+      weight: 1
+    steps:
+      - do: "scripts/state.py init --workspace {ws} --skill {skill} --block {block}"
+        why: "the msde workspace itself - interface.yaml, the two side
+              specs and the top gates live here; the nested runs get their
+              own state.json below"
+      - do: "scripts/state.py resume --workspace {ws}"
+        why: "confirm the scaffold and starting phase"
+      - note: "P0 intake: copy the task's spec file(s) into {ws}/brief/
+               verbatim - the whole brief the splitter gets. Write
+               log/P0-digest.md before the first set-phase call."
+      - do: "scripts/state.py set-phase --workspace {ws} --phase P1"
+        why: "enter P1 - split"
+      - agent: splitter
+        tier: fable/high
+        why: "P1 - brief/ -> interface.yaml (every crossing signal with
+              direction, level, domain, width, load), digital_spec.yaml and
+              analog_spec.yaml carrying the same entries, and one brief per
+              side under digital/brief/ and analog/brief/. No web tools."
+      - gate: split
+        why: "P1's own gate - both side specs agree with interface.yaml
+              before either nested run starts"
+      - note: "Write log/P1-digest.md before advancing."
+      - do: "scripts/state.py set-phase --workspace {ws} --phase P2"
+        why: "enter P2 - the two nested runs"
+      - note: "The two nested runs are independent and may run
+               concurrently, each driven by its own skill's playbook
+               (skills/ade/SKILL.md, skills/vde/SKILL.md) - read that
+               playbook before executing its plan. BOTH go all the way to
+               their own release. The digital side hardens and signs off
+               alone: each crossing signal sits on a spare TT pin in its
+               spec.yaml tt_pins (osc_out on ui_in[7]), which top_harden
+               removes when it assembles the top."
+      - do: "scripts/task_router.py --skill ade --verb full-run --workspace {ws}/analog --arg block={block}_analog"
+        why: "plan the analog side's own full run in its nested workspace;
+              execute that plan under skills/ade's playbook through its
+              release gate"
+      - do: "scripts/task_router.py --skill vde --verb full-run --workspace {ws}/digital --arg block={block}"
+        why: "plan the digital side's own full run, harden and signoff
+              included; execute it under skills/vde's playbook through its
+              release gate"
+      - do: "scripts/attest.py verify --workspace {ws}/analog"
+        why: "the analog side counts as released only when its own
+              reports/checks.json still verifies against its current files -
+              the same test check_release.py applies at P4"
+      - do: "scripts/attest.py verify --workspace {ws}/digital"
+        why: "the same for the digital side"
+      - note: "Write log/P2-digest.md before advancing: each side's phase,
+               gate counts and open issues, from its own state.py resume."
+      - do: "scripts/state.py set-phase --workspace {ws} --phase P3"
+        why: "enter P3 - cosim and the top gates"
+      - agent: integrator
+        tier: opus/high
+        why: "P3 - checks the two sides' names agree (interface signal =
+              digital port = analog .subckt pin; the analog cell's other two
+              pins are its vdd* supply and vss*/gnd* ground) and writes the
+              cosim bench under {ws}/tb/. No web tools."
+      - gate: cosim
+        why: "cheapest top check first - one bench drives both sides
+              (cocotbext-ams); a polarity or ratio error shows here long
+              before a ten-minute harden would"
+      - do: "scripts/jobs.py start --gate top_harden --workspace {ws} --skill {skill}"
+        why: "assembles {ws}/top/ from the two nested sides and hardens it,
+              the analog GDS as a LibreLane macro; detached, ten minutes or
+              more - poll, never block"
+      - do: "scripts/jobs.py status --workspace {ws} --all"
+        why: "poll to done/dead; a dead job restarts with jobs.py start"
+      - gate: top_drc
+        why: "0 violations, magic and klayout, on top/harden's final GDS -
+              the standard cells and the macro's geometry together"
+      - gate: top_lvs
+        why: "top/harden's final GDS matches the powered netlist with the
+              analog .subckt compared device by device - a macro pin left
+              unconnected fails here"
+      - note: "Any top gate failing: the fix loop (SKILL.md). A finding
+               whose fix lives inside a nested side goes through that
+               side's own router, never an msde fixer editing digital/ or
+               analog/ directly."
+      - note: "Write log/P3-digest.md before advancing."
+      - do: "scripts/state.py set-phase --workspace {ws} --phase P4"
+        why: "enter P4 - release; refuses unless every P3 gate has a
+              recorded result, never forced"
+      - agent: reviewer
+        tier: fable/high
+        why: "fresh context over both nested gate tables, the top gates and
+              interface.yaml - what no single gate sees"
+      - gate: release
+        why: "strict - every msde gate fresh-pass AND both nested
+              workspaces released (check_release.py nested_problems)"
+      - do: "scripts/attest.py build --workspace {ws}"
+        why: "assembles reports/checks.json only once release is
+              fresh-pass"
+      - do: "scripts/attest.py disposition --workspace {ws}"
+        why: "the derived release state, for H2's digest"
+      - human: H2
+        why: "the person signs off before anything is submitted (docs/
+              design.md 1.4: submitting to a shuttle is always the
+              person's)"
+
+  # -------------------------------------------------------------------------
+  split:
+    summary: Write or revise interface.yaml and the two side specs that
+      must carry the same entries, then check they agree. An interface
+      change cascades into both nested runs as a spec_edit.
+    doc: skills/msde/reference/recipes/split.md
+    workspace: required
+    edit_class: interface_edit
+    preconditions: [workspace]
+    match:
+      any: ['\bsplit\b', '\binterface\.yaml\b', '\bcrossing signals?\b',
+            '\b(digital|analog) (and|/) (analog|digital) (side|half|halves)\b',
+            '\b(change|add|rename|widen) (a |the )?(control word|interface signal)\b']
+    steps:
+      - do: "scripts/state.py resume --workspace {ws}"
+        why: "confirm phase and which nested workspaces exist before
+              touching the interface"
+      - agent: splitter
+        tier: fable/high
+        why: "fresh context; edits interface.yaml, digital_spec.yaml and
+              analog_spec.yaml together, never one alone. No web tools."
+      - do: "scripts/state.py edit --workspace {ws} --class interface_edit --note \"split\""
+        why: "marks split, cosim, top_harden, top_drc, top_lvs and release
+              stale here"
+      - gate: split
+        why: "both side specs agree with interface.yaml"
+      - do: "scripts/state.py edit --workspace {ws}/digital --class spec_edit --note \"msde interface_edit cascade\""
+        why: "docs/design.md 1.6: interface_edit marks both nested runs'
+              spec_edit - the engine's own edit cannot reach a nested
+              state.json, so the orchestrator declares it there"
+        when: "the digital nested workspace exists"
+        optional: true
+      - do: "scripts/state.py edit --workspace {ws}/analog --class spec_edit --note \"msde interface_edit cascade\""
+        why: "the same cascade on the analog side"
+        when: "the analog nested workspace exists"
+        optional: true
+      - note: "Re-drive each nested side through its own router (resume)
+               until its gates are fresh again before trusting the top
+               gates scheduled below. The router appends top_harden as a
+               gate step: run it as a job instead (jobs.py start --gate
+               top_harden --workspace {ws} --skill {skill}, then poll)."
+
+  # -------------------------------------------------------------------------
+  integrate:
+    summary: Join the two released sides - check their names agree, write
+      the cosim bench, then assemble and harden the chip top with the
+      analog GDS as a macro (top_harden) and check what came out.
+    doc: skills/msde/reference/recipes/integrate.md
+    workspace: required
+    gates: [cosim, top_drc, top_lvs]
+    human_hold: 1
+    preconditions: [workspace, gates_fresh:split]
+    match:
+      any: ['\bintegrat(e|ion)\b', '\bhard macro\b', '\bmacro\b',
+            '\btop (netlist|level)\b', '\bassembled? (gds|tile)\b',
+            '\btop[_ ](harden|drc|lvs)\b']
+    steps:
+      - do: "scripts/state.py resume --workspace {ws}"
+        why: "split must be fresh; confirm the phase"
+      - do: "scripts/attest.py verify --workspace {ws}/analog"
+        why: "top_harden builds the macro from analog/layout - only worth
+              doing once the analog side has released it"
+      - do: "scripts/attest.py verify --workspace {ws}/digital"
+        why: "the digital side hardened and released on its own first"
+      - agent: integrator
+        tier: opus/high
+        why: "the names check and the cosim bench - no macro config and no
+              top netlist, top_harden generates both. No web tools."
+      - gate: cosim
+        why: "before the harden: minutes, not ten-plus"
+      - do: "scripts/jobs.py start --gate top_harden --workspace {ws} --skill {skill}"
+        why: "assembles {ws}/top/ and hardens it, macro included - detached"
+      - do: "scripts/jobs.py status --workspace {ws} --all"
+        why: "poll to done/dead"
+      - gate: top_drc
+        why: "on top/harden's final GDS"
+      - gate: top_lvs
+        why: "top/harden's final GDS against the powered netlist, the
+              analog block compared device by device"
+
+  # -------------------------------------------------------------------------
+  cosim:
+    summary: Run the co-simulation bench - the Icarus-compiled digital side
+      and the ngspice analog side in one cocotbext-ams bench - and check
+      every top-level measure against its bound.
+    doc: skills/msde/reference/recipes/cosim.md
+    workspace: required
+    gates: [cosim]
+    human_hold: 0
+    preconditions: [workspace, gates_fresh:split]
+    match:
+      any: ['\bco-?sim(ulat(e|ion))?\b', '\bmixed[- ]signal sim',
+            '\bcocotbext-ams\b', '\bboth sides in one bench\b',
+            '\bdivided frequency\b']
+    steps:
+      - do: "scripts/state.py resume --workspace {ws}"
+        why: "split must be fresh - cosim reads interface.yaml first"
+      - gate: cosim
+        why: "every bounded measure present and inside its bound, the
+              digital side toggled, the analog side really ran"
+      - note: "A failure goes through the fix loop. The bench (tb/) is the
+               integrator's; a side's design defect goes to that side's own
+               router, never edited from here."

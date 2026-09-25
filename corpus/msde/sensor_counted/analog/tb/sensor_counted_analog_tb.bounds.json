@@ -1,0 +1,20 @@
+[
+  {"measure": "f_osc", "min": 1.0e6, "max": 12.5e6, "severity": "error",
+   "msg": "the digital side samples osc_out at 50MHz, so under 12.5MHz; ~4.8MHz at tt, 2.9-7.4MHz over the default PVT set"},
+  {"measure": "v_hi", "min": 2.6, "severity": "error",
+   "msg": "osc_out must swing to the rail while running (vdd is 2.97V at ss)"},
+  {"measure": "v_lo", "max": 0.3, "severity": "error",
+   "msg": "osc_out must swing to ground while running"},
+  {"measure": "v_stop", "max": 0.3, "severity": "error",
+   "msg": "osc_en low must stop the ring with osc_out held low"},
+  {"measure": "share0", "min": 0.1969, "max": 0.2072, "severity": "error",
+   "msg": "NAND stage's share of the ring period: 0.1989-0.2052 over PVT"},
+  {"measure": "share1", "min": 0.1957, "max": 0.1986, "severity": "error",
+   "msg": "stage 1's share of the ring period: 0.1969-0.1974 over PVT"},
+  {"measure": "share2", "min": 0.1881, "max": 0.1918, "severity": "error",
+   "msg": "stage 2's share of the ring period: 0.1893-0.1906 over PVT"},
+  {"measure": "share3", "min": 0.1881, "max": 0.1911, "severity": "error",
+   "msg": "stage 3's share of the ring period: 0.1893-0.1899 over PVT"},
+  {"measure": "share4", "min": 0.2159, "max": 0.2266, "severity": "error",
+   "msg": "stage 4 (also loaded by the buffer) share of the ring period: 0.2179-0.2246 over PVT"}
+]

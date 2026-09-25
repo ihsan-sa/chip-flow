@@ -35,6 +35,19 @@ bare input wire, and no corpus design has needed it). `uio_out`/`uio_oe`
 are wired but never driven high by anything this module builds today - the
 corpus uses `uio_in` only as extra input bits (9-bit UART data+start),
 never as a true bidirectional pin; `uio_oe` is tied to all-zero.
+
+macros (M10, docs/design.md "### M10.": "the digital side hardens with the
+analog GDS as a LibreLane macro") - an optional spec.yaml list, written by
+check_top_harden.py for an msde block's assembled top, never by hand:
+    macros:
+      - cell: <macro cell name>        instance: <instance name>
+        location: [x_um, y_um]         orientation: N
+        power: {vdd: <macro pin>, vss: <macro pin>}
+        pins: {<macro pin>: <port>}    # port = a key of spec.yaml `ports`
+        files: {gds: .., lef: .., vh: .., spice: ..}   # absolute paths
+A port a macro pin binds is wired to that macro inside the wrapper, so it
+takes NO tt_pins entry (and may not have one). Power pins go to VPWR/VGND
+through PDN_MACRO_CONNECTIONS, never through the wrapper.
 """
 from __future__ import annotations
 
@@ -170,6 +183,16 @@ def parse_pin_expr(expr: str) -> dict:
     return {"invert": invert, "base": base, "hi": hi, "lo": lo}
 
 
+def macro_bound_ports(spec: dict) -> dict[str, tuple[str, str]]:
+    """{port: (instance, macro pin)} for every spec port a `macros` entry
+    binds (module docstring); empty for a spec with no macros."""
+    bound: dict[str, tuple[str, str]] = {}
+    for m in spec.get("macros") or []:
+        for pin, port in (m.get("pins") or {}).items():
+            bound[port] = (m["instance"], pin)
+    return bound
+
+
 def validate_tt_pins(spec: dict, tiles: str = DEFAULT_TILES) -> list[str]:
     """Plain-English problem strings (empty = clean) - "tt_pins fit the
     tile" (gates.yaml's spec_lint description): every spec.yaml port is
@@ -183,7 +206,17 @@ def validate_tt_pins(spec: dict, tiles: str = DEFAULT_TILES) -> list[str]:
         return ["spec.yaml has no non-empty 'tt_pins' mapping"]
     budget = pin_budget(tiles)
     claimed: dict[str, set[int]] = {bus: set() for bus in _BUS_KIND}
+    bound = macro_bound_ports(spec)
+    for port in sorted(set(bound) - set(ports)):
+        problems.append(f"a macro pin binds {port!r}, which is not in "
+                        "spec.yaml 'ports'")
     for name, port in ports.items():
+        if name in bound:
+            if name in tt_pins:
+                problems.append(f"port {name!r} is wired to macro pin "
+                                f"{'.'.join(bound[name])} and may not also "
+                                "have a tt_pins mapping")
+            continue
         if name not in tt_pins:
             problems.append(f"port {name!r} has no tt_pins mapping")
             continue
@@ -260,12 +293,18 @@ def generate_tt_wrapper(spec: dict, tiles: str = DEFAULT_TILES) -> str:
     out_bits: dict[str, dict[int, str]] = {"uo_out": {}, "uio_out": {}}
     used_ui_bits: set[int] = set()
     used_uio_in_bits: set[int] = set()
+    bound = macro_bound_ports(spec)
 
     for name, port in sorted(ports.items()):
-        parsed = parse_pin_expr(tt_pins[name])
         width = int(port.get("width", 1))
         wire = f"w_{name}"
         conns.append(f"      .{name}({wire})")
+        if name in bound:
+            # driven by (or driving) a macro pin, not a TT pin
+            in_assigns.append(f"  wire [{width - 1}:0] {wire};" if width > 1
+                              else f"  wire {wire};")
+            continue
+        parsed = parse_pin_expr(tt_pins[name])
         if port.get("dir") == "input":
             src = parsed["base"]
             if src in _SCALAR_IN:
@@ -328,6 +367,12 @@ def generate_tt_wrapper(spec: dict, tiles: str = DEFAULT_TILES) -> str:
         *([",\n".join(conns)] if conns else []),
         "  );",
         "",
+        *[line for m in spec.get("macros") or [] for line in (
+            f"  {m['cell']} {m['instance']} (",
+            ",\n".join(f"      .{pin}(w_{port})"
+                       for pin, port in sorted(m["pins"].items())),
+            "  );",
+            "")],
         f"  assign uo_out = {bus_expr('uo_out', budget['uo_out'])};",
         f"  assign uio_out = {bus_expr('uio_out', budget['uio_out'])};",
         f"  assign uio_oe = {budget['uio_oe']}'b{uio_oe_bits};",
@@ -494,7 +539,39 @@ def harden_config(spec: dict, rtl_files: list[Path], wrapper_path: Path,
     if isinstance(period, (int, float)):
         config["CLOCK_PERIOD"] = float(period)
     config.update(tech.librelane_config)
+    macros = spec.get("macros") or []
+    if macros:
+        config.update(macro_config(macros))
     return config
+
+
+# The TT GF180 tile has no Metal5 stripes and an analog macro's power pins
+# are Metal3 straps (docs/spikes/macro_harden.md), so LibreLane's default
+# macro grid (Metal4-Metal5 only) needs one more connection.
+MACRO_PDN_CFG = Path(__file__).resolve().parent / "macro_pdn.tcl"
+
+
+def macro_config(macros: list[dict]) -> dict:
+    """LibreLane's keys for hard macros (the spike's recipe,
+    docs/spikes/macro_harden.md): MACROS, their power hookup, and a GDS-based
+    final extraction so the macro's transistors - not a LEF blackbox - reach
+    LVS, which gets each macro's .subckt to compare them against."""
+    return {
+        "MACROS": {m["cell"]: {
+            "gds": [m["files"]["gds"]], "lef": [m["files"]["lef"]],
+            "vh": [m["files"]["vh"]], "spice": [m["files"]["spice"]],
+            "instances": {m["instance"]: {
+                "location": list(m["location"]),
+                "orientation": m.get("orientation", "N")}},
+        } for m in macros},
+        # <instance regex> <vdd net> <gnd net> <macro vdd pin> <macro gnd pin>
+        "PDN_MACRO_CONNECTIONS": [
+            f"{m['instance']} VPWR VGND {m['power']['vdd']} {m['power']['vss']}"
+            for m in macros],
+        "PDN_CFG": str(MACRO_PDN_CFG),
+        "MAGIC_EXT_USE_GDS": True,
+        "EXTRA_SPICE_MODELS": [m["files"]["spice"] for m in macros],
+    }
 
 
 def stdcell_liberty_path(corner: str, pdk_root: Path) -> Path:
