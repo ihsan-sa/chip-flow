@@ -16,7 +16,9 @@ the same way whatever the input, up to about 5 mV of it. Here every device
 of one half has its twin at the mirrored x in the other (xmip/xmin,
 xmln1/xmln2, xmlp1/xmlp2, xmrp/xmrn, xmron/xmrop), pad nets mirrored, and
 the one place outp and outn must cross (the latch's cross-coupling) is two
-short metal2 tracks each spanning the same x range.
+short metal2 tracks, twisted on the axis so that each output runs half
+its length on the track beside the NFET row and half on the one beside
+the PFET row's nwell.
 
 Short outputs. Every fF on outp/outn slows the regeneration the bench's
 decision delay measures. Each latch inverter is one column, its NFET under
@@ -69,6 +71,7 @@ STUB = 0.30       # metal1 pad stub width
 TRACK = 0.40      # metal2 track width, the via1 landing's own size
 TRACK_PITCH = 0.80
 GAP = 0.80        # a row's pads to the first track of a channel
+TWIST_X = 0.80     # the outn twist's vias, either side of the axis
 GATE_VIA_SHIFT = 0.05  # a latch gate strip's via, off its axis, away from
                        # the drain strip beside it (0.23um to it at zero)
 VIA_OUT = 0.10     # a pad stub's via, outward of the stub's centre
@@ -153,7 +156,17 @@ def generate():
     pin_y = bot_y["vss"] - GAP
 
     land = {}  # (channel, net) -> the x of every via on that track
-    chan_y = {"mid": mid_y, "top": top_y, "bot": bot_y, "tail": {"tail": tail_y}}
+    # the middle channel's two tracks are a twisted pair: outn runs low left
+    # of the axis and high right of it, outp the other way round, so each
+    # output spends half its length beside the NFET row and half beside the
+    # PFET row's nwell. Straight tracks put the whole of outp beside the
+    # nwell and cost 0.12fF more on it than on outn: ~1.5mV of offset.
+    lo, hi = mid_y["outn"], mid_y["outp"]
+    twist = {"outn<": lo, "outp<": hi, "outn>": hi, "outp>": lo}
+    chan_y = {"mid": twist, "top": top_y, "bot": bot_y, "tail": {"tail": tail_y}}
+
+    def half(net, x):
+        return net + ("<" if x < 0 else ">")
 
     def via_at(chan, net, x):
         x = round(x, 3)
@@ -175,14 +188,27 @@ def generate():
         dx0, dx1 = min(a[0], b[0]), max(a[1], b[1])
         vstrip(dx0, dx1, n["pads"][side][3] - 0.2, p["pads"][side][1] + 0.2)
         out_net = n["right"] if n["cx"] < 0 else n["left"]
-        via_at("mid", out_net, stub_via_x(dx0, dx1, side))
+        vx = stub_via_x(dx0, dx1, side)
+        via_at("mid", half(out_net, vx), vx)
         labels.append((out_net, (dx0 + dx1) / 2,
                        (mid_y["outn"] + mid_y["outp"]) / 2, L1LBL))
         # the gate strip: the other output, from gate_top up to gate_bot
         gn, gp = n["pads"]["gate_top"], p["pads"]["gate_bot"]
         vstrip(gn[0], gn[2], gn[3] - 0.2, gp[1] + 0.2)
         shift = -GATE_VIA_SHIFT if n["cx"] < 0 else GATE_VIA_SHIFT
-        via_at("mid", n["g"], n["cx"] + shift)
+        via_at("mid", half(n["g"], n["cx"]), n["cx"] + shift)
+
+    # the twist, on the axis: outn climbs from its low track to its high one
+    # in metal1 (a via at each end), outp drops from high to low in metal2
+    # across that metal1. TWIST_X clears each via's metal2 landing from the
+    # other net's metal2 by more than M2's spacing.
+    via_at("mid", "outn<", -TWIST_X)
+    via_at("mid", "outn>", TWIST_X)
+    vstrip(-TWIST_X - STUB / 2, -TWIST_X + STUB / 2, lo, hi)
+    layoutlib.rect(top, -TWIST_X, hi - STUB / 2, TWIST_X, hi + STUB / 2, L1)
+    land.setdefault(("mid", "outp<"), []).append(0.0)
+    land.setdefault(("mid", "outp>"), []).append(0.0)
+    layoutlib.rect(top, -TRACK / 2, lo, TRACK / 2, hi, L2)
 
     # --- in-row joins: dp/dn in the NFET row, outn/outp and vdd in the PFET row
     def join(a, a_side, b, b_side):
