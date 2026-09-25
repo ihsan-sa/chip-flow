@@ -33,6 +33,9 @@ macro in a 1x1 tile, about 17 minutes on a loaded box.
 - **LVS.** A fresh magic extraction of the final GDS, with the standard
   cells' spice read first so their ports are numbered the way the library
   numbers them, against the powered netlist plus the macro's `.subckt`.
-  The gate refuses when the extraction holds fewer transistors outside the
-  standard cells than the `.subckt` has, because that means the macro went
-  in as a blackbox.
+  netgen must get the PDK's own `libs.tech/netgen/gf180mcuD_setup.tcl`.
+  LibreLane's `setup.tcl` is only a wrapper that reads environment set
+  inside a LibreLane step, so outside one netgen compares with no rules
+  and every cell shows property errors. The gate refuses when the
+  extraction holds fewer transistors inside the macro cell than the
+  `.subckt` has, because that means the macro went in as a blackbox.
