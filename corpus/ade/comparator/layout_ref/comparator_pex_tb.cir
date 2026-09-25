@@ -1,0 +1,30 @@
+* comparator_pex_tb.cir - the post-layout bench for the comparator, typical
+* corner (docs/design.md 1.5's ade pex_sim row). It runs on the magic-
+* extracted, parasitic-annotated netlist of this run's own GDS;
+* check_pex_sim.py fills in {pdk} and {extracted}, never a path typed by hand.
+*
+* The same stimulus as tb/comparator_tb.cir: clk rises at 5n with inp 1mV
+* above inn, the inputs swap during the reset at 11n, clk rises again at
+* 15n. Every fF and ohm the layout hangs on outp/outn/dp/dn slows the
+* latch, so the decision delay is what this bench bounds; the two decisions
+* and the reset level confirm the layout still works as a comparator.
+.include '{pdk}/libs.tech/ngspice/design.spice'
+.lib '{pdk}/libs.tech/ngspice/sm141064.spice' typical
+.include '{extracted}'
+
+vdd vdd 0 dc 3.3
+vclk clk 0 PULSE(0 3.3 5n 50p 50p 4.95n 10n)
+vinp inp 0 PWL(0 1.6505 11n 1.6505 11.1n 1.6495 30n 1.6495)
+vinn inn 0 PWL(0 1.6495 11n 1.6495 11.1n 1.6505 30n 1.6505)
+xdut inp inn clk outp outn vdd 0 strongarm_comparator
+cloadp outp 0 10f
+cloadn outn 0 10f
+
+.control
+tran 10p 20n
+meas tran vdiff_pos find v(outp,outn) at=9.5n
+meas tran vdiff_neg find v(outp,outn) at=19.5n
+meas tran tdelay trig v(clk) val=1.4 rise=1 targ v(outn) val=1.4 fall=1
+meas tran vreset find v(outn) at=14.5n
+.endc
+.end
