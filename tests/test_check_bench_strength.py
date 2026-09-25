@@ -173,3 +173,68 @@ def test_a_baseline_that_does_not_pass_is_a_refusal_not_a_kill(tmp_path, monkeyp
     assert code == 2, out
     assert "baseline" in out["error"]
     assert out.get("remediation")
+
+
+COMPARATOR_SPEC = """\
+top: strongarm_comparator
+supply: {vdd: 3.3}
+devices: [xmtail, xmin1]
+measures:
+  - {name: iout_ratio, bounds: {min: 1.8, max: 2.2}}
+"""
+
+
+def make_comparator_ws(tmp_path: Path, tail_line: str, top: str = "strongarm_comparator") -> Path:
+    # bounds wide enough that every mutant survives, so the only thing
+    # deciding each survivor's fate is the accepted-equivalents list.
+    ws = make_ws(tmp_path, NETLIST.replace(
+        "xmout iout iref_node vss vss nfet_03v3 w=8e-6 l=5e-7",
+        "xmout iout iref_node vss vss nfet_03v3 w=8e-6 l=5e-7\n" + tail_line
+        + "\nxmin1 iout iref_node tail vss nfet_03v3 w=2e-6 l=5e-7"))
+    (ws / "spec" / "spec.yaml").write_text(
+        COMPARATOR_SPEC.replace("strongarm_comparator", top), encoding="utf-8")
+    (ws / "tb" / "mirror_tb.bounds.json").write_text(
+        json.dumps([{"measure": "iout_ratio", "min": -1e9, "max": 1e9}]),
+        encoding="utf-8")
+    return ws
+
+
+def test_the_one_accepted_equivalent_mutant_does_not_fail_the_gate(tmp_path, monkeypatch, capsys):
+    ws = make_comparator_ws(
+        tmp_path, "xmtail tail iref_node vss vss nfet_03v3 w=4e-6 l=5e-7")
+    monkeypatch.setattr(sim_run, "EDA_BIN", make_reference_check_fake_eda(tmp_path))
+    code = check_bench_strength.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert list(out["accepted_equivalents"]) == ["xmtail_connection_removed"]
+    assert out["mutants"]["xmtail_connection_removed"]["accepted_equivalent"]
+    messages = " ".join(v["msg"] for v in out["violations"])
+    assert "xmtail_connection_removed" not in messages
+    # every other survivor still fails, including xmtail's other mutants
+    # and xmin1's own connection_removed.
+    assert code == 1, out
+    assert "xmtail_size_doubled_w" in messages
+    assert "xmin1_connection_removed" in messages
+    assert out["survived"] == out["total_mutants"] - 1
+
+
+def test_the_exception_lapses_when_the_bulk_is_not_tied_to_source_at_vss(tmp_path, monkeypatch, capsys):
+    ws = make_comparator_ws(
+        tmp_path, "xmtail tail iref_node vss sub nfet_03v3 w=4e-6 l=5e-7")
+    monkeypatch.setattr(sim_run, "EDA_BIN", make_reference_check_fake_eda(tmp_path))
+    code = check_bench_strength.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 1, out
+    assert out["accepted_equivalents"] == {}
+    assert "xmtail_connection_removed" in " ".join(v["msg"] for v in out["violations"])
+
+
+def test_the_exception_is_scoped_to_the_comparator_top(tmp_path, monkeypatch, capsys):
+    ws = make_comparator_ws(
+        tmp_path, "xmtail tail iref_node vss vss nfet_03v3 w=4e-6 l=5e-7",
+        top="other_comparator")
+    monkeypatch.setattr(sim_run, "EDA_BIN", make_reference_check_fake_eda(tmp_path))
+    code = check_bench_strength.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 1, out
+    assert out["accepted_equivalents"] == {}
+    assert "xmtail_connection_removed" in " ".join(v["msg"] for v in out["violations"])
