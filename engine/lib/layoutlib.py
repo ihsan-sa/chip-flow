@@ -523,16 +523,52 @@ _MEASURE_RE = re.compile(
     r"^\s*([A-Za-z_][\w.\[\]()]*)\s*=\s*([-+0-9.eE]+)\s*$")
 
 
-def run_ngspice(cir_path, cwd=None, timeout: float = 120.0) -> str:
+# A .control `meas` whose trigger or target never happened. This box's
+# ngspice prints both lines, and the first one trips simlib's "^error"
+# engine pattern:
+#   Error: measure  tdelay  trig(TARG) : out of interval
+#    meas tran tdelay trig v(clk) val=1.4 rise=1 targ v(outn) ... failed!
+_MEAS_FAILED_RE = re.compile(
+    r"^\s*\.?meas(?:ure)?\s+\S+\s+(\S+)\s.*failed!\s*$", re.I)
+_MEAS_ERROR_RE = re.compile(r"^\s*error:\s*measure\s+(\S+)\s", re.I)
+
+
+def split_failed_measures(out: str) -> tuple[str, set[str]]:
+    """(out without its failed-measure lines, the failed measures' names,
+    lowercased). An "Error: measure NAME" line goes only when NAME also has
+    its own "... failed!" line, so any other error text stays in."""
+    lines = out.splitlines()
+    failed = {m.group(1).lower() for ln in lines
+              for m in [_MEAS_FAILED_RE.match(ln)] if m}
+
+    def is_failure(ln: str) -> bool:
+        m = _MEAS_FAILED_RE.match(ln) or _MEAS_ERROR_RE.match(ln)
+        return bool(m) and m.group(1).lower() in failed
+
+    return "\n".join(ln for ln in lines if not is_failure(ln)), failed
+
+
+def run_ngspice(cir_path, cwd=None, timeout: float = 120.0,
+                failed_measures: set[str] | None = None) -> str:
     """ngspice -b on a bench. A non-zero exit is a refusal, and so is a
     zero exit whose text shows an engine failure (simlib's own list: a
     singular matrix, failed stepping, an unknown subckt ...), because batch
-    ngspice exits 0 after some of those (engine/lib/simlib.py)."""
+    ngspice exits 0 after some of those (engine/lib/simlib.py).
+
+    A `meas` whose trigger or target never happened is the circuit's
+    behaviour, not the engine's: pass a set as `failed_measures` and those
+    names are added to it instead of refusing, and the caller scores them
+    as findings (sim_run does the same through simlib.compare_bounds). Any
+    other error text still refuses. Without the set, it refuses as before."""
     import simlib
 
     proc = run_eda(["ngspice", "-b", str(cir_path)], cwd=cwd, timeout=timeout)
     out = require_ok(proc, "ngspice")
-    kinds = simlib.detect_engine_errors(out)
+    checked = out
+    if failed_measures is not None:
+        checked, failed = split_failed_measures(out)
+        failed_measures.update(failed)
+    kinds = simlib.detect_engine_errors(checked)
     if kinds:
         raise LayoutError(
             f"ngspice reported {', '.join(kinds)}: {out[-2000:]}")

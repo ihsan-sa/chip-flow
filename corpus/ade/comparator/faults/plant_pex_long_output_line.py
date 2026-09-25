@@ -1,11 +1,13 @@
 """plant_pex_long_output_line.py - ade/comparator `pex_sim` fault, gates.yaml's
 own "an output routed on a long minimum-width metal1 line": the outn pin
 moves from its latch column to the far end of a 500um run of 0.23um
-(M1.1's minimum width) metal1. The outn metal2 track reaches past the left
+(M1.1's minimum width) metal1. outn's left-half metal2 track ("outn<",
+the low track of the middle channel's twisted pair) reaches past the left
 clk column and drops to that line through one more via1. DRC and LVS stay
 clean - the same net, legally drawn - but the line hangs its capacitance
-and resistance on outn, and the post-layout decision delay the pex bench
-measures there goes past its bound.
+and resistance on outn, and the post-layout bench catches it: on this
+latch the extra capacitance outweighs the 10mV input, so outn never falls
+in the first decision (vdiff_pos out of bounds, tdelay never measured).
 """
 from __future__ import annotations
 
@@ -21,7 +23,7 @@ NEW_LBL = ('        if out_net != "outn":\n'
 OLD_TRK = '    # --- the metal2 tracks, each spanning its own net\'s landings only\n'
 NEW_TRK = ('    line_y = mid_y["outn"]\n'
            '    line_x = round(-clk_x - 1.5, 3)\n'
-           '    via_at("mid", "outn", line_x)\n'
+           '    via_at("mid", "outn<", line_x)\n'
            '    layoutlib.rect(top, line_x - 500.0, line_y - 0.115, line_x,\n'
            '                   line_y + 0.115, L1)\n'
            '    layoutlib.rect(top, line_x - 501.0, line_y - 0.5, line_x - 500.0,\n'

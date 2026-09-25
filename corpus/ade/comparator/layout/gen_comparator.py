@@ -204,8 +204,12 @@ def generate():
     # other net's metal2 by more than M2's spacing.
     via_at("mid", "outn<", -TWIST_X)
     via_at("mid", "outn>", TWIST_X)
+    # one L of metal1: the horizontal starts at the vertical's outer edge,
+    # so the corner is square (starting it on the vertical's centreline left
+    # a 0.21um diagonal neck there, under M1.1's 0.23um)
     vstrip(-TWIST_X - STUB / 2, -TWIST_X + STUB / 2, lo, hi)
-    layoutlib.rect(top, -TWIST_X, hi - STUB / 2, TWIST_X, hi + STUB / 2, L1)
+    layoutlib.rect(top, -TWIST_X - STUB / 2, hi - STUB / 2, TWIST_X,
+                   hi + STUB / 2, L1)
     land.setdefault(("mid", "outp<"), []).append(0.0)
     land.setdefault(("mid", "outp>"), []).append(0.0)
     layoutlib.rect(top, -TRACK / 2, lo, TRACK / 2, hi, L2)

@@ -43,9 +43,13 @@ section 5's default PVT set:
   least 2.6 V.
 
 After layout, at the typical corner, the extracted netlist with its wire
-capacitance and resistance runs the same bench: both decisions still at
-least 2.5 V apart with the right sign, the reset level at least 2.6 V, and
-`tdelay` between 0.1 ns and 0.5 ns.
+capacitance and resistance runs the same bench with a 10 mV input step in
+place of 1 mV: both decisions still at least 2.5 V apart with the right
+sign, the reset level at least 2.6 V, and `tdelay` between 0.1 ns and
+0.5 ns. The step is larger because wiring parasitics give a latch a few mV
+of offset (about 0.1 fF of difference between outp and outn is enough to
+flip a 1 mV decision), so a 1 mV post-layout bench would test the extractor's
+rounding, not the layout.
 
 Real simulated `tdelay` on this box (typical/ss/ff/sf/fs): 0.357, 0.494,
 0.268, 0.474, 0.288 ns; the outputs reach the rails at every corner.

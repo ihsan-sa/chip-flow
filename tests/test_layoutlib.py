@@ -397,3 +397,40 @@ def test_nwell_tap_is_nplus_and_draws_no_well():
     assert L["nplus"] in layers and L["pplus"] not in layers
     assert L["nwell"] not in layers
     assert {L["comp"], L["contact"], L["metal1"]} <= layers
+
+
+# what this box's ngspice printed for a .control `meas` whose target never
+# happened (corpus/ade/comparator's pex bench: outn never fell)
+MEAS_NEVER_MET = (
+    "vdiff_pos           =  -3.30000e+00\n"
+    "\nError: measure  tdelay  trig(TARG) : out of interval\n"
+    " meas tran tdelay trig v(clk) val=1.4 rise=1 targ v(outn) val=1.4 "
+    "fall=1 failed!\n\n"
+    "Warning from checkvalid: vector tdelay is not available or has zero "
+    "length.\n")
+
+
+def test_run_ngspice_measure_never_met_is_still_a_refusal_by_default(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(layoutlib, "run_eda",
+                        lambda *a, **k: FakeProc(MEAS_NEVER_MET))
+    with pytest.raises(layoutlib.LayoutError, match="ngspice_error"):
+        layoutlib.run_ngspice(tmp_path / "tb.cir")
+
+
+def test_run_ngspice_hands_a_measure_never_met_back_by_name(tmp_path,
+                                                            monkeypatch):
+    monkeypatch.setattr(layoutlib, "run_eda",
+                        lambda *a, **k: FakeProc(MEAS_NEVER_MET))
+    failed = set()
+    out = layoutlib.run_ngspice(tmp_path / "tb.cir", failed_measures=failed)
+    assert failed == {"tdelay"}
+    assert layoutlib.parse_ngspice_prints(out)["vdiff_pos"] == -3.3
+
+
+def test_run_ngspice_measure_never_met_does_not_hide_an_engine_error(
+        tmp_path, monkeypatch):
+    monkeypatch.setattr(layoutlib, "run_eda", lambda *a, **k: FakeProc(
+        MEAS_NEVER_MET + "Error: unknown subckt: x1 a b foo\n"))
+    with pytest.raises(layoutlib.LayoutError, match="unknown_subckt"):
+        layoutlib.run_ngspice(tmp_path / "tb.cir", failed_measures=set())

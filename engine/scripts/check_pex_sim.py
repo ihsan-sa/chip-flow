@@ -136,7 +136,12 @@ def run(argv=None):
     layoutlib.fresh(bench_path)
     bench_path.write_text(bench_text, encoding="utf-8")
 
-    sim_out = layoutlib.run_ngspice(bench_path, cwd=work_dir, timeout=120.0)
+    # a meas whose trigger/target never happened (a latch that decided the
+    # wrong way never lets outn fall) comes back by name and is a finding
+    # below; any other ngspice error still refuses the gate
+    never_met: set[str] = set()
+    sim_out = layoutlib.run_ngspice(bench_path, cwd=work_dir, timeout=120.0,
+                                    failed_measures=never_met)
     values = layoutlib.parse_ngspice_prints(sim_out)
     if not values:
         raise CheckError(
@@ -148,6 +153,13 @@ def run(argv=None):
     rel_bounds = str(bounds_path.relative_to(ws))
     for name, bound in measures.items():
         key = name.lower()
+        if key in never_met and key not in values:
+            violations.append(checklib.violation(
+                "pex_sim", "error", rel_bounds, topcell, "measure_missing",
+                [name], f"{name}: the bench's trigger/target condition was "
+                "never met (ngspice: 'failed!') - the circuit never made "
+                "the transition this measure times", "ngspice"))
+            continue
         if key not in values:
             violations.append(checklib.violation(
                 "pex_sim", "error", rel_bounds, topcell, "measure_missing",
