@@ -1,0 +1,16 @@
+{
+ "version": 1,
+ "skill": "vde",
+ "block": "counter8",
+ "stage": "P4",
+ "source": "corpus/vde/counter8",
+ "frozen_at": "2026-09-25T00:04:41+00:00",
+ "files": {
+  "spec/spec.md": "076c9d908cf83c54997c67ea34963ffd2e00db1e9691df393acb4cac65c24d9c",
+  "spec/spec.yaml": "3367c36efc1e82a90357ff9d26a06f4f5a3fb9461171569ba1448b3d5b9ca896",
+  "rtl/counter8.v": "bd211f49ddb73e8123bfd94ecbda03ba98335e3d46868ee491c37b86619fe670",
+  "tb/test_counter8.py": "f15a393d6eec0f88181b3f9181472cc0101a67f08105fecdfe2301b916acf6ac",
+  "holdout/test_counter8_holdout.py": "16ff58664bbd254b69110f2329d34d9c02fa8fea19b0270a24f509ee191a9f41",
+  "formal/counter8_formal.sv": "aac73e5bef2bba1468374e12da6629ad632c0ed2130f1ea747507868f7fe8566"
+ }
+}

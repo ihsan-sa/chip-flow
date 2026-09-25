@@ -1,0 +1,35 @@
+{
+ "skill": "msde",
+ "rung": "sensor_counted",
+ "block": "sensor_counted",
+ "run": "sensor_counted",
+ "phase": "P2",
+ "scored_at": "2026-09-25T04:44:36+00:00",
+ "counts": false,
+ "gates_green": false,
+ "gate_problems": [
+  "cosim: no recorded result",
+  "top_drc: no recorded result",
+  "top_harden: no recorded result",
+  "top_lvs: no recorded result",
+  "release: no recorded pass"
+ ],
+ "gates_passed": [
+  "split"
+ ],
+ "hand_edits": 0,
+ "held_out": {
+  "status": "n/a",
+  "why": "msde has no holdout gate"
+ },
+ "kill_rate": null,
+ "line_pct": null,
+ "area": null,
+ "worst_slack_ns": null,
+ "fix_attempts": 0,
+ "tokens": null,
+ "cost_usd": 39.0,
+ "wall_s": 8999,
+ "note": "stopped at the $30 cap per run ($39 over two runs): top P2, digital P4, analog P5 with 12 DRC violations",
+ "kind": "skill"
+}

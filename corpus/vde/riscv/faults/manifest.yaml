@@ -1,0 +1,37 @@
+# faults manifest (docs/design.md section 3, "### M2."; the RISC-V rung
+# itself is "### M6."): one entry per gate this rung demonstrates. See
+# corpus/vde/counter8/faults/manifest.yaml for the format.
+version: 1
+faults:
+  - name: spec_lint_requirement_no_check
+    gate: spec_lint
+    plant: plant_spec_lint.py
+    expect: {status: fail, kind: requirement_no_check}
+  - name: lint_latch
+    gate: lint
+    plant: plant_lint.py
+    expect: {status: fail, kind: LATCH}
+  - name: sim_branch_lands_one_late
+    gate: sim
+    plant: plant_sim.py
+    expect: {status: fail, kind: test_failed}
+  - name: holdout_sra_zero_fills
+    gate: holdout
+    plant: plant_holdout.py
+    expect: {status: fail, kind: holdout_failed}
+  # Known red (2026-09-24): on this core sby's abc pdr task crashes writing
+  # its counterexample (AssertionError in yosys's ywio.py), so the formal gate
+  # refuses (exit 2) instead of failing on property_failed. The reference
+  # RTL still proves. The rung stays red here until the toolchain is fixed.
+  - name: formal_register_with_no_reset
+    gate: formal
+    plant: plant_formal.py
+    expect: {status: fail, kind: property_failed}
+  - name: cover_unreachable_state
+    gate: cover
+    plant: plant_cover.py
+    expect: {status: fail, kind: line_coverage_below_threshold}
+  - name: synth_combinational_loop
+    gate: synth
+    plant: plant_synth.py
+    expect: {status: fail, kind: combinational_loop}

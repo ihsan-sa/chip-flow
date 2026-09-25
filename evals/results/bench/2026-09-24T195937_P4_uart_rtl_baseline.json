@@ -1,0 +1,87 @@
+{
+ "script": "bench",
+ "status": "pass",
+ "counts": {
+  "total": 0,
+  "by_severity": {},
+  "by_source": {}
+ },
+ "violations": [],
+ "mode": "baseline",
+ "fixture": "uart_rtl",
+ "stage": "P4",
+ "skill": "vde",
+ "block": "uart",
+ "composite": 0.9701,
+ "baseline_composite": null,
+ "gates": {
+  "lint": {
+   "status": "pass",
+   "score": 1.0,
+   "failing": 0,
+   "kinds": [],
+   "metrics": {},
+   "wall_s": 0.44
+  },
+  "sim": {
+   "status": "pass",
+   "score": 1.0,
+   "failing": 0,
+   "kinds": [],
+   "metrics": {
+    "tests_passed": 3
+   },
+   "wall_s": 4.54
+  },
+  "holdout": {
+   "status": "pass",
+   "score": 1.0,
+   "failing": 0,
+   "kinds": [],
+   "metrics": {
+    "tests_passed": 1
+   },
+   "wall_s": 3.86
+  },
+  "mutate": {
+   "status": "fail",
+   "score": 0.8204,
+   "failing": 2,
+   "kinds": [
+    "kill_rate_below_threshold",
+    "survivor_condition_inverted"
+   ],
+   "metrics": {
+    "kill_rate": 0.7391,
+    "killed": 17,
+    "survived": 6
+   },
+   "wall_s": 104.85
+  },
+  "formal": {
+   "status": "pass",
+   "score": 1.0,
+   "failing": 0,
+   "kinds": [],
+   "metrics": {},
+   "wall_s": 4.04
+  },
+  "cover": {
+   "status": "pass",
+   "score": 1.0,
+   "failing": 0,
+   "kinds": [],
+   "metrics": {
+    "line_pct": 100.0,
+    "toggle_pct": 100.0
+   },
+   "wall_s": 58.43
+  }
+ },
+ "wall_s": 176.24,
+ "report_schema": 1,
+ "checker_version": 1,
+ "generated_at": "2026-09-24T23:59:37+00:00",
+ "input": "evals/fixtures/P4/uart_rtl",
+ "input_digest": "dir_text:bd81bac94c2eda73e8d97ed8162afa156c66174dfe3e6ecfb64cdb5924b2de56"
+}

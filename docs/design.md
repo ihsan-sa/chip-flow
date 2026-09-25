@@ -257,9 +257,9 @@ Goal: `evals/` with the ladder, per-stage benches on frozen fixtures, the CVDP r
 
 Why: evals are one of the points of the project, and the optimise loop that follows needs baselines.
 
-Boundaries: section 3. `ladder.py` scores a run a session made; it does not drive an agent. Fixtures frozen from M5's runs with `bench.py --freeze`. CVDP at a pinned commit, the subset rule in `evals/cvdp/README.md`, the number reported with its caveat. The RISC-V rung joins the corpus with faults, and its row may stay red.
+Boundaries: section 3. `ladder.py` scores a run a session made; it does not drive an agent. Fixtures are frozen with `bench.py --freeze` from the corpus reference rungs, because M5 kept no run workspaces, and are re-frozen from /vde runs once a /vde session takes a rung to release. CVDP at a pinned commit, the subset rule in `evals/cvdp/README.md`, the number reported with its caveat. The RISC-V rung joins the corpus with faults, and its row may stay red.
 
-Done when `ladder.py --skill vde --rung uart --run <ws>` writes a result and `ladder.md` regenerates with all four vde rungs; `bench.py --stage P4 --fixture uart_rtl --compare` exits 0 against its baseline and 1 when the fixture's RTL is broken; `evals/cvdp/run.py --limit 20` writes a result with pass rate by category; the full subset run is attached to the PR with its number.
+Done when `ladder.py --skill vde --rung uart --run <ws>` writes a result and `ladder.md` regenerates with all four vde rungs as reference baselines, its /vde column reading 'not run' until a skill run is scored; `bench.py --stage P4 --fixture uart_rtl --compare` exits 0 against its baseline and 1 when the fixture's RTL is broken; `evals/cvdp/run.py --limit 20` writes a result with pass rate by category; the full subset run is attached to the PR with its number.
 
 ### M7. The optimise loop for Verilog
 
@@ -300,6 +300,8 @@ Why: no published open flow covers digital and analog with LVS in the loop, and 
 Boundaries: the `d_cosim` bridge proven on a two-inverter case before the gate is built, fallbacks in section 5's order and the choice recorded. The digital side hardens with the analog GDS as a LibreLane macro. Corpus `msde/sensor_counted` and `msde/ring_osc_div`; the DAC with an SPI register and the SAR ADC join as specs with faults and may stay red.
 
 Done when `cosim` runs the ring oscillator with its divider in one bench and reports the divided frequency inside bounds; `faults.py --skill msde` exits 0; a session running `/msde` on `corpus/msde/sensor_counted/spec.md` reaches `release` with both nested workspaces released and `top_lvs` matching; `ladder.md` gains the msde column.
+
+M10 lands in three parts. Part 1 is `split` and `cosim`. Part 2 is the gates, the corpus faults passing, `cosim` on the ring oscillator and the msde column. Part 3 is the `/msde` run to `release`, and it waits for M9 to merge, because that run's analog half is built on M9's layout roles.
 
 ### M11. The course project
 

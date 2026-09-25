@@ -1,0 +1,65 @@
+{
+ "composite": 1.0,
+ "gates": {
+  "lint": {
+   "status": "pass",
+   "score": 1.0,
+   "failing": 0,
+   "kinds": [],
+   "metrics": {},
+   "wall_s": 4.38
+  },
+  "sim": {
+   "status": "pass",
+   "score": 1.0,
+   "failing": 0,
+   "kinds": [],
+   "metrics": {
+    "tests_passed": 2
+   },
+   "wall_s": 57.8
+  },
+  "holdout": {
+   "status": "pass",
+   "score": 1.0,
+   "failing": 0,
+   "kinds": [],
+   "metrics": {
+    "tests_passed": 1
+   },
+   "wall_s": 35.05
+  },
+  "mutate": {
+   "status": "pass",
+   "score": 1.0,
+   "failing": 0,
+   "kinds": [],
+   "metrics": {
+    "kill_rate": 0.9565,
+    "killed": 22,
+    "survived": 1
+   },
+   "wall_s": 181.55
+  },
+  "formal": {
+   "status": "pass",
+   "score": 1.0,
+   "failing": 0,
+   "kinds": [],
+   "metrics": {},
+   "wall_s": 4.11
+  },
+  "cover": {
+   "status": "pass",
+   "score": 1.0,
+   "failing": 0,
+   "kinds": [],
+   "metrics": {
+    "line_pct": 100.0,
+    "toggle_pct": 100.0
+   },
+   "wall_s": 25.3
+  }
+ },
+ "written": "2026-09-24"
+}

@@ -1,0 +1,20 @@
+# The corpus ladder (docs/design.md section 3, Figure 2 of the proposal):
+# each skill's rungs, easiest first. `rung` is the corpus/<skill>/<rung>/
+# directory ladder.py scores; a rung whose directory does not exist yet shows
+# as "not in corpus" on ladder.md. The ade and msde lists are the design's
+# rungs; their workers fix the directory names as the rungs land.
+vde:
+  - {rung: counter8, title: 8-bit counter}
+  - {rung: uart, title: UART}
+  - {rung: spi_fifo, title: SPI peripheral with a FIFO}
+  - {rung: riscv, title: small RISC-V core}
+ade:
+  - {rung: mirror, title: current mirror}
+  - {rung: r2r_dac, title: R2R DAC}
+  - {rung: comparator, title: comparator}
+  - {rung: bandgap, title: bandgap}
+msde:
+  - {rung: sensor_counted, title: a sensor counted}
+  - {rung: ring_osc_div, title: ring oscillator with a divider}
+  - {rung: dac_spi, title: DAC with an SPI register}
+  - {rung: sar_adc, title: SAR ADC}
