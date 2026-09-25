@@ -4,7 +4,7 @@ evals/ladder.md (docs/design.md section 3, "### M6.").
 
     ladder.py --skill vde --rung uart --run WS --hand-edits N
               [--session-tokens T] [--session-cost-usd C] [--wall-s S]
-              [--note TEXT]
+              [--note TEXT] [--reference]
     ladder.py --regen
 
 It scores a run a session already made; it never drives an agent. From the
@@ -21,10 +21,16 @@ Hand edits cannot be read off a workspace, so the caller declares them with
 `--hand-edits`; it is required. A rung COUNTS when every gate is green, the
 held-out tests pass, and there were no hand edits.
 
+`--reference` marks a run that is not a skill session (the corpus reference
+RTL with its gates run by gate.py, say). Its result is kept, but ladder.md
+lists it under "Reference baselines" and never on the skill's column, which
+shows only skill runs.
+
 Every scored run is a dated JSON under evals/results/ladder/. ladder.md is
 rebuilt from the newest result per rung, the bench baselines under
 evals/fixtures/, and the newest full-subset CVDP result under evals/results/cvdp/
-(the newest limited one when there is none), so the
+(the pinned non-agentic file, no --category, no --limit, every subset problem
+selected; the newest other run, labelled as such, when there is none), so the
 ade and msde columns fill in as their results land. Exit 0 the rung counts,
 1 it does not (the findings say why), 2 error; `--regen` exits 0.
 """
@@ -53,6 +59,8 @@ SCRIPT = "ladder"
 CORPUS = REPO / "corpus"
 RESULTS = EVALS / "results"
 SKIP_COPY = {"runs", "state_snapshots", "log", "__pycache__"}
+# evals/cvdp/run.py DATASETS["nonagentic"]["file"]: the benchmark the page reports
+CVDP_PINNED_FILE = "cvdp_v1.1.0_nonagentic_code_generation_no_commercial.jsonl"
 
 
 def load_ladder() -> dict:
@@ -158,6 +166,7 @@ def score(args) -> tuple[dict, list[dict]]:
         "cost_usd": round(cost, 2) if cost else None,
         "wall_s": round(wall) if wall is not None else None,
         "note": args.note,
+        "kind": "reference" if args.reference else "skill",
     }
     violations = [checklib.violation("ladder", "error", None, args.rung,
                                      "gate_not_green", [], p, "attest")
@@ -180,20 +189,32 @@ def latest(dirpath: Path, pattern: str) -> Path | None:
     return files[-1] if files else None
 
 
+def is_full_cvdp(c: dict) -> bool:
+    """A full-subset run: the pinned benchmark file, no --category, no
+    --limit, every subset problem selected. A smoke, category or example
+    (positive-control) run must not stand in for the number the page reports."""
+    return ((c.get("dataset") or {}).get("file") == CVDP_PINNED_FILE
+            and c.get("categories") is None and c.get("limit") is None
+            and c.get("selected") is not None
+            and c.get("selected") == c.get("subset_size"))
+
+
 def latest_cvdp(dirpath: Path) -> Path | None:
-    """The newest full-subset CVDP run (no --limit), else the newest run: a
-    --limit smoke run must not stand in for the number the page reports."""
+    """The newest full-subset CVDP run, else the newest run of any kind."""
     files = sorted(dirpath.glob("*.json")) if dirpath.is_dir() else []
     full = [f for f in files
-            if json.loads(f.read_text(encoding="utf-8")).get("limit") is None]
+            if is_full_cvdp(json.loads(f.read_text(encoding="utf-8")))]
     return (full or files or [None])[-1]
 
 
-def latest_ladder_results(results: Path) -> dict:
+def latest_ladder_results(results: Path, kind: str = "skill") -> dict:
+    """Newest result per (skill, rung) of one kind: "skill" runs (a result
+    written before `kind` existed counts as one) or "reference" runs."""
     out = {}
     for p in sorted((results / "ladder").glob("*.json")) if (results / "ladder").is_dir() else []:
         r = json.loads(p.read_text(encoding="utf-8"))
-        out[(r["skill"], r["rung"])] = r  # sorted by dated name: newest wins
+        if r.get("kind", "skill") == kind:
+            out[(r["skill"], r["rung"])] = r  # sorted by dated name: newest wins
     return out
 
 
@@ -227,6 +248,23 @@ def _why_red(r: dict) -> str:
     return "; ".join(bits)
 
 
+TABLE_HEAD = ["| rung | counts | why not | held-out | kill rate | area | worst slack ns "
+              "| fix attempts | tokens | cost USD | wall s | scored | note |",
+              "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+
+
+def _row(rung: str, r: dict) -> str:
+    h = r["held_out"]
+    held = h["status"] if h.get("tests_run") is None else \
+        f"{h['status']} ({h.get('tests_passed')}/{h.get('tests_run')})"
+    return "| " + " | ".join([
+        rung, "yes" if r["counts"] else "no", _why_red(r), held,
+        _fmt(r.get("kill_rate")), _fmt(r.get("area"), 1),
+        _fmt(r.get("worst_slack_ns")), _fmt(r.get("fix_attempts")),
+        _fmt(r.get("tokens")), _fmt(r.get("cost_usd")), _fmt(r.get("wall_s")),
+        r["scored_at"][:10], r.get("note") or ""]) + " |"
+
+
 def render(results: Path, fixtures: Path) -> str:
     ladder = load_ladder()
     res = latest_ladder_results(results)
@@ -257,23 +295,23 @@ def render(results: Path, fixtures: Path) -> str:
             lines.append(f"No /{s} run scored yet. `ladder.py --skill {s} --rung <rung> "
                          "--run <ws>` fills this table.")
             continue
-        lines += ["| rung | counts | why not | held-out | kill rate | area | worst slack ns "
-                  "| fix attempts | tokens | cost USD | wall s | scored | note |",
-                  "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+        lines += TABLE_HEAD
         for row in ladder.get(s) or []:
             r = res.get((s, row["rung"]))
-            if r is None:
-                lines.append(f"| {row['rung']} | not run | | | | | | | | | | | |")
-                continue
-            h = r["held_out"]
-            held = h["status"] if h.get("tests_run") is None else \
-                f"{h['status']} ({h.get('tests_passed')}/{h.get('tests_run')})"
-            lines.append("| " + " | ".join([
-                row["rung"], "yes" if r["counts"] else "no", _why_red(r), held,
-                _fmt(r.get("kill_rate")), _fmt(r.get("area"), 1),
-                _fmt(r.get("worst_slack_ns")), _fmt(r.get("fix_attempts")),
-                _fmt(r.get("tokens")), _fmt(r.get("cost_usd")), _fmt(r.get("wall_s")),
-                r["scored_at"][:10], r.get("note") or ""]) + " |")
+            lines.append(_row(row["rung"], r) if r else
+                         f"| {row['rung']} | not run | | | | | | | | | | | |")
+
+    refs = latest_ladder_results(results, "reference")
+    if refs:
+        lines += ["", "## Reference baselines", "",
+                  "The corpus reference solutions scored the same way (`ladder.py "
+                  "--reference`). These are not skill runs and never fill a column above; "
+                  "they say what a rung costs when the design is right.", "",
+                  "| skill | " + TABLE_HEAD[0][2:], "|---" + TABLE_HEAD[1]]
+        for s in skills:
+            for row in ladder.get(s) or []:
+                if (s, row["rung"]) in refs:
+                    lines.append(f"| {s} " + _row(row["rung"], refs[(s, row["rung"])]))
 
     lines += ["", "## Per-stage benches", "",
               "Frozen fixtures under `evals/fixtures/<stage>/<name>/`; `bench.py --compare` "
@@ -297,7 +335,7 @@ def render(results: Path, fixtures: Path) -> str:
     else:
         c = json.loads(cv.read_text(encoding="utf-8"))
         ov = c.get("overall") or {}
-        shown = ("Newest full-subset run" if c.get("limit") is None
+        shown = ("Newest full-subset run" if is_full_cvdp(c)
                  else "Newest run (no full-subset run yet)")
         lines += [f"{shown}: `{cv.name}`, mode `{c.get('mode', '-')}`: "
                   f"{ov.get('pass', '-')} of {ov.get('total', '-')} passed "
@@ -338,6 +376,9 @@ def run(argv=None):
     ap.add_argument("--wall-s", type=float)
     ap.add_argument("--note", help="what this run was, shown on ladder.md "
                     "(e.g. that it is not a skill run)")
+    ap.add_argument("--reference", action="store_true",
+                    help="the run is not a skill session (e.g. the corpus reference "
+                    "RTL): listed as a reference baseline, never on the skill column")
     ap.add_argument("--results-dir", default=str(RESULTS))
     ap.add_argument("--fixtures-dir", default=str(EVALS / "fixtures"))
     ap.add_argument("--ladder-md", default=str(EVALS / "ladder.md"))

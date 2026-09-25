@@ -97,6 +97,8 @@ def test_render_prefers_the_newest_full_cvdp_run_over_a_newer_limited_one(tmp_pa
     def write(name, limit, passed, total):
         (res / "cvdp" / name).write_text(json.dumps({
             "mode": "null", "subset_size": 277, "dataset_size": 302, "limit": limit,
+            "dataset": {"file": ladder.CVDP_PINNED_FILE}, "categories": None,
+            "selected": total,
             "overall": {"pass": passed, "total": total, "pass_rate": passed / total}}))
 
     write("2026-09-24T000000_nonagentic_null.json", None, 0, 277)
@@ -106,3 +108,51 @@ def test_render_prefers_the_newest_full_cvdp_run_over_a_newer_limited_one(tmp_pa
     # with no full run on record, the limited one is shown rather than nothing
     (res / "cvdp" / "2026-09-24T000000_nonagentic_null.json").unlink()
     assert "2 of 20 passed" in ladder.render(res, tmp_path / "f")
+
+
+def test_a_newer_example_or_category_cvdp_run_is_not_the_full_subset_number(tmp_path):
+    res = tmp_path / "results"
+    (res / "cvdp").mkdir(parents=True)
+
+    def write(name, **kw):
+        c = {"mode": "null", "subset_size": 277, "dataset_size": 302, "limit": None,
+             "dataset": {"file": ladder.CVDP_PINNED_FILE}, "categories": None,
+             "selected": 277, "overall": {"pass": 0, "total": 277, "pass_rate": 0.0}}
+        c.update(kw)
+        (res / "cvdp" / name).write_text(json.dumps(c))
+
+    write("2026-09-24T000000_nonagentic_null.json")
+    # the README's positive control: the example set in reference mode
+    write("2026-09-25T000000_example_reference.json", mode="reference",
+          dataset={"file": "cvdp_v1.1.0_example_nonagentic_code_generation_no_commercial.jsonl"},
+          subset_size=1, dataset_size=1, selected=1,
+          overall={"pass": 1, "total": 1, "pass_rate": 1.0})
+    # a --category run on the pinned file
+    write("2026-09-25T010000_nonagentic_null.json", categories=["cid003"], selected=40,
+          overall={"pass": 3, "total": 40, "pass_rate": 0.075})
+    md = ladder.render(res, tmp_path / "f")
+    assert "Newest full-subset run: `2026-09-24T000000_nonagentic_null.json`" in md
+    assert "0 of 277 passed" in md
+    assert "1 of 1 passed" not in md and "3 of 40 passed" not in md
+
+
+def test_the_pinned_cvdp_file_matches_the_runner():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("cvdp_run", REPO / "evals" / "cvdp" / "run.py")
+    cvdp_run = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cvdp_run)
+    assert ladder.CVDP_PINNED_FILE == cvdp_run.DATASETS["nonagentic"]["file"]
+
+
+def test_reference_runs_are_baselines_not_skill_results(tmp_path):
+    res = tmp_path / "results"
+    _write(res, "2026-09-02T000000_vde_counter8.json",
+           _result("counter8", True, kind="reference", note="reference RTL"))
+    _write(res, "2026-09-01T000000_vde_uart.json", _result("uart", False))
+    md = ladder.render(res, tmp_path / "f")
+    # the skill column and table ignore the reference run, even though it is newer
+    assert "8-bit counter: not run" in md and "UART: red" in md
+    vde = md.split("## /vde")[1].split("## /ade")[0]
+    assert "| counter8 | not run |" in vde
+    refs = md.split("## Reference baselines")[1]
+    assert "| vde | counter8 | yes |" in refs and "uart" not in refs.split("## ")[0]

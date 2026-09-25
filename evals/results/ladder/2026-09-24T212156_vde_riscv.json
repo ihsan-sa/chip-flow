@@ -41,5 +41,6 @@
  "tokens": null,
  "cost_usd": null,
  "wall_s": 1044,
- "note": "reference RTL with its gates run by gate.py, not a /vde skill run"
+ "note": "reference RTL with its gates run by gate.py, not a /vde skill run",
+ "kind": "reference"
 }
