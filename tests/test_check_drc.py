@@ -151,3 +151,31 @@ def test_run_never_passes_final_dir_as_the_scratch_workdir(tmp_path, monkeypatch
             f"{tool}: workdir {workdir} is inside final_dir {final_dir}"
         assert (ws / "log") in workdir.parents or workdir == ws / "log", \
             f"{tool}: workdir {workdir} is not under ws/log/"
+
+
+def test_run_resolves_a_relative_workspace_to_absolute(tmp_path, monkeypatch, capsys):
+    # Regression: the /vde router passes a RELATIVE workspace
+    # (blocks/<name>). run_magic_drc/run_klayout_drc get handed
+    # `gds`/`work_dir` built from `ws`, then run subprocesses with
+    # cwd=work_dir - if ws stayed relative, that cwd change breaks any
+    # relative path magic/klayout resolve on their own (the actual failure
+    # this masked: "couldn't read file
+    # blocks/counter8/log/drc_work/.magic_drc.tcl"). run() must resolve
+    # ws to absolute before building gds/work_dir from it.
+    monkeypatch.chdir(tmp_path)
+    make_ws(tmp_path)
+    seen = {}
+
+    def fake_magic(gds, top, workdir):
+        seen["gds"] = gds
+        seen["work_dir"] = workdir
+        return 0
+
+    monkeypatch.setattr(check_drc, "run_magic_drc", fake_magic)
+    monkeypatch.setattr(check_drc, "run_klayout_drc", lambda gds, top, pdk, wd: 0)
+    monkeypatch.setattr(check_drc, "_pdk_root", lambda: Path("/fake/toolchain/foss/pdks"))
+
+    code = check_drc.main(["--workspace", "ws"])
+    assert code == 0, json.loads(capsys.readouterr().out)
+    assert seen["gds"].is_absolute(), seen["gds"]
+    assert seen["work_dir"].is_absolute(), seen["work_dir"]

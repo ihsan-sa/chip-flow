@@ -145,7 +145,7 @@ def run(argv=None):
     ap.add_argument("--out", help="write result JSON here instead of stdout")
     args = ap.parse_args(argv)
 
-    ws = Path(args.workspace)
+    ws = Path(args.workspace).resolve()
     spec = speclib.load_spec(ws / "spec" / "spec.yaml")
     top = ttlib.wrapper_name(spec)
     final_dir = ws / "harden" / "runs" / "run" / "final"

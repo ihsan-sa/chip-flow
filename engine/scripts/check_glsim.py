@@ -251,7 +251,7 @@ def run(argv=None):
     ap.add_argument("--out", help="write result JSON here instead of stdout")
     args = ap.parse_args(argv)
 
-    ws = Path(args.workspace)
+    ws = Path(args.workspace).resolve()
     spec = speclib.load_spec(ws / "spec" / "spec.yaml")
     top = spec.get("top")
     if not isinstance(top, str) or not top.strip():
