@@ -1,7 +1,7 @@
 """Fault: an analog pin sent to a pad off the analog template (gates.yaml's
-msde top_harden row). Moves vout from ua[0] to ua[6] in interface.yaml, so
-ua[0] to ua[5] sit unused below it - precheck fails an unwired pad under
-analog_pins, and the template has no ua[6] to route to. top_harden must
+msde top_harden row). Moves vout from ua[0] to ua[6] in interface.yaml:
+the fault is the gap below ua[6], because ua[0] to ua[5] are left unwired,
+which precheck fails under analog_pins. top_harden must
 report ua_pin_off_template before it spends a harden on it. Refuses when
 vout is not on ua[0], so a no-op edit can never pass as the fault."""
 from pathlib import Path

@@ -12,9 +12,10 @@ are the two sides' declared copies of the crossing signals, which the
 `split` gate checks against `interface.yaml`.
 
 `interface.yaml` also carries `ua_pins`, the analog-cell pins brought out
-to the tile's analog pads. Only `check_top_harden` is meant to read it,
-and that engine work has not landed yet, so faults/manifest.yaml is empty
-until the top gates can place an analog pad.
+to the tile's analog pads. `check_top_harden` reads it and hardens the
+top as a 1x2 analog tile with each such pin routed to its pad, and
+faults/manifest.yaml plants one fault each for top_harden, top_lvs and
+precheck.
 
 Note that vout is high for bits low (analog/spec.md).
 
