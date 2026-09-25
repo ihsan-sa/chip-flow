@@ -227,8 +227,8 @@ gates:
     drc:
       # M9 (docs/design.md, "### M9."): klayout's real GF180 signoff deck
       # only, with the PDK's own signoff deck selection (every FEOL, metal,
-      # via and guard-ring rule; density and antenna off, see
-      # layoutlib.DRC_DECKS). docs/spikes/glayout.md found magic re-snaps a
+      # via and guard-ring rule; density, antenna and dummy fill off, each
+      # with its reason in the report, see layoutlib.DRC_SKIPPED). docs/spikes/glayout.md found magic re-snaps a
       # GDS to the manufacturing grid on load, hiding off-grid shapes
       # klayout reports, so magic is not run here. `analog_drc`, not
       # `drc`, so this row's tool never collides with vde's drc row above,
@@ -244,8 +244,9 @@ gates:
       # M9: netgen under the PDK's own setup (<pdk>_setup.tcl) against
       # M8's own netlist/<block>.cir at the block's sizing
       # (docs/spikes/glayout.md: the spike's own LVS only compared
-      # gLayout's output with itself). `analog_lvs`, not `lvs` - see drc's
-      # own note above.
+      # gLayout's output with itself). A PDK std cell is compared flat on
+      # both sides; a cell netgen can only black-box is a refusal.
+      # `analog_lvs`, not `lvs` - see drc's own note above.
       phase: P5
       tool: analog_lvs
       fail_severities: [error]

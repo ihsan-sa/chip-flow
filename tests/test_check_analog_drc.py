@@ -136,11 +136,63 @@ def test_unlaunchable_klayout_is_a_refusal_not_a_stale_pass(unlaunchable_eda, tm
 
 def test_drc_keeps_metal_and_via_rules_on():
     # the review's finding: "-beol" dropped metal.rb, via.rb and
-    # guard_ring.rb. Only chip-level density and antenna may be off.
+    # guard_ring.rb. Only chip-level density, antenna and dummy fill may be
+    # off, each with its reason.
     import layoutlib
     tokens = layoutlib.DRC_DECKS.split(",")
     assert tokens[0] == "all"
-    assert sorted(t for t in tokens if t.startswith("-")) == ["-antenna", "-density"]
+    assert sorted(t for t in tokens if t.startswith("-")) == [
+        "-antenna", "-density", "-dummy"]
+    assert all(layoutlib.DRC_SKIPPED[t[1:]] for t in tokens[1:])
+
+
+def test_report_names_the_skipped_decks_and_why(tmp_path, monkeypatch):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    gds = ws / "layout" / "blk.gds"
+    import layout_gen
+    import layoutlib
+
+    monkeypatch.setattr(layout_gen, "build",
+                        lambda ws_, block: (gds, "blk", None, None))
+
+    def fake_drc(gds_path, topcell, rdb):
+        Path(rdb).write_text(RDB_EMPTY, encoding="utf-8")
+
+    monkeypatch.setattr(layoutlib, "run_klayout_drc", fake_drc)
+    payload, _out = check_analog_drc.run(["--workspace", str(ws)])
+    assert payload["status"] == "pass"
+    assert payload["decks_skipped"] == layoutlib.DRC_SKIPPED
+    assert "fill" in payload["decks_skipped"]["dummy"]
+
+
+RDB_EMPTY = """<?xml version="1.0" encoding="utf-8"?>
+<report-database><categories/><cells/><items/></report-database>
+"""
+
+
+@pytest.mark.slow
+def test_finalized_filltie_passes_the_deck_the_raw_one_passes(tmp_path):
+    # shakedown breakage 18: finalize() used to rebuild each polygon from
+    # its outline, filling the filltie's NPLUS keyhole over its P+ tap.
+    import gdsfactory as gf
+    import layoutlib
+
+    layoutlib.gf180_cells()
+    lib = "gf180mcu_fd_sc_mcu7t5v0"
+    tie = gf.import_gds(layoutlib.pdk_root() / "libs.ref" / lib / "gds" /
+                        f"{lib}.gds", cellname=f"{lib}__filltie")
+    raw = gf.Component()
+    raw.add_ref(tie)
+    raw.name = "raw_tie"
+    counts = {}
+    for comp in (raw, layoutlib.finalize(raw, "fin_tie", [])):
+        gds = tmp_path / f"{comp.name}.gds"
+        comp.write_gds(gds)
+        rdb = tmp_path / f"{comp.name}.lyrdb"
+        layoutlib.run_klayout_drc(gds, comp.name, rdb)
+        counts[comp.name] = [i["category"] for i in layoutlib.parse_drc_rdb(rdb)]
+    assert counts == {"raw_tie": [], "fin_tie": []}
 
 
 @pytest.mark.slow

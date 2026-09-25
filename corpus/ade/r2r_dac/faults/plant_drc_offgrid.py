@@ -1,7 +1,7 @@
 """plant_drc_offgrid.py - ade/r2r_dac `drc` fault (docs/design.md 1.5,
 "### M9."; docs/spikes/glayout.md). Patches layout/gen_r2r_dac.py's own
 final `return layoutlib.finalize(...)` line to add one extra shape AFTER
-finalize()'s own 5nm grid-snap (pcell_utilities.snap_to_grid) has already
+finalize()'s own 5nm grid-snap has already
 run - the only way an off-grid shape can survive to the written GDS, since
 every generator's own geometry goes through that snap. Placed far from any
 real geometry (x=20), and 0.6um square so it clears metal1's minimum

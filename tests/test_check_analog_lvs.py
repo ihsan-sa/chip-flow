@@ -209,3 +209,80 @@ def test_device_sized_differently_fails_lvs(tmp_path, block):
     assert "property error" in out["violations"][0]["msg"].lower()
     gate_result = gate.evaluate("lvs", _lvs_gate_row(), out)
     assert gate_result["status"] == "fail"
+
+
+STDCELL = REPO / "tests" / "fixtures" / "ade-stdcell"
+BUF_1 = "gf180mcu_fd_sc_mcu7t5v0__buf_1"
+
+
+def stdcell_ws(tmp_path: Path, ref_cell: str = BUF_1) -> Path:
+    """tests/fixtures/ade-stdcell with its reference calling `ref_cell` in
+    place of the buf_1 the layout draws."""
+    ws = tmp_path / "ws"
+    shutil.copytree(STDCELL, ws)
+    ref = ws / "netlist" / "stdbuf.cir"
+    ref.write_text(ref.read_text(encoding="utf-8").replace(BUF_1, ref_cell),
+                   encoding="utf-8")
+    return ws
+
+
+def test_with_std_cells_puts_the_pdk_subckt_before_its_use():
+    text, cells = check_analog_lvs.with_std_cells(
+        (STDCELL / "netlist" / "stdbuf.cir").read_text(encoding="utf-8"))
+    assert cells == [BUF_1]
+    assert text.index(f".SUBCKT {BUF_1}") < text.index(".subckt stdbuf")
+    same, none = check_analog_lvs.with_std_cells(".subckt a x\n.ends\n")
+    assert (same, none) == (".subckt a x\n.ends\n", [])
+
+
+@pytest.mark.slow
+def test_std_cell_is_compared_flat_on_both_sides(tmp_path):
+    # shakedown breakage 21: finalize() flattens a std cell into its FETs,
+    # so the reference gets the cell's own transistors too.
+    code, out = run_json(["--workspace", str(stdcell_ws(tmp_path))], tmp_path)
+    assert code == 0, out
+    assert out["std_cells_flattened"] == [BUF_1]
+    assert gate.evaluate("lvs", _lvs_gate_row(), out)["status"] == "pass"
+
+
+@pytest.mark.slow
+def test_wrong_std_cell_fails_lvs(tmp_path):
+    ws = stdcell_ws(tmp_path, "gf180mcu_fd_sc_mcu7t5v0__buf_2")
+    code, out = run_json(["--workspace", str(ws)], tmp_path)
+    assert code == 1, out
+    assert {v["kind"] for v in out["violations"]} == {"lvs_mismatch"}
+
+
+@pytest.mark.slow
+def test_cell_nobody_defines_is_a_refusal(tmp_path, capsys):
+    ws = stdcell_ws(tmp_path, "mybuf")
+    code = check_analog_lvs.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert code == 2, out
+    assert "mybuf as black boxes" in out["remediation"]
+
+
+PPOLY = """.subckt top a b vss
+X1 a m vss ppolyf_u r_width=2u r_length={l1}
+X2 m b vss ppolyf_u r_width=2u r_length=150u
+.ends
+"""
+
+
+@pytest.mark.slow
+def test_wrong_ppolyf_u_length_fails_lvs(tmp_path):
+    # netgen reads ppolyf_u as a placeholder cell but still compares its
+    # r_length under the PDK setup; a 100u unit where 150u was drawn fails.
+    import layoutlib
+    (tmp_path / "lay.spice").write_text(PPOLY.format(l1="150u"),
+                                        encoding="utf-8")
+    results = {}
+    for l1 in ("150e-6", "100e-6"):
+        (tmp_path / "ref.spice").write_text(PPOLY.format(l1=l1),
+                                            encoding="utf-8")
+        results[l1] = layoutlib.run_netgen_lvs(
+            tmp_path, "lay.spice", "top", "ref.spice", "top", "out.log")
+    assert results["150e-6"][0] is True
+    matched, text = results["100e-6"]
+    assert matched is False
+    assert "r_length" in text and "property errors" in text

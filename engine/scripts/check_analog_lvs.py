@@ -23,6 +23,13 @@ under log/lvs/ before netgen reads it - the same values `{{SIZING}}` hands the b
 layout against the sizing the design is simulated at, not against whatever
 defaults the netlist happened to ship.
 
+A standard cell the netlist calls (a buf_20 driver) is compared device by
+device, never as a black box: the layout's finalize() flattens it into its
+transistors, so the copy under log/lvs/ also gets the PDK's own .SUBCKT for
+it (layoutlib.std_cell_subckts) and netgen flattens the reference to the
+same level. Any cell netgen still has to black-box, other than the PDK
+device classes whose properties its setup compares, is a refusal.
+
 A netgen result counts as PASS only on a final "Circuits match uniquely."
 with no property error anywhere in the log (layoutlib.run_netgen_lvs), so a
 device sized differently in the generator than in the netlist (gates.yaml's
@@ -113,6 +120,14 @@ def sized_reference(ref_text: str, cell: str, sizing: dict) -> tuple[str, dict]:
     return "".join(out), applied
 
 
+def with_std_cells(ref_text: str) -> tuple[str, list[str]]:
+    """ref_text with the PDK's own .SUBCKT of every standard cell it calls
+    but does not define, put first: netgen makes a placeholder of a cell
+    called before its definition. Returns (text, the cells added)."""
+    cells_text, cells = layoutlib.std_cell_subckts(ref_text)
+    return (cells_text + ref_text if cells else ref_text), cells
+
+
 def run(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--workspace", required=True, help="block workspace")
@@ -134,12 +149,13 @@ def run(argv=None):
     import sim_run
     sizing = sim_run.load_sizing(ws)
     ref_for_lvs = ref_path.resolve()
-    applied = {}
+    text, applied = ref_text, {}
     if sizing:
         text, applied = sized_reference(ref_text, ref_cell, sizing)
-        if applied:
-            ref_for_lvs = work_dir / f"{block}.sized{ref_path.suffix}"
-            ref_for_lvs.write_text(text, encoding="utf-8")
+    text, std_cells = with_std_cells(text)
+    if applied or std_cells:
+        ref_for_lvs = work_dir / f"{block}.lvs{ref_path.suffix}"
+        ref_for_lvs.write_text(text, encoding="utf-8")
 
     extracted_spice, _extract_log = layoutlib.run_magic_extract(
         work_dir, gds_path.resolve(), topcell, parasitics=False)
@@ -162,6 +178,7 @@ def run(argv=None):
         SCRIPT, ws / "layout", violations, topcell=topcell,
         gds=str(gds_path.relative_to(ws)), reference=rel_ref,
         reference_cell=ref_cell, sizing_applied=applied,
+        std_cells_flattened=std_cells,
         log=str(out_log.relative_to(ws)))
     return payload, args.out
 
