@@ -1,0 +1,12 @@
+top: bandgap
+supply:
+  vdd: 3.3
+devices: [xm1, xm2, xm3, xm4, xm5, xr1, xr2, xq1, xq2, xq3, xms1, xms2, xms3]
+corners: default
+measures:
+  - name: vref
+    bounds: {min: 1.16, max: 1.21}
+  - name: vref_line_pp
+    bounds: {max: 15e-3}
+  - name: vref_tc_pp
+    bounds: {max: 6e-3}

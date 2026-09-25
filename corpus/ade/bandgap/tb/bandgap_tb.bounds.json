@@ -1,0 +1,6 @@
+[
+  {"measure": "vref", "min": 1.16, "max": 1.21, "severity": "error",
+   "msg": "~1.19V after a power-up ramp from 0V; near 0V means the startup failed"},
+  {"measure": "vref_line_pp", "max": 15e-3, "severity": "error",
+   "msg": "vref may move at most 15mV while VDD sweeps 2.97V to 3.63V"}
+]

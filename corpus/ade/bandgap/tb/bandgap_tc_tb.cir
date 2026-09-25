@@ -1,0 +1,25 @@
+* draft tc bench
+.include '{{PDK}}/libs.tech/ngspice/design.spice'
+.lib '{{PDK}}/libs.tech/ngspice/sm141064.spice' {{CORNER}}
+.lib '{{PDK}}/libs.tech/ngspice/sm141064.spice' {{RES_CORNER}}
+.param bjt_isa_typical=1    bjt_isa_ss=0.65 bjt_isa_ff=1.35 bjt_isa_sf=1 bjt_isa_fs=1
+.param bjt_bfa_typical=1    bjt_bfa_ss=0.80 bjt_bfa_ff=1.2  bjt_bfa_sf=1 bjt_bfa_fs=1
+.param bjt_ra_typical=1     bjt_ra_ss=1.2   bjt_ra_ff=0.8   bjt_ra_sf=1  bjt_ra_fs=1
+.param bjt_cja_typical=1    bjt_cja_ss=1.15 bjt_cja_ff=0.85 bjt_cja_sf=1 bjt_cja_fs=1
+.param isa=bjt_isa_{{CORNER}} bfa=bjt_bfa_{{CORNER}}
+.param rba=bjt_ra_{{CORNER}} rea=bjt_ra_{{CORNER}} rca=bjt_ra_{{CORNER}} rbma=bjt_ra_{{CORNER}}
+.param cjea=bjt_cja_{{CORNER}} cjca=bjt_cja_{{CORNER}}
+.param mc_xis_vpnp=0 mc_xbf_vpnp=0 mc_xrb_vpnp=0 mc_xre_vpnp=0 mc_xrc_vpnp=0 mc_xcje_vpnp=0 mc_xcjc_vpnp=0
+.lib '{{PDK}}/libs.tech/ngspice/sm141064.spice' bjt_mc
+.temp {{TEMP_C}}
+.include '{{NETLIST}}'
+.param r2_length=1.02e-4
+{{SIZING}}
+vdd_src vdd 0 {{VDD}}
+xbg vref vdd 0 bandgap r2_length={r2_length}
+.dc temp -40 125 5
+.measure dc vref_tc_pp PP v(vref)
+.control
+run
+.endc
+.end

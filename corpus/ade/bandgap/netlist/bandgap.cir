@@ -1,0 +1,19 @@
+* bandgap.cir - draft
+.subckt bandgap vref vdd vss r1_length=11e-6 r2_length=102e-6
+* core: self-biased delta-VBE cell
+xm1  nb nb e1 vss nfet_03v3 w=20e-6 l=2e-6
+xm2  pb nb s2 vss nfet_03v3 w=20e-6 l=2e-6
+xm3  nb pb vdd vdd pfet_03v3 w=10e-6 l=4e-6
+xm4  pb pb vdd vdd pfet_03v3 w=10e-6 l=4e-6
+xr1  s2 e2 vss ppolyf_u_1k r_width=2e-6 r_length={r1_length}
+xq1  vss vss e1 pnp_10p00x10p00
+xq2  vss vss e2 pnp_10p00x10p00 m=8
+* output branch
+xm5  vref pb vdd vdd pfet_03v3 w=10e-6 l=4e-6
+xr2  vref e3 vss ppolyf_u_1k r_width=2e-6 r_length={r2_length}
+xq3  vss vss e3 pnp_10p00x10p00
+* startup
+xms1 st vss vdd vdd pfet_03v3 w=1e-6 l=20e-6
+xms2 st nb vss vss nfet_03v3 w=4e-6 l=1e-6
+xms3 pb st nb vss nfet_03v3 w=2e-6 l=1e-6
+.ends bandgap

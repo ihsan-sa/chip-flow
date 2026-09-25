@@ -1,0 +1,4 @@
+[
+  {"measure": "vref_tc_pp", "max": 6e-3, "severity": "error",
+   "msg": "vref may move at most 6mV (about 30 ppm/C) from -40C to 125C"}
+]

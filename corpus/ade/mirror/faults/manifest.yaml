@@ -59,3 +59,7 @@ faults:
     expect:
       status: fail
       kind: measure_out_of_bounds
+  - name: release_netlist_changed_after_sim
+    gate: release
+    plant: plant_release.py
+    expect: {status: fail, kind: gate_not_ready}

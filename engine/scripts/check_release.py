@@ -35,6 +35,7 @@ sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(ENGINE / "lib"))
 import checklib  # noqa: E402
 import attest as attest_mod  # noqa: E402
+import statelib  # noqa: E402
 
 SCRIPT = "check_release"
 
@@ -68,10 +69,22 @@ def run(argv=None):
 
     # stamp() hashes exactly this path as input_digest; gate.py's own
     # record_gate cross-checks that against invalidation.yaml's gate_inputs
-    # kinds[0] for this gate ("rtl" for release, same as every other
-    # vde gate).
-    payload = checklib.report(SCRIPT, ws / "rtl", violations, **facts)
+    # kinds[0] for this skill's release row - "rtl" for vde, "netlist" for
+    # ade - so the path comes from that map, never a hardcoded "rtl" (an
+    # /ade block has no rtl/, and its release pass would never record).
+    payload = checklib.report(SCRIPT, primary_input(ws), violations, **facts)
     return payload, args.out
+
+
+def primary_input(ws: Path) -> Path:
+    data = checklib.load_json(ws / "state.json", "state.json")
+    imap = statelib.load_map()
+    kinds = (imap["gate_inputs"].get(data.get("skill")) or {}).get("release")
+    if not kinds:
+        raise checklib.CheckError(
+            f"invalidation.yaml has no gate_inputs.{data.get('skill')}."
+            "release - a release with no input hashes is not evidence")
+    return ws / statelib.kind_path(kinds[0], imap, data.get("artifacts"))
 
 
 def main(argv=None) -> int:

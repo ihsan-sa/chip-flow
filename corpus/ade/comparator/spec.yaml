@@ -1,0 +1,14 @@
+top: strongarm_comparator
+supply:
+  vdd: 3.3
+devices: [xmtail, xmip, xmin, xmln1, xmln2, xmlp1, xmlp2, xmrp, xmrn, xmrop, xmron]
+corners: default
+measures:
+  - name: vdiff_pos
+    bounds: {min: 2.5}
+  - name: vdiff_neg
+    bounds: {max: -2.5}
+  - name: tdelay
+    bounds: {min: 1e-12, max: 1e-8}
+  - name: vreset
+    bounds: {min: 2.6}

@@ -266,9 +266,15 @@ gates:
       fault: "an output routed on a long minimum-width metal1 line"
       description: "Every measure inside post_layout_bounds."
     release:
+      # Real now, the same tool as vde's row (check_release.py ->
+      # attest.build()): every ade gate above needs a fresh recorded pass or
+      # a durable waiver. `mc` is the one declared exception: when the
+      # block's current spec.yaml asks for no Monte Carlo, attest records it
+      # in checks.json as ok, not run, with the reason and spec.yaml's hash
+      # (attest._mc_not_applicable) - never silently dropped, and never an
+      # old recorded "not applicable" pass that could outlive the spec.
       phase: P6
-      tool: stub
-      future_tool: "attest, strict"
+      tool: release
       strict: true
       fail_severities: [error]
       max_count: 0
