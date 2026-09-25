@@ -15,12 +15,23 @@ schematic side  the standard-cell spice, the analog cell's sized .subckt
                 netlist - M4's lvs recipe (check_lvs.py) with the macro added
                 and without `-blackbox`, so the macro is compared device by
                 device, never matched as an empty box.
+setup           the PDK's own netgen setup (libs.tech/netgen/<pdk>_setup.tcl),
+                the file LibreLane's Netgen.LVS step reaches through its
+                wrapper setup.tcl. The wrapper itself is not used: it sources
+                two variables only a LibreLane step sets, and outside one
+                netgen skips it with a warning and compares with no device
+                rules at all (source/drain not permutable, ad/as/pd/ps held
+                as properties), which fails a clean design.
 
-Match passes. A mismatch is a `netlist_mismatch` finding. The run refuses
-(exit 2) when netgen gives no verdict, and when the extraction holds fewer
-macro transistors than its .subckt has - the macro went in as a blackbox,
-and a match on that would be hollow. The recipe is
-docs/spikes/macro_harden.md's.
+Pass is "Circuits match uniquely" with no subcell that failed to match and
+no property error anywhere: the PDK setup drops the extraction-only
+properties, so a property error left is a real W/L/nf difference.
+Anything else is a `netlist_mismatch` finding. The run refuses (exit 2)
+when netgen gives no verdict, when it reports errors reading the setup
+file, and when the macro's cell in the extraction holds fewer
+transistors (counted down its own hierarchy, never the standard cells')
+than its .subckt has - the macro went in as a blackbox, and a match on
+that would be hollow. The recipe is docs/spikes/macro_harden.md's.
 """
 from __future__ import annotations
 
@@ -43,6 +54,54 @@ from checklib import CheckError  # noqa: E402
 SCRIPT = "check_top_lvs"
 FET_RE = re.compile(r"^[Xx]\S*\s.*\b[np]fet_\w+", re.MULTILINE)
 FINAL_RE = re.compile(r"^Final result:\s*(.*)$", re.MULTILINE)
+SETUP_ERR = "errors reading the setup file"
+SUBCKT_RE = re.compile(r"^\.subckt\s+(\S+)(.*?)^\.ends\b", re.I | re.M | re.S)
+
+
+def macro_fets(text: str, name: str) -> int:
+    """Transistors under `.subckt name` in a spice text, counted down
+    through any subcells it instantiates - 0 when it holds none or is not
+    defined, which is what a blackboxed macro looks like."""
+    bodies = {m.group(1): m.group(2) for m in SUBCKT_RE.finditer(text)}
+
+    def count(cell: str, seen: frozenset) -> int:
+        body = bodies.get(cell)
+        if body is None or cell in seen:
+            return 0
+        n = len(FET_RE.findall(body))
+        for line in body.splitlines():
+            if line[:1] in "Xx" and not FET_RE.match(line):
+                words = [w for w in line.split()[1:] if "=" not in w]
+                n += count(words[-1], seen | {cell}) if words else 0
+        return n
+    return count(name, frozenset())
+
+
+def netgen_setup(pdk_root: Path) -> Path:
+    """The PDK's own netgen setup - see the module docstring for why not
+    LibreLane's wrapper around it."""
+    setup = (pdk_root / ttlib.PDK_NAME / "libs.tech" / "netgen"
+             / f"{ttlib.PDK_NAME}_setup.tcl")
+    if not setup.is_file():
+        raise CheckError(f"no netgen setup for {ttlib.PDK_NAME} at {setup}")
+    return setup
+
+
+def judge(report: str, output: str) -> tuple[str, bool]:
+    """(final verdict line, matched) from netgen's report and its console
+    output. Refuses when netgen gave no verdict or ran without its setup."""
+    finals = FINAL_RE.findall(report)
+    if not finals:
+        raise CheckError(f"netgen gave no LVS verdict: {output[-2000:]}")
+    if SETUP_ERR in output or SETUP_ERR in report:
+        raise CheckError("netgen reported errors reading its setup file, so "
+                         "it compared with no device rules - no verdict: "
+                         f"{output[-2000:]}")
+    final = finals[-1].strip()
+    matched = (final.startswith("Circuits match uniquely")
+               and "do not match" not in report
+               and "property error" not in report.lower())
+    return final, matched
 
 
 def extract(gds: Path, top: str, stdcell_spice: Path, work: Path) -> Path:
@@ -89,7 +148,7 @@ def run(argv=None):
             raise CheckError(f"no {label} at {p} - has top_harden run?")
 
     pdk_root = check_lvs._pdk_root()
-    setup_tcl = check_lvs._netgen_setup_tcl(pdk_root)
+    setup_tcl = netgen_setup(pdk_root)
     models = [pdk_root / ttlib.PDK_NAME / rel
               for rel in check_lvs.PDK_SPICE_MODELS]
     # outside harden/ for the reason check_lvs.py gives: harden/ is hashed
@@ -100,13 +159,18 @@ def run(argv=None):
     except layoutlib.LayoutError as exc:
         raise CheckError(str(exc)) from exc
 
-    want = sum(len(FET_RE.findall(s.read_text())) for s in macro_spice)
-    got = len(FET_RE.findall(extracted.read_text(errors="replace")))
-    if got < want:
-        raise CheckError(f"the extraction holds {got} transistor(s) outside "
-                         f"the standard cells but the macro .subckt has "
-                         f"{want} - the macro went in as a blackbox, so no "
-                         "LVS verdict on it is possible")
+    layout = extracted.read_text(errors="replace")
+    want = got = 0
+    for sp in macro_spice:
+        src = sp.read_text(errors="replace")
+        for name in {m.group(1) for m in SUBCKT_RE.finditer(src)}:
+            want += macro_fets(src, name)
+            got += macro_fets(layout, name)
+    if want == 0 or got < want:
+        raise CheckError(f"the extracted macro cell holds {got} transistor(s) "
+                         f"but its .subckt has {want} - the macro went in as "
+                         "a blackbox (or its .subckt is empty), so no LVS "
+                         "verdict on it is possible")
 
     report = work / "top_lvs.rpt"
     script = work / "top_lvs.tcl"
@@ -122,15 +186,8 @@ def run(argv=None):
     proc = layoutlib.run_eda(["netgen", "-batch", f"source {script}"],
                              cwd=work, timeout=900)
     text = report.read_text(errors="replace") if report.is_file() else ""
-    finals = FINAL_RE.findall(text)
-    if not finals:
-        raise CheckError("netgen gave no LVS verdict (exit "
-                         f"{proc.returncode}): "
-                         f"{((proc.stdout or '') + (proc.stderr or ''))[-2000:]}")
-    final = finals[-1].strip()
-    matched = (final.startswith("Circuits match uniquely")
-               and "do not match" not in text
-               and "property error" not in text.lower())
+    output = (proc.stdout or "") + (proc.stderr or "")
+    final, matched = judge(text, f"(exit {proc.returncode}) {output}")
 
     violations = []
     if not matched:
