@@ -1,4 +1,6 @@
-* comparator_tb.cir - scratch
+* comparator_tb.cir - the strongarm_comparator bench (spec.md, Requirement). {{PDK}},
+* {{CORNER}}, {{TEMP_C}}, {{VDD}}, {{NETLIST}}, {{SIZING}} are sim_run.py's own
+* placeholders (engine/lib/simlib.py:materialize), filled in per corner.
 .include '{{PDK}}/libs.tech/ngspice/design.spice'
 .lib '{{PDK}}/libs.tech/ngspice/sm141064.spice' {{CORNER}}
 .temp {{TEMP_C}}

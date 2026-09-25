@@ -45,7 +45,7 @@ section 5's default PVT set:
 After layout, at the typical corner, the extracted netlist with its wire
 capacitance and resistance runs the same bench: both decisions still at
 least 2.5 V apart with the right sign, the reset level at least 2.6 V, and
-`tdelay` between 0.1 ns and 1.0 ns.
+`tdelay` between 0.1 ns and 0.5 ns.
 
 Real simulated `tdelay` on this box (typical/ss/ff/sf/fs): 0.357, 0.494,
 0.268, 0.474, 0.288 ns; the outputs reach the rails at every corner.

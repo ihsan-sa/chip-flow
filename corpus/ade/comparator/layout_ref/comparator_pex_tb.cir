@@ -19,11 +19,12 @@ vinn inn 0 PWL(0 1.6495 11n 1.6495 11.1n 1.6505 30n 1.6505)
 xdut inp inn clk outp outn vdd 0 strongarm_comparator
 cloadp outp 0 10f
 cloadn outn 0 10f
+ediff vd 0 outp outn 1
 
 .control
 tran 10p 20n
-meas tran vdiff_pos find v(outp,outn) at=9.5n
-meas tran vdiff_neg find v(outp,outn) at=19.5n
+meas tran vdiff_pos find v(vd) at=9.5n
+meas tran vdiff_neg find v(vd) at=19.5n
 meas tran tdelay trig v(clk) val=1.4 rise=1 targ v(outn) val=1.4 fall=1
 meas tran vreset find v(outn) at=14.5n
 .endc
