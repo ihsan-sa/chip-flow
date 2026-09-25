@@ -24,14 +24,19 @@ JSON out, exit 0/1/2. Keep output ASCII. **No web tools.**
 
 ## Two things that are NOT obvious, proven the hard way - do not relearn them
 
-1. **Never `bind`.** yosys's `read -formal` frontend silently drops a
-   `bind` statement - the design "proves" vacuously, zero properties in
-   sby's own model. Write a plain wrapper module that INSTANTIATES the DUT
-   directly and forwards its ports.
-2. **No SVA `assert property (@(posedge clk) ...)`.** yosys's formal
-   frontend does not parse it (a syntax error at the `@`). Only PROCEDURAL
-   ("immediate") `assert (...)`/`cover (...)` inside an `always` block
-   work.
+1. **A plain wrapper first.** Write a wrapper module that INSTANTIATES the
+   DUT directly and forwards its ports; yosys's native `read -formal`
+   frontend reads it. A property that needs a DUT register (an invariant
+   induction needs) may use a hierarchical reference (`dut.q`) or a `bind`:
+   check_formal sees either and reads the design with yosys-slang instead,
+   which flattens them. Under slang an immediate assert keeps its label
+   only inside a named block (`always @(posedge clk) begin : props ...
+   end`), or write it as a concurrent `LABEL: assert property (@(posedge
+   clk) ...)`; an unlabeled one is refused as a missing property.
+2. **Native: no SVA `assert property (@(posedge clk) ...)`.** yosys's own
+   formal frontend does not parse it (a syntax error at the `@`). In a
+   plain wrapper only PROCEDURAL ("immediate") `assert (...)`/`cover
+   (...)` inside an `always` block work.
 
 For the exact shape, read a corpus rung's own `formal/*.sv` OTHER than the
 block you are currently writing (never the rung you are being asked to
