@@ -359,3 +359,41 @@ def test_psub_tap_pad_center_matches_pad_center_helper():
     polys = tap.get_polygons(by_spec=True)
     assert layoutlib.GF180_LAYER["metal1"] in polys
     assert layoutlib.GF180_LAYER["contact"] in polys
+
+
+class _Recorder:
+    """Stands in for a gf.Component: rect() only calls add_polygon."""
+
+    def __init__(self):
+        self.polys = []
+
+    def add_polygon(self, pts, layer):
+        self.polys.append((layer, pts))
+
+
+def _bbox(pts):
+    xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+    return (min(xs), min(ys), max(xs), max(ys))
+
+
+def test_via1_is_a_centred_cut_enclosed_on_both_metals():
+    top = _Recorder()
+    layoutlib.via1(top, 1.0, 2.0)
+    by_layer = {layer: _bbox(pts) for layer, pts in top.polys}
+    L = layoutlib.GF180_LAYER
+    assert set(by_layer) == {L["via1"], L["metal1"], L["metal2"]}
+    h = layoutlib.VIA1_SIZE / 2
+    assert by_layer[L["via1"]] == pytest.approx((1 - h, 2 - h, 1 + h, 2 + h))
+    e = h + layoutlib.VIA1_ENC
+    for m in ("metal1", "metal2"):
+        assert by_layer[L[m]] == pytest.approx((1 - e, 2 - e, 1 + e, 2 + e))
+
+
+def test_nwell_tap_is_nplus_and_draws_no_well():
+    pytest.importorskip("gdsfactory")
+    L = layoutlib.GF180_LAYER
+    ntap = layoutlib.nwell_tap(1.0)
+    layers = {tuple(li) for li in ntap.layers}
+    assert L["nplus"] in layers and L["pplus"] not in layers
+    assert L["nwell"] not in layers
+    assert {L["comp"], L["contact"], L["metal1"]} <= layers

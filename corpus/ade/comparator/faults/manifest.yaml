@@ -1,0 +1,52 @@
+# faults manifest (docs/design.md section 3, "### M9."): one entry per ade
+# gate this rung demonstrates, the same set and contract as
+# corpus/ade/mirror/faults/manifest.yaml. faults.py copies the rung into a
+# scratch workspace, runs plant(ws), runs `gate` and checks the result
+# against `expect`. `mc` has no entry: this rung's spec.yaml asks for no
+# Monte Carlo.
+version: 1
+faults:
+  - name: spec_lint_measure_no_bounds
+    gate: spec_lint
+    plant: plant_spec_lint.py
+    expect: {status: fail, kind: measure_no_bounds}
+  - name: netlist_lint_model_not_in_pdk
+    gate: netlist_lint
+    plant: plant_netlist_lint.py
+    expect: {status: fail, kind: model_not_in_pdk}
+  - name: sim_tt_input_w_and_l_swapped
+    gate: sim_tt
+    plant: plant_sim_tt.py
+    expect: {status: fail, kind: sim_bound_fail}
+  - name: sim_pvt_meets_typical_loses_headroom
+    gate: sim_pvt
+    plant: plant_sim_pvt.py
+    expect: {status: fail, kind: sim_bound_fail}
+  - name: bench_strength_bounds_too_wide
+    gate: bench_strength
+    plant: plant_bench_strength.py
+    expect: {status: fail, kind: survivor_size_doubled}
+  - name: metal_spacing
+    gate: drc
+    plant: plant_drc_metal_spacing.py
+    expect: {status: fail, kind: M1.2a}
+  - name: missing_guard_ring
+    gate: drc
+    plant: plant_drc_missing_guard_ring.py
+    expect: {status: fail, kind: DF.14_LV}
+  - name: tail_sized_differently
+    gate: lvs
+    plant: plant_lvs_sized_differently.py
+    expect: {status: fail, kind: lvs_mismatch}
+  - name: swapped_clk_vdd_labels
+    gate: lvs
+    plant: plant_lvs_swapped_net.py
+    expect: {status: fail, kind: lvs_mismatch}
+  - name: long_min_width_output_line
+    gate: pex_sim
+    plant: plant_pex_long_output_line.py
+    expect: {status: fail, kind: measure_out_of_bounds}
+  - name: release_netlist_changed_after_sim
+    gate: release
+    plant: plant_release.py
+    expect: {status: fail, kind: gate_not_ready}
