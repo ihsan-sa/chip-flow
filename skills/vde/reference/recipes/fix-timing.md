@@ -31,9 +31,3 @@ polled) before re-checking `timing`, even when the edit class is
 `rtl_edit` and RTL's own `lint`/`sim`/`mutate`/`formal`/`cover`/`synth`
 gates need their own separate re-run too (the fix loop handles those the
 normal way; this verb only owns the harden-then-timing sequence).
-
-## Today (M5)
-
-`harden` and `timing` are both stubs until M4 lands - this verb's steps
-are written against the finished design and need no changes once M4
-merges, but running it today ends at `jobs.py start`'s own exit 2.

@@ -9,12 +9,11 @@
 # docs/design.md 1.4 and 1.9 describe. Doc files live under
 # skills/vde/reference/recipes/.
 #
-# harden/timing/drc/lvs/glsim/precheck still point `tool: stub` in
-# engine/reference/gates.yaml until M4 lands (a parallel PR on this same
-# milestone train) - full-run's own P6 steps below are written against the
-# FINISHED design so nothing here needs a second pass once M4 merges, but
-# running them today exits 2 ("not built"), which is a stub gate's designed
-# behavior, not a bug (SKILL.md's Known limits section says this too).
+# harden/timing/drc/lvs/glsim/precheck are real tools in
+# engine/reference/gates.yaml as of M4 (docs/design.md, "### M4.") -
+# harden runs as a job (jobs.py start, polled with jobs.py status);
+# timing/drc/lvs/glsim/precheck run as ordinary gates once it finishes.
+# `release` can pass once every gate above has a fresh recorded pass.
 
 version: 1
 verbs:
@@ -148,23 +147,20 @@ verbs:
         why: "harden runs detached (docs/design.md 1.7) - poll with
               jobs.py status rather than blocking; gate.py records the
               result itself when it finishes, same as a foreground gate"
-      - note: "harden/timing/drc/lvs/glsim/precheck are engine stubs until
-               M4 lands (SKILL.md Known limits) - the job above exits 2
-               'not built' today. That is the correct behavior for an
-               unbuilt gate. STOP HERE until M4 merges; do not attempt the
-               gates below on this milestone's own proof runs."
+      - note: "Poll jobs.py status to done/dead before moving on - harden
+               can run the better part of an hour. A dead job restarts
+               with jobs.py start; LibreLane resumes from its last
+               completed step, never from scratch."
       - gate: timing
-        why: "setup+hold slack >=0 at every corner (real once M4 lands)"
+        why: "setup+hold slack >=0 at every corner"
       - gate: drc
-        why: "0 violations, magic + klayout (real once M4 lands)"
+        why: "0 violations, magic + klayout"
       - gate: lvs
-        why: "extracted layout matches the hardened netlist (real once M4
-              lands)"
+        why: "extracted layout matches the hardened netlist"
       - gate: glsim
-        why: "the sim suite on the gate-level netlist, functional then SDF
-              (real once M4 lands)"
+        why: "the sim suite on the gate-level netlist, functional then SDF"
       - gate: precheck
-        why: "tt-support-tools precheck (real once M4 lands)"
+        why: "tt-support-tools precheck"
       - note: "P7 optimise is optional and not part of a default full-run -
                invoke the `optimise` verb directly when wanted."
       - do: "scripts/state.py set-phase --workspace {ws} --phase P7"
@@ -178,8 +174,8 @@ verbs:
         why: "P7 owes no gate of its own, so this advances cleanly once P6
               is actually covered - never forced"
       - gate: release
-        why: "strict - refuses rather than pass on any gap; cannot pass
-              until harden onward are real (M4)"
+        why: "strict - refuses rather than pass on any gap; passes once
+              every gate above has a fresh recorded pass"
       - do: "scripts/attest.py build --workspace {ws}"
         why: "assembles reports/checks.json only once release is fresh-
               pass; lists every miss at once otherwise"
@@ -337,8 +333,7 @@ verbs:
               still running picks it back up here on resume"
       - note: "A job reported dead restarts with jobs.py start - LibreLane
                resumes from its own last completed step, never from
-               scratch. This gate is a stub (check_stub.py) until M4
-               lands: expect exit 2 'not built' today."
+               scratch."
 
   # -------------------------------------------------------------------------
   fix-timing:
@@ -406,8 +401,8 @@ verbs:
             '\bmake it (smaller|faster|lower power)\b', '\breduce area\b']
     steps:
       - do: "scripts/state.py resume --workspace {ws}"
-        why: "the current synth (and, once M4 lands, timing) result is the
-              baseline any future optimise.py trial would score against"
+        why: "the current synth and timing result is the baseline any
+              future optimise.py trial would score against"
       - do: "scripts/state.py decision --workspace {ws} --what \"optimise requested\" --why \"optimise.py lands in M7 (docs/design.md, section 4 and ### M7.) - recording intent now rather than fabricating a loop this milestone does not own\""
         why: "the record a real optimise run will reference once M7 lands"
       - note: "Stop here. Do not hand-roll a one-off area/power edit

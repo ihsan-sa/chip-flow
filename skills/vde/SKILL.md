@@ -1,6 +1,6 @@
 ---
 name: vde
-description: AI digital design engineer for open-tool ASIC flows (GF180MCU, IIC-OSIC-TOOLS). Takes a TASK in any project state - full design from a spec, add a test, prove a property, score mutation kill rate, harden to GDS, fix a timing violation, review someone else's block, resume - and routes it through one task_router.py. v1 (M5) - digital only; harden/timing/drc/lvs/glsim/precheck land in M4 and are stubs until that PR merges.
+description: AI digital design engineer for open-tool ASIC flows (GF180MCU, IIC-OSIC-TOOLS). Takes a TASK in any project state - full design from a spec, add a test, prove a property, score mutation kill rate, harden to GDS, fix a timing violation, review someone else's block, resume - and routes it through one task_router.py. Digital only; harden/timing/drc/lvs/glsim/precheck and release are real as of M4.
 ---
 
 # vde orchestrator playbook
@@ -98,9 +98,9 @@ gate set is `invalidation.yaml`'s answer to "what did this edit invalidate."
 7. **Ask in batches**, at checkpoints or when blocked - never trickle
    questions.
 8. **A gate that did not run is a refusal, never a pass.** A stub tool
-   (`check_stub.py`, still true today for `harden` onward - see Known
-   limits) exits 2. Never weaken a check or hand-edit an artifact to make a
-   gate pass; fix the thing the gate is actually reading.
+   (`check_stub.py`) exits 2. Never weaken a check or hand-edit an
+   artifact to make a gate pass; fix the thing the gate is actually
+   reading.
 
 ## Phase machine (docs/design.md 1.4)
 
@@ -117,23 +117,23 @@ P8 Release -[H2: sign-off]-
 Gates (from `engine/reference/gates.yaml`, run via `gate.py --gate <name>
 --workspace <ws>`), in pipeline order:
 
-| Gate | Phase | Passes when | M5 status |
-|---|---|---|---|
-| spec_lint | P1 | every requirement has an id, a check kind and, for `measure`, bounds | real |
-| lint | P4 | no errors; warnings only from an allowlist with reasons | real |
-| sim | P4 | every test passes and every requirement id has a tagged test | real |
-| holdout | P4 | every held-out test passes; result names requirement ids only | real |
-| mutate | P4 | kill rate >= 0.9; no survivor in a must-kill class | real |
-| formal | P4 | every property proven or bounded; every cover point reached | real |
-| cover | P4 | line >= 95%, toggle >= 90% on the DUT; exclusions carry reasons | real |
-| synth | P5 | no latches, unmapped cells or combinational loops | real |
-| harden (job) | P6 | LibreLane finishes clean, produces GDS/LEF/netlist/SDF/metrics | **stub - M4** |
-| timing | P6 | setup+hold slack >= 0 at every corner | **stub - M4** |
-| drc | P6 | 0 violations, magic + klayout | **stub - M4** |
-| lvs | P6 | extracted layout matches the hardened netlist | **stub - M4** |
-| glsim | P6 | the sim suite passes on the gate-level netlist, functional then SDF | **stub - M4** |
-| precheck | P6 | tt-support-tools precheck passes | **stub - M4** |
-| release | P8 | every applicable gate fresh-pass; waivers carry reason+approval+durability | real, but **cannot pass** until harden onward are real |
+| Gate | Phase | Passes when |
+|---|---|---|
+| spec_lint | P1 | every requirement has an id, a check kind and, for `measure`, bounds |
+| lint | P4 | no errors; warnings only from an allowlist with reasons |
+| sim | P4 | every test passes and every requirement id has a tagged test |
+| holdout | P4 | every held-out test passes; result names requirement ids only |
+| mutate | P4 | kill rate >= 0.9; no survivor in a must-kill class |
+| formal | P4 | every property proven or bounded; every cover point reached |
+| cover | P4 | line >= 95%, toggle >= 90% on the DUT; exclusions carry reasons |
+| synth | P5 | no latches, unmapped cells or combinational loops |
+| harden (job) | P6 | LibreLane finishes clean, produces GDS/LEF/netlist/SDF/metrics |
+| timing | P6 | setup+hold slack >= 0 at every corner |
+| drc | P6 | 0 violations, magic + klayout |
+| lvs | P6 | extracted layout matches the hardened netlist |
+| glsim | P6 | the sim suite passes on the gate-level netlist, functional then SDF |
+| precheck | P6 | tt-support-tools precheck passes |
+| release | P8 | every applicable gate fresh-pass; waivers carry reason+approval+durability |
 
 Sidecars: `rtl/lint_allow.yaml` (optional, lint's allowlist) lives inside
 `rtl/` on purpose - the `rtl` dir_text hash already covers an edit to it.
@@ -313,20 +313,9 @@ silently drop to a weaker tier.
 
 ## Known limits (be honest about these)
 
-- **Harden onward are stubs.** `harden`, `timing`, `drc`, `lvs`, `glsim`
-  and `precheck` all point at `check_stub.py` until M4 lands (parallel
-  work on this same milestone train - `docs/design.md`, "### M4."). Every
-  one of those gates exits 2 ("not built") today, which is the correct,
-  designed behavior for an unbuilt gate, not a bug. `release` therefore
-  cannot pass yet either (`attest.py build()` refuses on any gate with no
-  recorded result). A `full-run` today stops cleanly once `synth` (P5)
-  passes; H1 review and the digital gate table are the real deliverable
-  until M4 merges.
-- **The SPI FIFO block and the member-workspace (bwrap) run** come after
-  M4 merges and the sandbox gets toolchain access (`docs/design.md`, "###
-  M4." names `spi_fifo`; the M5 boundary calls for exercising the skill
-  under bwrap, which needs that same toolchain access). Both are out of
-  scope for this PR.
+- **The SPI FIFO block** is in the corpus (`corpus/vde/spi_fifo`, added by
+  M4 - `docs/design.md`, "### M4."); the member-workspace (bwrap) run of
+  this skill is still out of scope for this PR.
 - **`optimise` is a placeholder verb.** `optimise.py` (section 4's
   frozen-evaluator loop) is M7's build; the verb here records intent and
   the current synth/timing baseline and stops.

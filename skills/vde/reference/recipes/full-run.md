@@ -49,13 +49,11 @@ gate table (numbers first) to the person; record `state.py human
 
 ## P5-P6
 
-`synth`, then `harden` as a job (`jobs.py start`, polled, never blocked
-on). **Today (M5), harden onward are stubs** - `check_stub.py` exits 2 for
-every one of them. This is expected: stop the run cleanly once `synth` is
-green and H1 is recorded, and say so in the digest rather than treating
-the stub's exit 2 as something to fix. Once M4 lands, this same recipe
-carries straight through `timing`/`drc`/`lvs`/`glsim`/`precheck` with no
-changes needed here.
+`synth`, then `harden` as a job (`jobs.py start`, polled with `jobs.py
+status` to done/dead, never blocked on synchronously - it can run the
+better part of an hour). Once harden finishes, run `timing`, `drc`,
+`lvs`, `glsim` and `precheck` in that order; any failure goes through the
+fix loop (SKILL.md's own section) before the next gate runs, same as P4.
 
 ## P7 (skipped by default)
 
@@ -65,4 +63,4 @@ full-run.
 ## P8
 
 `release` (strict - refuses on any gap, by design), `attest.py build` then
-`disposition`, H2. Cannot pass until every P6 gate is real.
+`disposition`, H2. Passes once every P6 gate has a fresh recorded pass.

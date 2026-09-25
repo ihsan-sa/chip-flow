@@ -25,10 +25,3 @@ netlist does not by itself guarantee harden succeeds (LibreLane's own
 floorplan/placement/routing steps can still fail against the TT tile), but
 running harden against RTL that has not even synthesized cleanly wastes
 the job's own long wall time on a certain failure.
-
-## Today (M5)
-
-`harden`'s `tool` row in `gates.yaml` is still `check_stub.py` - the job
-exits 2 ("not built") the moment it starts, every time, until M4 lands.
-That is a stub gate's designed behavior (`gate.py`: "a gate whose tool
-could not run is exit 2, never a pass"), not something to fix from here.
