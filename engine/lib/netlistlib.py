@@ -22,6 +22,12 @@ from pathlib import Path
 
 GLOBAL_NETS = {"0", "gnd", "vss"}
 PDK_NGSPICE_FILES = ("sm141064.spice", "sm141064_mim.spice")
+# Standard-cell subckts a mixed-signal macro may instantiate as drivers
+# (msde's drivers-in-macro split). Optional: a PDK tree without them still
+# lints primitives.
+PDK_STDCELL_FILES = tuple(
+    f"libs.ref/{lib}/spice/{lib}.spice"
+    for lib in ("gf180mcu_fd_sc_mcu7t5v0", "gf180mcu_fd_sc_mcu9t5v0"))
 SUBCKT_RE = re.compile(r"^\s*\.subckt\s+(\S+)((?:\s+\S+)*)", re.IGNORECASE)
 DEVICE_RE = re.compile(r"^\s*[xX](\S+)\s+(.*)$")
 
@@ -34,10 +40,27 @@ def strip_comment(line: str) -> str:
     return "" if line.lstrip().startswith("*") else line
 
 
+def join_continuations(netlist_text: str) -> list[str]:
+    """netlist_text's lines with every SPICE `+` continuation line folded
+    into the line before it. Comment and blank lines are dropped, so a `*`
+    line between a header and its `+` lines does not break the join."""
+    out: list[str] = []
+    for raw in netlist_text.splitlines():
+        line = strip_comment(raw)
+        if not line.strip():
+            continue
+        if line.lstrip().startswith("+") and out:
+            out[-1] += " " + line.lstrip()[1:].strip()
+        else:
+            out.append(line)
+    return out
+
+
 def known_models(pdk_root: Path) -> set[str]:
-    """Every `.subckt NAME` the PDK's own ngspice model files declare - read
-    live off this box's real PDK tree, never a hardcoded snapshot that could
-    drift from whatever `EDA_TOOLCHAIN` actually points at."""
+    """Every `.subckt NAME` the PDK's own ngspice model files and its
+    standard-cell spice libraries declare - read live off this box's real
+    PDK tree, never a hardcoded snapshot that could drift from whatever
+    `EDA_TOOLCHAIN` actually points at."""
     names: set[str] = set()
     ngspice_dir = Path(pdk_root) / "libs.tech" / "ngspice"
     found_any = False
@@ -53,6 +76,14 @@ def known_models(pdk_root: Path) -> set[str]:
     if not found_any:
         from checklib import CheckError
         raise CheckError(f"no PDK ngspice model files found under {ngspice_dir}")
+    for rel in PDK_STDCELL_FILES:
+        p = Path(pdk_root) / rel
+        if not p.is_file():
+            continue
+        for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
+            m = SUBCKT_RE.match(line)
+            if m:
+                names.add(m.group(1).lower())
     return names
 
 
@@ -90,8 +121,8 @@ def subckt_pins(netlist_text: str) -> dict[str, list[str]]:
     header pins from the floating-node scan (they are meant to connect once
     inside, many times outside)."""
     out = {}
-    for raw in netlist_text.splitlines():
-        m = SUBCKT_RE.match(strip_comment(raw))
+    for line in join_continuations(netlist_text):
+        m = SUBCKT_RE.match(line)
         if m:
             out[m.group(1).lower()] = m.group(2).split()
     return out

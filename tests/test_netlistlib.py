@@ -170,3 +170,14 @@ def test_size_doubled_wraps_a_non_numeric_value_in_one_expression(w, doubled):
              if m["kind"] == "size_doubled")
     out = m["apply"](net)
     assert doubled in out and "}*2" not in out
+
+
+def test_subckt_pins_follows_continuation_lines():
+    text = ".subckt dac vout vdd\n* bus\n+ b0 b1\n+ vss\nR1 vout vss 1k\n.ends\n"
+    assert netlistlib.subckt_pins(text)["dac"] == ["vout", "vdd", "b0", "b1", "vss"]
+
+
+@pytestmark_needs_pdk
+def test_known_models_includes_standard_cells():
+    models = netlistlib.known_models(PDK_ROOT)
+    assert "gf180mcu_fd_sc_mcu7t5v0__buf_20" in models
