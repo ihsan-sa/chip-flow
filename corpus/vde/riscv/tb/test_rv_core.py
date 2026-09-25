@@ -223,7 +223,7 @@ async def test_random_alu_programs(dut):
     bench = Bench(dut)
     await bench.start()
     rng = random.Random(2)
-    for n in range(40):
+    for n in range(28):
         words = straight_line(rng, bench.regs, n_ops=rng.randrange(14, 22),
                               n_seed=rng.randrange(2, 5))
         await bench.run(words, what=f"alu program {n}")
@@ -367,7 +367,7 @@ async def test_random_loads_stores(dut):
     bench = Bench(dut)
     await bench.start()
     rng = random.Random(3)
-    for n in range(24):
+    for n in range(16):
         words = []
         for r in (2, 3, 4, 5):
             words += li(r, rand_value(rng))

@@ -140,35 +140,40 @@ module rv_core (
     endcase
   end
 
-  function [31:0] put_byte(input [31:0] w, input [1:0] sel, input [7:0] v);
-    case (sel)
-      2'd0:    put_byte = {w[31:8], v};
-      2'd1:    put_byte = {w[31:16], v, w[7:0]};
-      2'd2:    put_byte = {w[31:24], v, w[15:0]};
-      default: put_byte = {v, w[23:0]};
-    endcase
-  endfunction
-
-  reg [31:0] st_val;
-  always @* begin
-    case (f3[1:0])
-      2'b00:   st_val = put_byte(word, addr[1:0], b[7:0]);
-      2'b01:   st_val = addr[1] ? {b[15:0], word[15:0]} : {word[31:16], b[15:0]};
-      default: st_val = b;
-    endcase
-  end
-
-  // ---- one memory write port: the loader while idle, stores in EXEC ----
+  // ---- one memory write port with byte lanes: the loader while idle,
+  // stores in EXEC. Lane enables rather than a read-modify-write of the
+  // whole word, so no extra 32-bit read port is spent on either writer.
   wire        exec_ok  = (state == S_EXEC) && legal;
   wire        ld_write = (state == S_IDLE) && we;
   wire        st_write = exec_ok && (opcode == OP_STORE);
-  wire [31:0] ld_word  = mem[ld_ptr[6:2]];
-  always @(posedge clk) begin
-    if (ld_write)
-      mem[ld_ptr[6:2]] <= put_byte(ld_word, ld_ptr[1:0], din);
-    else if (st_write)
-      mem[addr[6:2]] <= st_val;
+  reg  [3:0]  st_lanes;
+  reg  [31:0] st_data;
+  always @* begin
+    case (f3[1:0])
+      2'b00: begin
+        st_lanes = 4'b0001 << addr[1:0];
+        st_data  = {4{b[7:0]}};
+      end
+      2'b01: begin
+        st_lanes = addr[1] ? 4'b1100 : 4'b0011;
+        st_data  = {2{b[15:0]}};
+      end
+      default: begin
+        st_lanes = 4'b1111;
+        st_data  = b;
+      end
+    endcase
   end
+
+  wire [4:0]  wr_index = ld_write ? ld_ptr[6:2] : addr[6:2];
+  wire [3:0]  wr_lanes = ld_write ? (4'b0001 << ld_ptr[1:0])
+                       : (st_write ? st_lanes : 4'b0000);
+  wire [31:0] wr_data  = ld_write ? {4{din}} : st_data;
+  integer lane;
+  always @(posedge clk)
+    for (lane = 0; lane < 4; lane = lane + 1)
+      if (wr_lanes[lane])
+        mem[wr_index][8*lane +: 8] <= wr_data[8*lane +: 8];
 
   // ---- register write-back -------------------------------------------
   wire [5:0] pc_next = {1'b0, pc} + 6'd1;  // link: (pc + 4) as a word count

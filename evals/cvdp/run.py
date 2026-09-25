@@ -450,13 +450,17 @@ def run_service(svc: dict, row: dict, root: Path, timeout: float) -> dict:
         out, _ = proc.communicate()
         rc = None
     log = out.decode("utf-8", "replace")
-    # cocotb's runner sends the compiler's own messages to sim.log, not to
-    # pytest's output: fold them in so a compile failure says why.
-    for f in sorted(root.rglob("sim.log")):
+    # cocotb's runner sends the compiler's own messages to the harness's
+    # log_file (sim.log, build.log, ...), not to pytest's output: fold the
+    # newest in so a compile failure says why.
+    tool_logs = sorted((f for f in (root / "code").rglob("*.log") if f.is_file()),
+                       key=lambda f: f.stat().st_mtime)[-6:]
+    for f in tool_logs:
         log += f"\n--- {f.relative_to(root)} ---\n" + \
-            f.read_text(encoding="utf-8", errors="replace")[-4000:]
+            f.read_text(encoding="utf-8", errors="replace")[-3000:]
     (root / f"{svc['name']}.log").write_text(log, encoding="utf-8")
     return {"service": svc["name"], "rc": rc, "log": log,
+            "cocotb": cocotb_results(root),
             "wall_s": round(time.monotonic() - t0, 1)}
 
 
@@ -471,12 +475,43 @@ COMPILE = re.compile(r"(\berror:|syntax error|Unknown module type|"
 COCOTB_SUMMARY = re.compile(r"TESTS=(\d+) PASS=(\d+) FAIL=(\d+)")
 
 
+def cocotb_results(root: Path) -> dict:
+    """{results.xml path: [testcases, failed]} for every cocotb results
+    file under root - the evidence that tests actually ran."""
+    import xml.etree.ElementTree as ET
+    out = {}
+    for f in sorted(root.rglob("*.xml")):
+        if not (f.name.endswith("results.xml") or f.name.endswith(".result.xml")):
+            continue
+        try:
+            cases = ET.parse(f).getroot().iter("testcase")
+        except (ET.ParseError, OSError):
+            continue
+        n = bad = 0
+        for c in cases:
+            n += 1
+            bad += any(ch.tag in ("failure", "error") for ch in c)
+        out[str(f.relative_to(root))] = [n, bad]
+    return out
+
+
 def classify(results: list[dict]) -> tuple[str, str, bool]:
-    """(status, reason, tests_ran) from a problem's service runs."""
-    logs = "\n".join(r["log"] for r in results)
-    tests_ran = bool(COCOTB_SUMMARY.search(logs))
+    """(status, reason, tests_ran) from a problem's service runs. A pass
+    needs every service to exit 0 AND cocotb results showing at least one
+    test ran and none failed: a harness that exits 0 without running a
+    test is not a pass (the official harness only reads exit codes)."""
+    xml: dict = {}
+    for r in results:
+        xml.update(r.get("cocotb") or {})
+    tests = sum(n for n, _ in xml.values())
+    failed = sum(f for _, f in xml.values())
+    tests_ran = tests > 0
     if all(r["rc"] == 0 for r in results):
-        return "pass", "", tests_ran
+        if failed:
+            return "fail", f"{failed} of {tests} cocotb tests failed (exit 0)", True
+        if not tests_ran:
+            return "error", "exit 0 but no cocotb test ran", False
+        return "pass", "", True
     bad = next(r for r in results if r["rc"] != 0)
     if bad["rc"] is None:
         return "fail", f"timeout in {bad['service']}", tests_ran
@@ -485,13 +520,14 @@ def classify(results: list[dict]) -> tuple[str, str, bool]:
         return "error", (m.group(0) if m else f"pytest exit {bad['rc']}")[:200], tests_ran
     if bad["rc"] == 5:
         return "error", "pytest collected no tests", tests_ran
-    sums = COCOTB_SUMMARY.findall(bad["log"])
-    if any(int(f) > 0 for _, _, f in sums):
+    if failed or any(int(f) > 0 for _, _, f in COCOTB_SUMMARY.findall(bad["log"])):
         return "fail", f"cocotb tests failed in {bad['service']}", True
-    m = COMPILE.search(bad["log"])
-    if m:
-        line = next((ln for ln in bad["log"].splitlines() if m.group(0) in ln), m.group(0))
-        return "fail", f"compile: {line.strip()[:180]}", tests_ran
+    tool_part = bad["log"][bad["log"].find("\n--- "):] if "\n--- " in bad["log"] else ""
+    for text in (tool_part, bad["log"]):
+        m = COMPILE.search(text)
+        if m:
+            line = next((ln for ln in text.splitlines() if m.group(0) in ln), m.group(0))
+            return "fail", f"compile: {line.strip()[:180]}", tests_ran
     return "fail", f"{bad['service']} exit {bad['rc']}", tests_ran
 
 
@@ -502,11 +538,12 @@ def attempt(row: dict, overlay: dict, timeout: float, keep: Path | None) -> dict
         stage(row, root, overlay)
         results = [run_service(s, row, root, timeout) for s in services(row)]
         status, reason, ran = classify(results)
-        rec = {"status": status, "reason": reason, "tests_ran": ran,
+        rec = {"status": status, "reason": reason.replace(f"{root}/", ""),
+               "tests_ran": ran,
                "services": {r["service"]: r["rc"] for r in results}}
         if status != "pass":
             bad = next((r for r in results if r["rc"] != 0), results[-1])
-            rec["log_tail"] = bad["log"][-800:]
+            rec["log_tail"] = bad["log"].replace(f"{root}/", "")[-800:]
         return rec
     finally:
         if keep is None:
