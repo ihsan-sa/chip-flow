@@ -39,7 +39,12 @@ JSON out, exit 0/1/2. Keep output ASCII. **No web tools.**
   TT pin so the digital side hardens and releases alone. The analog brief
   says the cell's `.subckt` pins are the crossing signals plus exactly one
   supply (`vdd...`) and one ground (`vss...`/`gnd...`) - `top_harden`
-  joins the two sides by those names. A requirement that only
+  joins the two sides by those names. When a crossing signal's receiver
+  is a standard cell the split puts inside the analog macro (a ladder's
+  bit drivers), the analog brief names each one under `## Split devices`
+  with a refdes, the exact `gf180mcu_fd_sc_*` cell and why it sits there;
+  the analog spec-writer copies that into `split_devices`, the only way
+  the analog-designer may add a device its template lacks. A requirement that only
   makes sense across the boundary (a divided frequency, a DAC code to
   voltage) stays at the top, as a cosim measure, not in either brief.
 

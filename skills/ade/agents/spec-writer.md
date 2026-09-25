@@ -34,11 +34,19 @@ devices: [<refdes>, ...]           # required, non-empty - filled in by the
                                     # analog-designer at P2; leave [] here if
                                     # the brief names no topology yet
 corners: default | [<name>,...]    # optional, default "default"
+# corners: {grid: {process: [typical, ff, ss], temp_c: [-40, 25, 125],
+#                 supply_pct: [0]}}   # a PVT grid the brief names; it
+#                 replaces the default five, so it must hold typical, ss,
+#                 ff, -40 and 125; supply_pct defaults to [0] (fixed VDD)
 measures:
   - name: <str>                    # unique
     bounds: {min?: <num>, max?: <num>}   # at least one
     corners: default | all | [<name>,...]  # optional
     severity: error | warning      # optional, default error
+split_devices: [{refdes, cell, why}]   # only when an /msde analog brief
+                                    # says the split put GF180 std cells in
+                                    # this macro (bit drivers); copy them
+                                    # as written, never add one yourself
 mc: {enabled: bool, runs?, yield_min?, global?, seed?}   # only when the
                                     # brief asks for a yield number
 # post_layout_bounds: convention only (Known limits, SKILL.md) - a measure
@@ -58,7 +66,9 @@ mc: {enabled: bool, runs?, yield_min?, global?, seed?}   # only when the
    you) unless the brief already names a topology explicitly - a loose
    first pass it refines is fine, an empty `measures` list is not.
 4. Set `corners` only when the brief asks for something other than the
-   default five; `add-corner` is how a run widens it later.
+   default five; `add-corner` is how a run widens it later. A brief that
+   names a process x temperature grid at a fixed VDD (tt/ff/ss x
+   -40/25/125 C at 3.3 V) gets `corners: {grid: ...}`, not a name list.
 5. Write `spec/spec.md`: the user's own prose and intent, under `##
    Behaviour` / `## Interface` (supply, pins, measures table) - never
    invent a measure the brief did not ask for or imply.

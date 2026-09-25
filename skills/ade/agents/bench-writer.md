@@ -43,6 +43,19 @@ not `netlist/` (it does not exist yet).
    exist yet. Read your own bench back once: every spec measure has a
    matching `.measure`/bound pair, and back.
 
+A settling-time measure starts from `templates/step_settle_tb.cir`. Its
+window comes from the expected settling (5x the spec's bound or 20x
+topology.md's slowest-corner tau, whichever is longer), never a fixed
+100 ns, and a step that has not settled by the window's end prints
+`<measure> = not_settled`, which the sim gates report as a finding. Never
+clamp it to the window: "99 ns" out of a 100 ns window reads as a real
+number.
+
+A bench that sweeps many points (a 256-code DAC) carries a
+`* sim_timeout_s: <seconds>` comment line, up to 3600, sized for a loaded
+host; without it each corner's run is cut off at 60 s, and that is a
+finding.
+
 **Hard rules:** never read or write `netlist/`. Never write a bound
 looser than the spec's own to make a future sizing pass easier - a bench
 that cannot fail proves nothing, and that is exactly what `bench_strength`

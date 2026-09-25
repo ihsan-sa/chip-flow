@@ -40,7 +40,13 @@ blank).
 4. Re-run `spec_lint` - the `devices` edit must leave the spec valid.
 
 **Hard rules:** no netlist yet - a `.subckt` body is P4. Never invent a
-device the chosen template does not have.
+device the chosen template does not have. The one exception is a device
+spec.yaml's `split_devices` already lists: a GF180 standard cell the /msde
+split put inside this macro (a ladder's bit drivers). Put each of those in
+`devices` under its listed refdes and instantiate exactly that cell, but
+never add an entry to `split_devices` yourself - spec_lint refuses an entry
+that is not a `gf180mcu_fd_sc_*` cell, and the spec-writer copies the list
+from the split's brief. Anything else the template lacks goes in OPEN.
 
 ## Output contract, TOPOLOGY MODE
 FILES: spec/topology.md, spec/spec.yaml

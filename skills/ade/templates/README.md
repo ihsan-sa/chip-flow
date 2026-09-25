@@ -11,6 +11,11 @@ when a corpus rung isn't a close enough match.
   for how to pick a measure and its bounds, and
   `engine/lib/speclib.py`'s `lint_spec_ade` for the full schema.
 
+- `step_settle_tb.cir` - the settling-time half of a step bench: its
+  window sized from the expected settling, and a `not_settled` verdict
+  (a `sim_not_settled` finding) instead of a number clamped to the
+  window. See `skills/ade/agents/bench-writer.md`.
+
 Two sidecar shapes an agent has to get right and this template does not
 cover directly (they differ from each other - see
 `corpus/ade/mirror/tb/mirror_tb.bounds.json` vs

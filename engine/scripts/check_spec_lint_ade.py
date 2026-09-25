@@ -16,7 +16,10 @@ per-measure `bounds` dict (lint_spec_ade, unchanged) and, when tb/ already
 has bench(es) written, whether each spec measure has a matching tb/*.bounds
 .json sidecar bound and vice versa (speclib.lint_measures_vs_bench_bounds -
 the bench-writer works in fresh context, per docs/design.md 1.3, so the two
-declarations can drift apart with nothing else catching it).
+declarations can drift apart with nothing else catching it). It also expands
+the spec's `corners` field through corners.spec_corners(), so a `{grid: ...}`
+sim_pvt would refuse is a `bad_corners` finding here, and a measure whose
+own `corners` list names a corner outside that sweep is `measure_bad_corners`.
 """
 from __future__ import annotations
 
@@ -26,8 +29,10 @@ from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent
 ENGINE = SCRIPTS.parent
+sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(ENGINE / "lib"))
 import checklib  # noqa: E402
+import corners as corners_mod  # noqa: E402
 import simlib  # noqa: E402
 import speclib  # noqa: E402
 
@@ -65,6 +70,31 @@ def run(argv=None):
     spec_path = ws / SPEC_REL
     spec = speclib.load_spec(spec_path)
     violations = speclib.lint_spec_ade(spec, rel_path=SPEC_REL)
+    if not any(v["kind"] == "bad_corners" for v in violations):
+        # the shape is right; now expand it the way sim_pvt will, so a grid
+        # that misses ss or 125 C is refused here, not at P4
+        try:
+            swept = {c["name"] for c in corners_mod.spec_corners(
+                corners_mod.load(), spec.get("corners", "default"))}
+        except checklib.CheckError as exc:
+            swept = None
+            violations.append(checklib.violation(
+                "spec_lint", "error", SPEC_REL, None, "bad_corners", [],
+                str(exc), "corners"))
+        # a measure scoped to a corner the sweep never runs (`[tt]` under a
+        # grid, whose typical corners are tt_<temp>c) would never be scored
+        for m in spec.get("measures") or []:
+            want = m.get("corners") if isinstance(m, dict) else None
+            if swept is None or not isinstance(want, list):
+                continue
+            missing = [c for c in want if c not in swept]
+            if missing:
+                violations.append(checklib.violation(
+                    "spec_lint", "error", SPEC_REL, None,
+                    "measure_bad_corners", [m.get("name") or ""],
+                    f"measure {m.get('name')!r} names corner(s) {missing} "
+                    f"the spec's own sweep does not run: {sorted(swept)}",
+                    "corners"))
     bench_bounds = load_bench_bounds(ws)
     violations += speclib.lint_measures_vs_bench_bounds(
         spec, bench_bounds, rel_path=SPEC_REL)

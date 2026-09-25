@@ -16,7 +16,22 @@ never re-implemented there):
     load(path) -> dict                       parsed + validated corners.yaml
     default_corners(data) -> list[dict]       the default sweep, validated
     corners_by_name(data, names) -> list[dict]
+    grid_corners(data, grid) -> list[dict]    a spec-declared PVT grid
+    spec_corners(data, field) -> list[dict]   spec.yaml `corners` -> the sweep
     resolve_vdd(corner, nominal_vdd) -> float  nominal * (1 + supply_pct/100)
+
+A spec's `corners` field is one of: "default" (the five above), "all" (the
+full process x temperature x supply cross product), a list of corner names
+(UNIONED with the default five, never a replacement - design.md 5's "never
+fewer"), or `{grid: {process: [...], temp_c: [...], supply_pct: [...]}}`, a
+cross product the spec declares itself, e.g. tt/ff/ss x -40/25/125 C at a
+fixed VDD. A grid REPLACES the default five, so it must still span them:
+its process list holds typical, ss and ff, and its temp_c list holds the
+axis' coldest and hottest points. Temperatures and supplies may be any value
+inside the axis range (25 C is not an axis point, but lies inside it);
+supply_pct defaults to [0], the spec's own nominal VDD. Grid corners are
+named `<process>_<temp>c[_v<supply>]` (typical -> tt, a minus sign -> m):
+`ss_m40c`, `tt_25c`, `ff_125c_vp10`.
 
 Not a gate (no workspace, no violations) - a plain reference-data reader,
 so its CLI contract is checklib's minus the pass/violations status: exit 0
@@ -94,6 +109,86 @@ def corners_by_name(data: dict, names: list[str]) -> list[dict]:
                              f"{sorted(by_name)}")
         out.append(dict(by_name[n]))
     return out
+
+
+GRID_MUST_SPAN_PROCESS = ("typical", "ss", "ff")
+
+
+def _num(v) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _tag(v) -> str:
+    text = f"{v:g}"
+    return ("m" + text[1:]) if text.startswith("-") else text
+
+
+def grid_corners(data: dict, grid) -> list[dict]:
+    if not isinstance(grid, dict):
+        raise CheckError("corners.grid must be a mapping of process/temp_c/"
+                         "supply_pct lists")
+    unknown = sorted(set(grid) - {"process", "temp_c", "supply_pct"})
+    if unknown:
+        raise CheckError(f"corners.grid has unknown key(s) {unknown}; "
+                         "allowed: process, temp_c, supply_pct")
+    procs = grid.get("process")
+    temps = grid.get("temp_c")
+    supplies = grid.get("supply_pct", [0])
+    for key, vals in (("process", procs), ("temp_c", temps),
+                      ("supply_pct", supplies)):
+        if not isinstance(vals, list) or not vals or len(set(map(str, vals))) != len(vals):
+            raise CheckError(f"corners.grid.{key} must be a non-empty list "
+                             "without repeats")
+    bad_p = [p for p in procs if p not in data["process"]]
+    if bad_p:
+        raise CheckError(f"corners.grid.process {bad_p} not in "
+                         f"{data['process']}")
+    missing = [p for p in GRID_MUST_SPAN_PROCESS if p not in procs]
+    if missing:
+        raise CheckError(f"corners.grid.process lacks {missing}: a grid "
+                         "replaces the default five corners, so it must "
+                         f"still span {list(GRID_MUST_SPAN_PROCESS)}")
+    for key, vals, axis in (("temp_c", temps, "temperature_c"),
+                            ("supply_pct", supplies, "supply_pct")):
+        lo, hi = min(data[axis]), max(data[axis])
+        bad_v = [v for v in vals if not _num(v) or not lo <= v <= hi]
+        if bad_v:
+            raise CheckError(f"corners.grid.{key} {bad_v} outside the "
+                             f"corners.yaml range [{lo}, {hi}]")
+    t_lo, t_hi = min(data["temperature_c"]), max(data["temperature_c"])
+    if t_lo not in temps or t_hi not in temps:
+        raise CheckError(f"corners.grid.temp_c must include {t_lo} and "
+                         f"{t_hi}: a grid replaces the default five corners, "
+                         "so it must still reach both temperature extremes")
+    out = []
+    for p in procs:
+        for t in temps:
+            for s in supplies:
+                name = f"{'tt' if p == 'typical' else p}_{_tag(t)}c"
+                if s != 0:
+                    name += f"_v{'p' if s > 0 else ''}{_tag(s)}"
+                out.append({"name": name, "process": p, "temp_c": t,
+                            "supply_pct": s})
+    return out
+
+
+def spec_corners(data: dict, field="default") -> list[dict]:
+    # brief: "Let a spec declare that grid, and keep the default five
+    # corners when it doesn't."
+    if field == "default":
+        return default_corners(data)
+    if field == "all":
+        return grid_corners(data, {"process": list(data["process"]),
+                                   "temp_c": list(data["temperature_c"]),
+                                   "supply_pct": list(data["supply_pct"])})
+    if isinstance(field, dict) and set(field) == {"grid"}:
+        return grid_corners(data, field["grid"])
+    if isinstance(field, list) and field and all(isinstance(c, str) for c in field):
+        names = [c["name"] for c in data["default_corners"]]
+        names += [c for c in field if c not in names]
+        return corners_by_name(data, names)
+    raise CheckError("spec.yaml 'corners' must be 'default', 'all', a "
+                     "non-empty list of corner names, or {grid: {...}}")
 
 
 def resolve_vdd(corner: dict, nominal_vdd: float) -> float:

@@ -89,6 +89,19 @@ def parse_measures(stdout_text: str) -> dict[str, float]:
     return measures
 
 
+# "t_settle_rise = not_settled" (stdout, anywhere) - a step bench's own
+# verdict that the output never settled inside its window, so it has no
+# settling time to print (skills/ade/templates/step_settle_tb.cir). A
+# number clamped to the window would read as a real, merely slow, result.
+_UNSETTLED_LINE = re.compile(r"^\s*([A-Za-z_][\w.]*)\s*=\s*not_settled\b",
+                             re.IGNORECASE | re.MULTILINE)
+
+
+def parse_unsettled(stdout_text: str) -> set[str]:
+    """{measure_name.lower(), ...} the bench itself reported not_settled."""
+    return {m.group(1).lower() for m in _UNSETTLED_LINE.finditer(stdout_text)}
+
+
 def parse_failed_measures(stderr_text: str) -> set[str]:
     """{measure_name.lower(), ...} whose FIND/WHEN trigger was never met -
     ngspice reports this on STDERR, not stdout (confirmed empirically).
@@ -125,6 +138,9 @@ ENGINE_ERROR_PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(r"incomplete or empty netlist", re.I), "empty_netlist"),
     (re.compile(r"simulation interrupted", re.I), "simulation_interrupted"),
     (re.compile(r"^\s*error[: ]", re.I | re.M), "ngspice_error"),
+    # run_ngspice's own marker. Brief: "a timeout must stay a refusal, never
+    # a pass" - even when every .measure printed before the run hung
+    (re.compile(r"^\[sim_run\] timed out after", re.M), "sim_timeout"),
 ]
 
 
@@ -185,7 +201,8 @@ def load_bounds(path: Path) -> list[dict]:
 def compare_bounds(bounds: list[dict], measures: dict[str, float],
                    testbench: str, corner: str = "tt",
                    failed_measures: set[str] | None = None,
-                   check: str = "sim") -> list[dict]:
+                   check: str = "sim",
+                   unsettled: set[str] | None = None) -> list[dict]:
     """Ported from hwde's simlib.compare_bounds, `corner` added (every
     finding names which corner it failed at - sim_pvt runs several).
 
@@ -207,6 +224,14 @@ def compare_bounds(bounds: list[dict], measures: dict[str, float],
                 f"{name} @ {corner}: ngspice reported the .measure trigger/"
                 "target condition was never met ('failed!') - never "
                 "printed a value", "ngspice"))
+            continue
+        if key in (unsettled or ()):
+            # parse_unsettled(): the bench says there is no number to score
+            out.append(violation(
+                check, b["severity"], testbench, None, "sim_not_settled",
+                [name, corner],
+                f"{name} @ {corner}: did not settle within the bench's "
+                "window - no settling time to report", "ngspice"))
             continue
         if key not in measures:
             out.append(violation(

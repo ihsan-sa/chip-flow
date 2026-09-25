@@ -57,6 +57,35 @@ def test_missing_devices_is_a_violation():
     assert "no_devices" in kinds
 
 
+DRIVER = {"refdes": "xd0", "cell": "gf180mcu_fd_sc_mcu7t5v0__buf_20",
+          "why": "bit driver the msde split put inside the macro"}
+
+
+def test_split_devices_allow_a_std_cell_driver_in_devices():
+    # the R-2R DAC shakedown's split put buf_20 drivers inside the analog
+    # macro; the analog-designer may add exactly these beyond its template
+    spec = {**GOOD_SPEC, "devices": ["xmref", "xmout", "xd0"],
+            "split_devices": [DRIVER]}
+    assert speclib.lint_spec_ade(spec) == []
+
+
+def test_split_devices_refuse_a_non_std_cell_or_an_undeclared_refdes():
+    fet = {**DRIVER, "cell": "nfet_03v3"}  # not a door to arbitrary devices
+    spec = {**GOOD_SPEC, "devices": ["xmref", "xmout", "xd0"],
+            "split_devices": [fet]}
+    msgs = [v["msg"] for v in speclib.lint_spec_ade(spec)
+            if v["kind"] == "bad_split_devices"]
+    assert len(msgs) == 1 and "not a GF180 standard cell" in msgs[0]
+
+    spec = {**GOOD_SPEC, "split_devices": [DRIVER]}  # xd0 not in devices
+    msgs = [v["msg"] for v in speclib.lint_spec_ade(spec)
+            if v["kind"] == "bad_split_devices"]
+    assert len(msgs) == 1 and "not in 'devices'" in msgs[0]
+
+    spec = {**GOOD_SPEC, "split_devices": [{"refdes": "xd0"}]}
+    assert [v["kind"] for v in speclib.lint_spec_ade(spec)] == ["bad_split_devices"]
+
+
 def test_no_measures_is_a_violation():
     spec = {**GOOD_SPEC, "measures": []}
     kinds = {v["kind"] for v in speclib.lint_spec_ade(spec)}

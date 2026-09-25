@@ -192,6 +192,10 @@ FIXER_HINTS: dict[str, str] = {
     # sim_tt / sim_pvt (simlib.compare_bounds) and mc (check_mc.py)
     "sim_bound_fail": "sizing",
     "sim_measure_missing": "testbench",
+    # a step bench's own "did not settle within the window" verdict: the
+    # window is already sized from the expected settling, so the block is
+    # slower than its design equations said - sizing, not a wider window
+    "sim_not_settled": "sizing",
     "yield_below_spec": "sizing",
     "yield_all_failed": "sizing",
 

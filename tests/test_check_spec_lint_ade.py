@@ -90,3 +90,33 @@ def test_missing_spec_yaml_is_an_error(tmp_path, capsys):
     assert code == 2
     out = json.loads(capsys.readouterr().out)
     assert out["status"] == "error"
+
+
+def test_spec_grid_that_spans_the_defaults_passes(tmp_path, capsys):
+    ws = make_ws(tmp_path, GOOD_YAML.replace(
+        "corners: default",
+        "corners: {grid: {process: [typical, ff, ss], temp_c: [-40, 25, 125]}}"))
+    assert check_spec_lint_ade.main(["--workspace", str(ws)]) == 0
+
+
+def test_spec_grid_missing_ss_is_bad_corners(tmp_path, capsys):
+    ws = make_ws(tmp_path, GOOD_YAML.replace(
+        "corners: default",
+        "corners: {grid: {process: [typical, ff], temp_c: [-40, 25, 125]}}"))
+    assert check_spec_lint_ade.main(["--workspace", str(ws)]) == 1
+    out = json.loads(capsys.readouterr().out)
+    assert [v["kind"] for v in out["violations"]] == ["bad_corners"]
+
+
+def test_measure_scoped_to_a_corner_the_grid_never_runs_is_refused(tmp_path, capsys):
+    grid = "corners: {grid: {process: [typical, ff, ss], temp_c: [-40, 25, 125]}}"
+    scoped = "    bounds: {min: 1.8, max: 2.2}\n    corners: [tt]\n"
+    ws = make_ws(tmp_path, GOOD_YAML.replace("corners: default", grid)
+                 .replace("    bounds: {min: 1.8, max: 2.2}\n", scoped))
+    assert check_spec_lint_ade.main(["--workspace", str(ws)]) == 1
+    out = json.loads(capsys.readouterr().out)
+    assert [v["kind"] for v in out["violations"]] == ["measure_bad_corners"]
+
+    ws2 = make_ws(tmp_path / "b", GOOD_YAML.replace(
+        "    bounds: {min: 1.8, max: 2.2}\n", scoped))  # default five hold tt
+    assert check_spec_lint_ade.main(["--workspace", str(ws2)]) == 0

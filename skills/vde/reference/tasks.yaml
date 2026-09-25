@@ -33,6 +33,7 @@ verbs:
       any: ['\bdesign (me )?an?\b', '\bdesign [a-z0-9_-]+ from\b',
             '\bbuild (me )?an?\b', '\bnew block\b',
             '\bfrom scratch\b', '\bfull (run|pipeline)\b',
+            '\b(full|complete|whole|entire) design\b(?!\s+review)',
             '\bend[- ]to[- ]end\b', '\bwhole pipeline\b']
       weight: 1
     steps:
