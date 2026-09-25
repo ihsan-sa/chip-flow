@@ -32,7 +32,7 @@ the rendered `command` verbatim, through `eda python`.
 
 ## The workspace: one msde block, two nested runs
 
-    blocks/<name>/          skill msde: split, cosim, top_drc, top_lvs, release
+    blocks/<name>/          skill msde: split, cosim, top_harden, top_drc, top_lvs, release
       brief/                the task's spec, verbatim
       interface.yaml        every crossing signal (splitter)
       digital_spec.yaml     the digital side's copy of the same entries
@@ -40,6 +40,7 @@ the rendered `command` verbatim, through `eda python`.
       tb/                   the cosim bench (integrator)
       digital/              nested workspace, skill vde, its own state.json
       analog/               nested workspace, skill ade, its own state.json
+      top/                  the assembled chip top - top_harden writes it, never an agent
 
 `corpus/msde/sensor_counted/` has the root files' shape. A nested
 workspace is driven ONLY through its own skill's router and playbook:
@@ -96,30 +97,44 @@ side's skill and nested workspace, then re-check what it touched here.
 
 ```
 P0 Intake - P1 Split -
-P2 The two nested runs (analog to its own release; digital to synth + H1) -
-P3 Integrate + the top gates (cosim, digital harden with the macro,
-   digital signoff + release, top_drc, top_lvs) -
+P2 The two nested runs, independent: analog to its own release, digital
+   to its own release (its own harden and signoff included) -
+P3 cosim, then the top gates (top_harden, top_drc, top_lvs) -
 P4 Release -[H2: sign-off]-
 ```
 
-The order is fixed by one dependency: the analog side's GDS and abstract
-(`analog/layout/<block>.gds`, from `layout_gen.py`) are the digital side's
-LibreLane hard macro, and the digital harden produces the whole Tiny
-Tapeout tile in ONE run. So the analog side releases first; the digital
-side runs P1-P5 in parallel with it, then waits for integrate before it
-hardens (`jobs.py start --gate harden --workspace <ws>/digital`, ten
-minutes or more, detached, polled). The top gates then run on the
-assembled GDS that harden produced.
+Each side releases alone. The digital side hardens as a standalone tile:
+every crossing signal sits on a spare TT pin in its `spec.yaml` `tt_pins`
+(`osc_out` on `ui_in[7]` in `corpus/msde/sensor_counted`), so nothing it
+does waits for the analog side.
+
+The chip top is built by a gate, not an agent. `top_harden` assembles
+`{ws}/top/` from the two released sides: the digital spec minus the
+`tt_pins` of every interface signal, plus a generated `macros:` entry
+(`engine/lib/ttlib.py`), and under `top/macros/` the analog cell's GDS
+(rebuilt from `analog/layout/`), a LEF abstract, a blackbox stub and its
+sized `.subckt`. It then hardens that top with the digital side's own
+harden. It is a job - `jobs.py start --gate top_harden --workspace <ws>
+--skill msde`, ten minutes or more, detached, polled - and `top_drc` and
+`top_lvs` read the GDS it leaves at `top/harden/runs/run/final/gds`.
+
+So there is no hand-written macro config and no top netlist. What
+`top_harden` needs from people is that the names agree: every
+`interface.yaml` signal is a digital `spec.yaml` port AND an analog
+`.subckt` pin of the same name, and the analog cell has exactly two other
+pins, one supply (`vdd...`) and one ground (`vss...`/`gnd...`). It
+refuses (exit 2) and names the mismatch otherwise.
 
 Gates (`engine/reference/gates.yaml`, msde rows), in pipeline order:
 
-| Gate | Phase | Passes when | Status |
+| Gate | Phase | Passes when | Script |
 |---|---|---|---|
-| split | P1 | every crossing signal appears in both side specs with matching direction, level, domain, width and load | real (`check_split.py`) |
-| cosim | P3 | every top-level measure inside its bound, the digital side toggled, the analog side ran | real (`check_cosim.py`, cocotbext-ams) |
-| top_drc | P3 | 0 violations on the assembled GDS | **stub** until `check_top_drc.py` lands |
-| top_lvs | P3 | the assembled GDS matches the top netlist, analog block as a subcircuit | **stub** until `check_top_lvs.py` lands |
-| release | P4 | every msde gate fresh-pass AND both nested workspaces released | real (`check_release.py`) |
+| split | P1 | every crossing signal appears in both side specs with matching direction, level, domain, width and load | `check_split.py` |
+| cosim | P3 | every top-level measure inside its bound, the digital side toggled, the analog side ran | `check_cosim.py`, cocotbext-ams |
+| top_harden | P3 | the assembled top hardens with the analog GDS as a macro: no failing step, GDS, LEF, netlist, SDF, metrics (a job) | `check_top_harden.py` |
+| top_drc | P3 | 0 violations, magic and klayout, on the top's final GDS | `check_top_drc.py` |
+| top_lvs | P3 | the top's final GDS matches the powered netlist, the analog block compared device by device | `check_top_lvs.py` |
+| release | P4 | every msde gate fresh-pass AND both nested workspaces released | `check_release.py` |
 
 `release` for an msde block runs `check_release.py`'s `nested_problems()`
 on top of the usual attestation: each of `digital/` and `analog/` must
@@ -130,8 +145,8 @@ released fails here as `nested_not_released`.
 ## Edit classes and the nested cascade
 
 msde's own edit classes (`invalidation.yaml`) are `spec_edit` and
-`interface_edit`; both mark `split`, `cosim`, `top_drc`, `top_lvs` and
-`release`. `docs/design.md` 1.6 adds that `interface_edit` marks both
+`interface_edit`; both mark `split`, `cosim`, `top_harden`, `top_drc`,
+`top_lvs` and `release`. `docs/design.md` 1.6 adds that `interface_edit` marks both
 nested runs' `spec_edit`, and a plain `state.py edit` cannot reach a
 nested `state.json`. So after ANY interface edit, run in each nested
 workspace that exists:
@@ -142,14 +157,16 @@ workspace that exists:
 
 and the same for `blocks/<name>/analog`. The `split` recipe carries both
 steps. Then re-drive each side through its own router until it is fresh.
+The router appends every gate the class marks as a `gate.py` step;
+`top_harden` among them runs as a job (`jobs.py start`), like everywhere
+else.
 
 Other cross-boundary edits, declared where the file lives:
 
 | what changed | declare | where |
 |---|---|---|
 | interface.yaml | `interface_edit`, then the cascade above | msde, then both sides |
-| the digital harden config (integrate's macro entry) | `harden_config_edit` | `digital/` |
-| the analog layout re-released | re-run `integrate` - the digital harden's macro moved | msde + `digital/` |
+| a side's design, re-released | nothing to declare: `top_harden` hashes `digital/rtl` and `analog/layout`, and `top_drc`/`top_lvs` hash its GDS | msde |
 | `tb/` (the cosim bench) | none exists for msde; `cosim`'s `tb` input hash catches it | msde |
 
 ## Run start / resume
@@ -161,8 +178,9 @@ in P2, with block names `<name>` (digital - it is the tile) and
 `<name>_analog`.
 
 **Existing block**: `state.py resume` on the msde workspace AND on each
-nested one that exists, then `jobs.py status --workspace <ws>/digital
---all` (a harden may have finished or died). Re-enter at the earliest
+nested one that exists, then `jobs.py status --workspace <ws> --all`
+and the same on `<ws>/digital` (a `top_harden` or the digital side's own
+harden may have finished or died). Re-enter at the earliest
 phase any of the three reports as unfinished; never redo a gate that is
 passed and fresh.
 
@@ -180,8 +198,10 @@ What differs:
   says `rtl`. The msde fixer's own table is its scope.
 - **A defect inside a side is fixed inside that side.** When a fixer or
   reviewer reports one in OPEN (a wrong divide ratio, an inverted control
-  word, a macro pin missing), run that side's own `fix-finding` through
-  its router and its own gates, then re-run the msde gate that found it.
+  word, a macro pin missing, a DRC error inside the macro), run that
+  side's own `fix-finding` through its router and its own gates to a
+  fresh release, then re-run the msde gate that found it - after a
+  layout fix, `top_harden` first.
   `cosim` does not hash either nested workspace, so re-run it by hand.
 - **`release`'s findings are re-entry, not fixes.** `nested_not_released`
   names the side; `gate_not_ready` names the msde gate.
@@ -226,13 +246,14 @@ step up and record it; never silently drop a tier.
   `docs/spikes/dcosim.md`), and the working bench (`corpus/msde/
   ring_osc_div`) simulates an `ideal` analog model. A transistor-level
   block inside the bridge has not converged reliably yet.
-- **`top_drc` and `top_lvs` are stubs** in `gates.yaml` until
-  `check_top_drc.py` and `check_top_lvs.py` land. They exit 2 today, so
-  `set-phase P4` refuses and `release` cannot pass; a `full-run` stops
-  cleanly at the end of P3.
-- **The integrate mechanics are a spike in progress.** How the analog GDS
-  becomes the digital harden's macro, and where the top netlist lives, is
-  `docs/spikes/macro_harden.md`'s answer, not settled here.
+- **`top_harden` hashes only `digital/rtl` and `analog/layout`.** A
+  change to the digital `spec.yaml` (its ports, its tt_pins) or to the
+  analog sizing does not stale a recorded pass - re-run `top_harden`, then
+  `top_drc` and `top_lvs`, by hand after one.
+- **The macro sits in the middle of the tile**, placed by `top_harden`, at
+  a size the analog layout decides. A macro too large for the tile, or one
+  that leaves the standard cells no room to route, is an analog layout
+  fix, not a floorplan knob msde owns.
 - **`dac_spi` and `sar_adc` are specs only.** Those corpus rungs have
   interface files and `split` faults, no reference design or bench; they
   may stay red. `sensor_counted` and `ring_osc_div` are the working rungs.

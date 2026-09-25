@@ -1,52 +1,72 @@
-# integrate - the analog block into the tile, and the checks on the join
+# integrate - the two sides into one tile, and the checks on the join
 
-Integrate is where the two nested runs meet. One role, the integrator,
-writes all three joining artifacts so they cannot disagree with each other.
+Integrate is where the two nested runs meet. Both have already released on
+their own; this verb joins them and checks the join. Almost all of the
+joining is done by a gate, `top_harden`, not by an agent.
 
 ## Role
 
-The integrator (`skills/msde/agents/integrator.md`) turns a released analog
-layout and a synthesized digital side into one tile: the analog block
-enters the digital side's harden as a LibreLane hard macro, so the whole
-Tiny Tapeout tile's GDS comes out of ONE harden.
+The integrator (`skills/msde/agents/integrator.md`) checks that the two
+sides can be joined by name and writes the cosim bench. It writes no macro
+config and no top netlist: `top_harden` generates both from the two
+released sides.
 
 ## Inputs
 
-- `interface.yaml` - which pins cross, and in which direction.
-- The analog side's released layout: `analog/layout/<analog block>.gds` and
-  the abstract `layout_gen.py` writes beside it.
-- The digital side's harden config: `digital/harden/config.json` and
-  `digital/harden/info.yaml`.
-- The digital side's RTL top and the analog side's netlist - read for pin
-  names, never edited.
+- `interface.yaml` - which signals cross, and in which direction.
+- The digital side's `spec/spec.yaml` ports and the analog side's
+  `.subckt` line - read for names, never edited.
+- Both sides released: `attest.py verify` valid on `{ws}/digital` and
+  `{ws}/analog`.
+- `brief/` - the top-level measures `cosim` checks.
 
 ## Outputs
 
-1. The macro entry in the digital side's harden config.
-2. The top netlist, with the analog block as a subcircuit - what `top_lvs`
-   compares the assembled GDS against.
-3. The cosim bench under `{ws}/tb/`: `cosim_bench.json` (top, bounds,
+1. The names check, in the integrator's SUMMARY.
+2. The cosim bench under `{ws}/tb/`: `cosim_bench.json` (top, bounds,
    analog netlist, analog kind), the Verilog top, the analog model the
    bench simulates, `test_*.py`, and a `*.bounds.json` per measure set.
    `corpus/msde/ring_osc_div/tb/` is the working example.
 
 ## Contract
 
-- Preconditions: `split` fresh-pass here; `attest.py verify --workspace
-  {ws}/analog` valid (the analog side has released the GDS being used).
-- After the integrator returns: `cosim` first, then `state.py edit --class
-  harden_config_edit` in the DIGITAL workspace, then its harden job, its
-  signoff gates and its own release through `task_router.py --skill vde
-  --verb resume --workspace {ws}/digital`, then `top_drc` and `top_lvs`
-  here.
-- The integrator edits only the digital harden config, the top netlist and
-  `{ws}/tb/`. A mismatch it finds inside either side's design goes back to
-  that side's own router as a finding; the integrator never edits
-  `digital/rtl/`, `analog/netlist/` or any generated GDS.
-- A macro whose GDS changes (the analog side re-released) means
-  integrate runs again: the digital harden is stale the moment its macro
-  moves, whatever its own hashes say.
+- Preconditions: `split` fresh-pass here; both nested workspaces verify as
+  released.
+- After the integrator returns: `cosim`, then `top_harden` as a detached
+  job (`jobs.py start --gate top_harden --workspace {ws} --skill msde`,
+  ten minutes or more, polled with `jobs.py status --workspace {ws}
+  --all`), then `top_drc` and `top_lvs` on the GDS it produced.
+- The integrator edits only `{ws}/tb/`. A name mismatch or a defect inside
+  either side goes back to that side's own router as a finding.
+- A side re-released after a fix needs nothing declared here:
+  `top_harden` hashes `digital/rtl` and `analog/layout`, and `top_drc` and
+  `top_lvs` hash its GDS, so the stale map re-runs them. A change to the
+  digital spec or the analog sizing alone is not hashed - re-run
+  `top_harden` by hand after one.
 
 ## Mechanics
 
-See docs/spikes/macro_harden.md.
+`top_harden` (`engine/scripts/check_top_harden.py`) rebuilds `{ws}/top/`
+from scratch on every run:
+
+- `top/spec/spec.yaml` - the digital spec, minus the `tt_pins` entry of
+  every `interface.yaml` signal, plus a `macros:` entry binding each of
+  those signals to the analog pin of the same name
+  (`engine/lib/ttlib.py`'s `macros` schema). The analog cell's two other
+  pins go to VPWR (the one like `vdd`) and VGND (the one like `vss`/`gnd`).
+- `top/rtl/` - a copy of `digital/rtl`.
+- `top/macros/` - the analog cell's GDS (rebuilt from
+  `analog/layout/gen_<block>.py`), a LEF abstract magic writes from it, a
+  blackbox Verilog stub, and its sized `.subckt` for LVS.
+
+The macro is placed in the middle of the tile, and the top is hardened by
+the digital side's own harden. The macro GDS is re-saved without
+klayout's context-info cell (`check_top_harden.clean_gds`), which magic
+would otherwise read as a second top cell - nothing for the agent to do.
+
+`top_harden` refuses (exit 2), naming the problem, when a nested workspace
+is missing, when an interface signal is not both a digital port and an
+analog pin, or when the analog cell's remaining pins are not one supply
+and one ground. A macro larger than the tile is a `macro_too_large`
+finding, and no harden runs. Every one of those is a side's fix.
+`docs/spikes/macro_harden.md` has how the recipe was found.

@@ -18,7 +18,7 @@ answer, and handing them to the splitter or integrator defeats the proof.
 The workspace ends up shaped like this:
 
     blocks/<name>/
-      state.json            skill msde - split, cosim, top_drc, top_lvs, release
+      state.json            skill msde - split, cosim, top_harden, top_drc, top_lvs, release
       brief/                the task's spec, verbatim
       interface.yaml        the splitter's crossing signals
       digital_spec.yaml     the digital side's copy of the same entries
@@ -26,6 +26,7 @@ The workspace ends up shaped like this:
       tb/                   the cosim bench (integrator)
       digital/              nested workspace, skill vde, its own state.json
       analog/               nested workspace, skill ade, its own state.json
+      top/                  the assembled chip top, written by top_harden
 
 ## P1: split
 
@@ -43,31 +44,37 @@ agents, digests and human checkpoints all apply unchanged inside the
 nested workspace. Every `--workspace` in those plans already points at
 `{ws}/analog` or `{ws}/digital`.
 
-- **Analog first, all the way.** Its layout (`layout/<block>.gds` and the
-  abstract `layout_gen.py` writes beside it) is the digital side's hard
-  macro, so the analog side runs through its own layout gates and its own
-  release.
-- **Digital in parallel, up to synthesis.** P1-P5 need nothing from the
-  analog side. Stop once `synth` passes and H1 is recorded; do not start
-  its harden, because a harden without the macro is thrown away.
+- **Both sides all the way.** Each runs through its own gates to its own
+  release. The two need nothing from each other, so run them at once.
+- **The digital side hardens alone.** Each crossing signal sits on a spare
+  TT pin in its `spec.yaml` `tt_pins` (`osc_out` on `ui_in[7]` in
+  `corpus/msde/sensor_counted`), so its own harden, signoff and release
+  make a complete standalone tile. `top_harden` later drops those pins and
+  wires the signals to the analog macro instead.
 
-The nested human checkpoints (the analog side's H1/H2, the digital side's
-H1) are presented to the person like any other, labelled with the side.
+Before P3, `attest.py verify` on both nested workspaces must come back
+valid.
 
-## P3: integrate and the top gates
+The nested human checkpoints (each side's H1, the analog H2, the digital
+H2) are presented to the person like any other, labelled with the side.
 
-The integrator writes the macro entry in the digital side's harden config,
-the top netlist, and the cosim bench (`recipes/integrate.md`). Then, in
-this order:
+## P3: cosim and the top gates
+
+The integrator checks the two sides' names agree and writes the cosim
+bench (`recipes/integrate.md`). Then, in this order:
 
 1. `cosim` - minutes, and it catches a polarity or ratio error before the
    harden spends ten.
-2. `state.py edit --class harden_config_edit` in the DIGITAL workspace, then
-   its harden as a detached job (`jobs.py start ... --workspace
-   {ws}/digital`), polled.
-3. The digital side's own P6 signoff gates and its own release, through its
-   router's `resume`.
-4. `top_drc` and `top_lvs` on the assembled GDS that harden produced.
+2. `top_harden` as a detached job (`jobs.py start --gate top_harden
+   --workspace {ws} --skill msde`), polled with `jobs.py status`. It
+   assembles `{ws}/top/` from the two sides and hardens it, the analog GDS
+   as a LibreLane macro.
+3. `top_drc` and `top_lvs` on the GDS it left at
+   `top/harden/runs/run/final/gds`.
+
+A top gate's finding almost always lives in a side: a DRC error inside the
+macro is an analog layout fix, through `analog/`'s own router to a fresh
+release, then `top_harden` again.
 
 ## P4: release
 
@@ -77,10 +84,3 @@ released (`check_release.py`, `nested_problems`) - an edit inside either
 side after it released reads as `nested_not_released`, and the fix is to
 re-release that side, never to waive it. Then `attest.py build`,
 `disposition`, and H2.
-
-## Where it stops today
-
-`top_drc` and `top_lvs` are stubs in `gates.yaml` until
-`check_top_drc.py`/`check_top_lvs.py` land: both exit 2, nothing is
-recorded, and `set-phase P4` refuses. That is the designed behavior; stop
-the run there and say so in the P3 digest.

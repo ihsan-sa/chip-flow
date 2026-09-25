@@ -22,16 +22,18 @@ JSON out, exit 0/1/2. Keep output ASCII. **No web tools.**
 - `attest.py verify` on each nested workspace - is each side still
   released?
 - `interface.yaml`, `digital_spec.yaml`, `analog_spec.yaml`, `brief/`.
-- `tb/` (the cosim bench), the top netlist, and each side's design files
-  where a question needs them. Never `digital/holdout/`.
+- `tb/` (the cosim bench), `top/spec/spec.yaml` (the assembled top's
+  `macros:` entry and pins, written by `top_harden`), and each side's
+  design files where a question needs them. Never `digital/holdout/`.
 
 ## Protocol
 1. Baseline the three gate tables. A stale pass is not evidence; say which
    gates must re-run, in which workspace.
 2. Read the join: does every crossing signal mean the same thing on both
    sides (polarity, reset state, which edge)? Do the cosim bounds come
-   from the brief, or from what the design produced? Does the top netlist
-   connect every macro pin?
+   from the brief, or from what the design produced? Does the top's
+   `macros:` entry bind every interface signal, and did `top_lvs` compare
+   the macro device by device (`macro_fets_extracted`)?
 3. `attest.py disposition --workspace <ws>`.
 4. Write the digest. You fix nothing and dispatch nothing.
 

@@ -109,6 +109,7 @@ Mixed-signal (`/msde`):
 |---|---|---|---|
 | split | speclib over interface.yaml | every crossing signal appears in both specs with matching direction, level and domain | a control word width that differs between the two |
 | cosim | ngspice `d_cosim` running the Icarus-compiled digital side inside the analog bench | every top-level measure inside its bound | control word polarity inverted |
+| top_harden | LibreLane (M4's harden job) on the digital side with the analog GDS as a macro | the flow finishes and produces GDS, LEF, netlist, SDF, metrics | an analog macro too large for the tile |
 | top_drc | magic and klayout on the assembled GDS | 0 | a planted spacing violation |
 | top_lvs | netgen on the assembled GDS, the analog block as a subcircuit | match | a macro pin left unconnected |
 | release | attest, strict | both nested runs released, top gates fresh | a stale nested release |

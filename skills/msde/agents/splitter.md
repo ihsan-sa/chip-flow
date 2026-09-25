@@ -34,7 +34,12 @@ JSON out, exit 0/1/2. Keep output ASCII. **No web tools.**
 - `digital/brief/spec.md` and `analog/brief/spec.md` - the prose brief each
   nested run's own spec-writer starts from: what that side does, its
   crossing signals named exactly as in `interface.yaml`, and the measures
-  or requirements the top-level brief puts on it. A requirement that only
+  or requirements the top-level brief puts on it. The digital brief says
+  each crossing signal is a top-level port of that name, mapped to a spare
+  TT pin so the digital side hardens and releases alone. The analog brief
+  says the cell's `.subckt` pins are the crossing signals plus exactly one
+  supply (`vdd...`) and one ground (`vss...`/`gnd...`) - `top_harden`
+  joins the two sides by those names. A requirement that only
   makes sense across the boundary (a divided frequency, a DAC code to
   voltage) stays at the top, as a cosim measure, not in either brief.
 

@@ -73,14 +73,14 @@ def load_manifest(rung_dir: Path) -> dict:
 
 
 def make_scratch_workspace(tmp_root: Path, rung_dir: Path, skill: str,
-                          rung: str) -> Path:
+                          rung: str, block: str | None = None) -> Path:
     """A fresh state.py-initialized workspace holding a byte-for-byte copy
     of the rung's own spec.md/spec.yaml and artifact directories - never the
     corpus itself, which stays read-only source of truth."""
     ws = tmp_root / rung
     if ws.exists():
         shutil.rmtree(ws)
-    state_mod.State.init(ws, skill, rung)
+    state_mod.State.init(ws, skill, block or rung)
     # corpus layout is flat (spec.md, spec.yaml at the rung root, docs/
     # design.md 1.1's corpus table); a workspace nests them under spec/
     # (state.py init's own SUBDIRS, docs/design.md 1.4) - this copy is
@@ -112,6 +112,19 @@ def make_scratch_workspace(tmp_root: Path, rung_dir: Path, skill: str,
         for f in src_dir.iterdir():
             if f.is_file():
                 shutil.copy2(f, ws / sub / f.name)
+    # M10: an msde rung carries its two sides as rung-shaped trees at
+    # digital/ and analog/; each becomes a nested workspace of its own skill
+    # (check_release.NESTED), its block named by its spec.yaml's `top` - the
+    # name its layout generator and netlist carry.
+    if skill == "msde":
+        import yaml
+        for side, side_skill in (("digital", "vde"), ("analog", "ade")):
+            src = rung_dir / side
+            if (src / "spec.yaml").is_file():
+                spec = yaml.safe_load((src / "spec.yaml").read_text(
+                    encoding="utf-8")) or {}
+                make_scratch_workspace(ws, src, side_skill, side,
+                                       block=spec.get("top") or side)
     return ws
 
 

@@ -306,13 +306,12 @@ def make_msde_ws(tmp_path: Path) -> Path:
     state_mod.State.init(ws, "msde", "sensor_counted")
     (ws / "interface.yaml").write_text("version: 1\nsignals: []\n",
                                       encoding="utf-8")
-    (ws / "layout").mkdir(exist_ok=True)
-    (ws / "layout" / "top.gds.txt").write_text("top\n", encoding="utf-8")
     for side, skill, kind in (("digital", "vde", "rtl"),
                               ("analog", "ade", "netlist")):
         sub = ws / side
         state_mod.State.init(sub, skill, f"sensor_counted_{side}")
         (sub / kind / "x.txt").write_text("a\n", encoding="utf-8")
+        (sub / "layout" / "x.txt").write_text("a\n", encoding="utf-8")
         st = state_mod.State.load(sub / "state.json")
         for g in statelib.load_map()["gate_inputs"][skill]:
             st.record_gate(g, {"status": "pass"})
@@ -354,7 +353,10 @@ def test_msde_release_refuses_a_missing_nested_side(tmp_path, capsys):
     code = check_release.main(["--workspace", str(ws)])
     out = json.loads(capsys.readouterr().out)
     assert code == 1, out
-    assert [v["module"] for v in out["violations"]] == ["nested_analog"]
+    # the top gates read analog/layout too, so they go stale with it; the
+    # nested finding names only the missing side
+    assert [v["module"] for v in out["violations"]
+            if v["kind"] == "nested_not_released"] == ["nested_analog"]
 
 
 def test_msde_release_refuses_a_nested_side_of_the_wrong_skill(tmp_path, capsys):
@@ -365,4 +367,4 @@ def test_msde_release_refuses_a_nested_side_of_the_wrong_skill(tmp_path, capsys)
     code = check_release.main(["--workspace", str(ws)])
     out = json.loads(capsys.readouterr().out)
     assert code == 1, out
-    assert "expected 'ade'" in out["violations"][0]["msg"]
+    assert any("expected 'ade'" in v["msg"] for v in out["violations"])

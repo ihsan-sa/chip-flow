@@ -72,6 +72,11 @@ artifact_kinds:
   sizing:        {path: "sizing/sizing.yaml", norm: json_canonical}
   optimise:      {path: "optimise", norm: dir_text}
   interface:     {path: "interface.yaml", norm: json_canonical}
+  # msde (M10): the nested sides an msde block's top gates read, and the
+  # assembled top's hardened GDS (engine/scripts/check_top_harden.py).
+  digital_rtl:   {path: "digital/rtl", norm: dir_text}
+  analog_layout: {path: "analog/layout", norm: dir_text}
+  top_gds:       {path: "top/harden/runs/run/final/gds", norm: dir_text}
 
 # What each gate reads, per skill (docs/design.md 1.5 tables). Every gate a
 # skill's edit_classes name must have an entry here, even a stub's - it is
@@ -124,9 +129,10 @@ gate_inputs:
   msde:
     split:    [interface]
     cosim:    [interface, tb]
-    top_drc:  [layout]
-    top_lvs:  [layout]
-    release:  [interface, layout]
+    top_harden: [digital_rtl, analog_layout]
+    top_drc:  [top_gds]
+    top_lvs:  [top_gds, analog_layout]
+    release:  [interface, digital_rtl, analog_layout]
 
 # Edit-class taxonomy -> what an edit of that class makes stale (docs/
 # design.md 1.6, one block per skill).
@@ -198,7 +204,7 @@ edit_classes:
     spec_edit:
       mutates: [spec_yaml, spec_md]
       stale_artifacts: []
-      gates: [split, cosim, top_drc, top_lvs, release]
+      gates: [split, cosim, top_harden, top_drc, top_lvs, release]
       human_hold: 2
     interface_edit:
       # "marks the top gates and both nested runs' spec_edit" (1.6). The
@@ -207,5 +213,5 @@ edit_classes:
       # top-level gates a plain `state.py edit` can reach on its own.
       mutates: [interface]
       stale_artifacts: []
-      gates: [split, cosim, top_drc, top_lvs, release]
+      gates: [split, cosim, top_harden, top_drc, top_lvs, release]
       human_hold: 2

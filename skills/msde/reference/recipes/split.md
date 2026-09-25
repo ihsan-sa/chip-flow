@@ -26,8 +26,8 @@ authority unless the brief says otherwise.
 
 ## Changing the interface later
 
-The router plans `interface_edit`, which marks `split`, `cosim`, `top_drc`,
-`top_lvs` and `release` stale in this workspace. `docs/design.md` 1.6 says
+The router plans `interface_edit`, which marks `split`, `cosim`,
+`top_harden`, `top_drc`, `top_lvs` and `release` stale in this workspace. `docs/design.md` 1.6 says
 it also marks both nested runs' `spec_edit`, and the engine cannot reach a
 nested `state.json` on its own - so the recipe declares `spec_edit` in
 `{ws}/digital` and `{ws}/analog` itself. Run those steps whenever the
@@ -35,7 +35,8 @@ nested workspace exists; skipping them leaves a nested pass that reads
 fresh against an interface that no longer holds.
 
 After the cascade, re-drive each side through its own router (`resume`)
-until it is fresh again, then the top gates.
+until it is fresh again, then the top gates. `top_harden` runs as a job
+(`jobs.py start`), even where the router lists it as a gate step.
 
 ## Known gap
 

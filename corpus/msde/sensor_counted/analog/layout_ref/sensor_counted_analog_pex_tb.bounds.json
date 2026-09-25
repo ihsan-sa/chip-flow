@@ -1,0 +1,7 @@
+{
+  "measures": {
+    "f_osc": {"min": 3.8e6, "max": 5.2e6},
+    "duty": {"min": 0.4, "max": 0.6},
+    "vstop": {"max": 0.3}
+  }
+}

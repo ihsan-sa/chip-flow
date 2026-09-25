@@ -110,16 +110,32 @@ def test_msde_agents_have_no_web_tools_in_frontmatter():
         assert not names & {"WebFetch", "WebSearch"}, p
 
 
-def test_integrate_mechanics_is_the_one_marked_placeholder():
-    """The integrate mechanics come from a spike; recipes/integrate.md and
-    agents/integrator.md each carry exactly one `## Mechanics` section
-    holding only the pointer, so filling it in is one edit per file."""
+def test_integrate_mechanics_describe_top_harden_not_a_hand_join():
+    """The macro and the top are top_harden's (check_top_harden.py), not an
+    agent's: recipes/integrate.md and agents/integrator.md each carry one
+    `## Mechanics` section that says so, names the pin-name contract and
+    the clean_gds re-save - and no step anywhere tells a digital-side
+    harden to take the macro."""
     for p in (SKILL / "reference" / "recipes" / "integrate.md",
               SKILL / "agents" / "integrator.md"):
         text = p.read_text(encoding="utf-8")
         assert text.count("## Mechanics") == 1, p
         body = text.split("## Mechanics", 1)[1].split("\n## ", 1)[0]
-        assert body.strip() == "See docs/spikes/macro_harden.md.", p
+        for needle in ("top_harden", "check_top_harden", "clean_gds",
+                       ".subckt", "vdd", "vss"):
+            assert needle in body, (p, needle)
+    for p in SKILL.rglob("*"):
+        if p.is_file():
+            text = p.read_text(encoding="utf-8")
+            assert "harden_config_edit" not in text, p
+            assert "--gate harden --workspace {ws}/digital" not in text, p
+
+
+def test_no_skill_file_calls_a_top_gate_a_stub():
+    for p in SKILL.rglob("*"):
+        if p.is_file():
+            text = p.read_text(encoding="utf-8")
+            assert not re.search(r"top_(drc|lvs)`?[^.]*\bstubs?\b", text), p
 
 
 def test_skill_tree_has_no_absolute_home_path():
@@ -144,6 +160,21 @@ def _cosim_kinds() -> set[str]:
     return {k for rx in COSIM_KIND_RES for k in rx.findall(src)}
 
 
+TOP_KIND_RE = re.compile(r'violation\(\s*"[a-z_]+",\s*"error",\s*[^,]+,\s*'
+                         r'[^,]+,\s*"([a-z_]+)"', re.S)
+# top_harden passes on check_harden's findings, top_drc check_drc's
+TOP_GATE_SCRIPTS = ("check_top_harden", "check_harden", "check_top_drc",
+                    "check_drc", "check_top_lvs")
+
+
+def _top_kinds() -> set[str]:
+    kinds = set()
+    for name in TOP_GATE_SCRIPTS:
+        src = (ENGINE / "scripts" / f"{name}.py").read_text(encoding="utf-8")
+        kinds |= set(TOP_KIND_RE.findall(src))
+    return kinds
+
+
 def _split_kinds() -> set[str]:
     src = (ENGINE / "scripts" / "check_split.py").read_text(encoding="utf-8")
     literal = set(re.findall(r'\bbad\(\s*"([a-z_]+)"', src))
@@ -157,12 +188,15 @@ def test_kind_scan_finds_the_kinds_it_should():
             "test_failed", "test_skipped"} <= _cosim_kinds()
     assert {"signal_missing_from_spec", "signal_not_declared",
             "width_mismatch"} <= _split_kinds()
+    assert {"macro_too_large", "flow_step_failed", "harden_missing_artifact",
+            "magic_drc_violation", "klayout_drc_violation",
+            "netlist_mismatch"} <= _top_kinds()
 
 
 def test_every_msde_gate_kind_has_a_remediation_reference():
     rem = SKILL / "reference" / "remediations"
-    kinds = _split_kinds() | _cosim_kinds() | {"nested_not_released",
-                                                "gate_not_ready"}
+    kinds = (_split_kinds() | _cosim_kinds() | _top_kinds()
+             | {"nested_not_released", "gate_not_ready"})
     for kind in sorted(kinds):
         assert (rem / f"{kind}.md").is_file(), \
             f"{kind}: no skills/msde/reference/remediations/{kind}.md"
@@ -197,18 +231,21 @@ def test_full_run_is_overridden_not_the_engine_placeholder():
 def test_full_run_gates_in_phase_order_and_never_forced():
     steps = _steps("full-run")
     gate_seq = [s["gate"] for s in steps if "gate" in s]
+    # top_harden is a job: started with jobs.py, never a `gate:` step
     assert gate_seq == ["split", "cosim", "top_drc", "top_lvs", "release"]
+    assert not any(s.get("gate") in ("harden", "top_harden") for s in steps)
     phases = [s["do"].rsplit(" ", 1)[1] for s in steps
               if "do" in s and "set-phase" in s["do"]]
     assert phases == ["P1", "P2", "P3", "P4"]
     assert not any("--force" in s["do"] for s in steps if "do" in s)
 
 
-def test_full_run_order_analog_released_before_the_digital_harden():
-    """The analog GDS is the digital side's hard macro: the analog nested
-    run and its release check come before the integrator, and the one
-    digital harden (a detached job in the DIGITAL workspace, never a
-    synchronous gate step) comes after it; the top gates come after that."""
+def test_full_run_order_both_sides_released_before_the_top_harden():
+    """Each side runs to its own release in P2 - the digital side hardens
+    alone, on spare TT pins - and both verify as released before P3. The
+    one top_harden (a detached job in the MSDE workspace, never a gate step
+    and never a harden in the digital workspace) comes after cosim, and
+    top_drc/top_lvs after it."""
     steps = _steps("full-run")
 
     def idx(pred):
@@ -220,16 +257,25 @@ def test_full_run_order_analog_released_before_the_digital_harden():
                       and "{ws}/digital" in s["do"])
     analog_verify = idx(lambda s: s.get("do", "").startswith(
         "scripts/attest.py verify --workspace {ws}/analog"))
-    integrator = idx(lambda s: s.get("agent") == "integrator")
-    harden = idx(lambda s: s.get("do", "").startswith(
-        "scripts/jobs.py start --gate harden --workspace {ws}/digital"))
     digital_verify = idx(lambda s: s.get("do", "").startswith(
         "scripts/attest.py verify --workspace {ws}/digital"))
+    p3 = idx(lambda s: s.get("do", "").endswith("--phase P3"))
+    integrator = idx(lambda s: s.get("agent") == "integrator")
+    cosim = idx(lambda s: s.get("gate") == "cosim")
+    top_harden = idx(lambda s: s.get("do", "") ==
+                     "scripts/jobs.py start --gate top_harden "
+                     "--workspace {ws} --skill {skill}")
+    poll = idx(lambda s: s.get("do", "").startswith(
+        "scripts/jobs.py status --workspace {ws} "))
     top_drc = idx(lambda s: s.get("gate") == "top_drc")
-    assert analog_run < analog_verify < integrator < harden
-    assert digital_run < integrator
-    assert harden < digital_verify < top_drc
-    assert not any(s.get("gate") == "harden" for s in steps)
+    top_lvs = idx(lambda s: s.get("gate") == "top_lvs")
+    assert analog_run < analog_verify < p3
+    assert digital_run < digital_verify < p3
+    assert p3 < integrator < cosim < top_harden < poll < top_drc < top_lvs
+    assert not any("jobs.py start --gate harden" in s.get("do", "")
+                   for s in steps)
+    assert not any("{ws}/digital --class harden_config_edit" in s.get("do", "")
+                   for s in steps)
 
 
 def test_split_plans_the_interface_cascade_into_both_nested_runs(tmp_path):
@@ -245,12 +291,12 @@ def test_split_plans_the_interface_cascade_into_both_nested_runs(tmp_path):
                    for c in cmds), side
     # the router appends every gate interface_edit marks
     gates = [s["gate"] for s in recipe["steps"] if s["kind"] == "gate"]
-    assert gates == ["split", "cosim", "top_drc", "top_lvs", "release"]
+    assert gates == ["split", "cosim", "top_harden", "top_drc", "top_lvs", "release"]
 
 
 def test_interface_edit_still_marks_the_top_gates():
     ec = statelib.load_map()["edit_classes"]["msde"]["interface_edit"]
-    assert {"split", "cosim", "top_drc", "top_lvs", "release"} <= set(ec["gates"])
+    assert set(["split", "cosim", "top_harden", "top_drc", "top_lvs", "release"]) <= set(ec["gates"])
 
 
 def test_integrate_and_cosim_are_blocked_until_split_passes(tmp_path):
@@ -261,21 +307,46 @@ def test_integrate_and_cosim_are_blocked_until_split_passes(tmp_path):
         assert payload["status"] == "blocked", verb
 
 
-def test_integrate_plans_cosim_before_the_digital_harden(tmp_path):
+def test_integrate_plans_cosim_before_the_top_harden_job(tmp_path):
     ws = msde_ws(tmp_path)
     _record_split_pass(ws)
     payload, _ = tr.run(["--skill", "msde", "--verb", "integrate",
                         "--workspace", str(ws)])
     assert payload["status"] == "planned"
     steps = payload["recipe"]["steps"]
+    cmds = [s.get("command", "") for s in steps]
+    for side in ("analog", "digital"):
+        assert any(f"attest.py verify --workspace {ws}/{side}" in c
+                   for c in cmds), side
     cosim = next(i for i, s in enumerate(steps)
                  if s["kind"] == "gate" and s["gate"] == "cosim")
     harden = next(i for i, s in enumerate(steps) if s["kind"] == "script"
-                  and f"jobs.py start --gate harden --workspace {ws}/digital"
-                  in s["command"])
+                  and f"jobs.py start --gate top_harden --workspace {ws} "
+                  "--skill msde" in s["command"])
+    top_drc = next(i for i, s in enumerate(steps)
+                   if s["kind"] == "gate" and s["gate"] == "top_drc")
     top_lvs = next(i for i, s in enumerate(steps)
                    if s["kind"] == "gate" and s["gate"] == "top_lvs")
-    assert cosim < harden < top_lvs
+    assert cosim < harden < top_drc < top_lvs
+    # the job is never also appended as a foreground gate step
+    assert not any(s["kind"] == "gate" and s["gate"] == "top_harden"
+                   for s in steps)
+    assert not any(f"{ws}/digital" in c and "harden" in c for c in cmds)
+
+
+def test_gate_lists_in_prose_name_every_msde_gate():
+    """Every place the skill lists the msde workspace's gates lists all
+    six, top_harden included."""
+    msde_gates = list(tr.load_gate_order("msde"))
+    assert msde_gates == ["split", "cosim", "top_harden", "top_drc", "top_lvs", "release"]
+    skill_md = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+    full_run = (SKILL / "reference" / "recipes" / "full-run.md").read_text(
+        encoding="utf-8")
+    listing = "split, cosim, top_harden, top_drc, top_lvs, release"
+    assert listing in skill_md
+    assert listing in full_run
+    for g in msde_gates:
+        assert f"| {g} |" in skill_md, g
 
 
 def test_cosim_plans_on_a_split_workspace(tmp_path):

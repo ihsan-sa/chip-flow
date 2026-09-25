@@ -15,3 +15,22 @@ faults:
     gate: split
     plant: plant_missing_signal.py
     expect: {status: fail, kind: signal_missing_from_spec}
+  # M10's second half: the top gates on the assembled tile and the release.
+  # top_drc/top_lvs plants harden the untouched top first (their gates read
+  # its output on disk); see each plant_<gate>.py for why.
+  - name: top_harden_macro_too_large
+    gate: top_harden
+    plant: plant_top_harden.py
+    expect: {status: fail, kind: macro_too_large}
+  - name: top_drc_metal_spacing_violation
+    gate: top_drc
+    plant: plant_top_drc.py
+    expect: {status: fail, kind: magic_drc_violation}
+  - name: top_lvs_macro_pin_unconnected
+    gate: top_lvs
+    plant: plant_top_lvs.py
+    expect: {status: fail, kind: netlist_mismatch}
+  - name: release_stale_nested_release
+    gate: release
+    plant: plant_release.py
+    expect: {status: fail, kind: nested_not_released}
