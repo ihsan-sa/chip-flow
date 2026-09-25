@@ -1,13 +1,16 @@
 """plant_drc_missing_guard_ring.py - ade/comparator `drc` fault: removes the
-P+ substrate tap left of the NFETs and leaves the vss routing in place - a
-real "missing guard ring", no substrate tap near any NMOS. klayout's GF180
-signoff deck reports it as DF.14 (a substrate tap within 20um of NCOMP).
+P+ substrate taps at both ends of the NFET row and leaves the vss routing
+in place - a real "missing guard ring", no substrate tap near any NMOS.
+Both go, because the cell is narrower than the rule's reach and either tap
+alone still covers every NFET. klayout's GF180 signoff deck reports it as
+DF.14 (a substrate tap within 20um of NCOMP).
 """
 from __future__ import annotations
 
 from pathlib import Path
 
-OLD = '    tap = top.add_ref(layoutlib.psub_tap(TAP_SIZE))\n    tap.move((tap_x, 0.0))\n'
+OLD = ('        tap = top.add_ref(layoutlib.psub_tap(TAP_SIZE))\n'
+       '        tap.move((tap_x, tap_y))\n')
 NEW = ''
 
 

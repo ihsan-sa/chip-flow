@@ -270,4 +270,13 @@ layout-fixer read `netlist/` and `sizing/` and edit only `layout/`.
   `--objective margin` only; power needs a power measure no rung has yet.
   `numeric` scores trials at typical and reports the winner's full-corner
   result without gating on it - `sim_pvt` after it is what counts.
+- **`bench_strength` does not check that a mutant moved.** A mutant that
+  ngspice ignores reads as a survivor and routes to the bench-writer. If a
+  survivor's measure equals the baseline exactly, suspect the mutation,
+  not the bench, and escalate it as an engine defect.
+- **`lvs` sizes the reference from the `.subckt` line only.** Sizing
+  carried on `.param` lines is not substituted, and an empty
+  `facts.sizing_applied` still passes, so after a resize LVS can compare
+  against the netlist's defaults. The H2 reviewer checks
+  `sizing_applied` against sizing.yaml.
 - **The bandgap's layout row may stay red** (docs/design.md "### M9.").

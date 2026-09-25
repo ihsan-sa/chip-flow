@@ -1,15 +1,16 @@
 """plant_drc_metal_spacing.py - ade/comparator `drc` fault, gates.yaml's own
-"a planted spacing violation": the outn metal1 column moves to 0.45um from
-the outp column, centre to centre, so outn's 0.30um column sits 0.10um
-from outp's via pads, under metal1's 0.23um minimum spacing (M1.2a). Both
+"a planted spacing violation": each latch column's gate-strip via moves
+GATE_VIA_SHIFT towards the drain strip beside it instead of away from it,
+so its 0.40um metal1 landing (one output) sits 0.18um from the drain strip
+(the other output), under metal1's 0.23um minimum spacing (M1.2a). Both
 nets stay wired as before, so only the metal rules can see it.
 """
 from __future__ import annotations
 
 from pathlib import Path
 
-OLD = '"outn": ntap_x + TAP_SIZE + 3.0}'
-NEW = '"outn": ntap_x + TAP_SIZE + 2.45}'
+OLD = '        shift = -GATE_VIA_SHIFT if n["cx"] < 0 else GATE_VIA_SHIFT\n'
+NEW = '        shift = GATE_VIA_SHIFT if n["cx"] < 0 else -GATE_VIA_SHIFT\n'
 
 
 def plant(ws) -> None:

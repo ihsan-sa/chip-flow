@@ -1,6 +1,6 @@
 """plant_lvs_swapped_net.py - ade/comparator `lvs` fault, the swapped net: the
-clk and vdd labels trade places, so the net on every PFET source and the
-nwell tap is called "clk" and the net on the tail and reset gates "vdd".
+clk and vdd labels trade names, so the net on every PFET source and the
+nwell taps is called "clk" and the net on the tail and reset gates "vdd".
 The geometry is untouched; magic extracts the same eleven devices on
 differently named nets than the netlist wires them, and netgen reports a
 topology mismatch.
@@ -9,10 +9,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-OLD_CLK = '    labels.append(("clk", gate_x["clk"][0], gate_y["clk"], L1LBL))\n'
-NEW_CLK = '    labels.append(("vdd", gate_x["clk"][0], gate_y["clk"], L1LBL))\n'
-OLD = '    labels.append(("vdd", ntap_x + 0.5, 0.5, L1LBL))\n'
-NEW = '    labels.append(("clk", ntap_x + 0.5, 0.5, L1LBL))\n'
+OLD_CLK = '    labels.append(("clk", -clk_x, (tail_y + mid_y["outn"]) / 2, L1LBL))\n'
+NEW_CLK = '    labels.append(("vdd", -clk_x, (tail_y + mid_y["outn"]) / 2, L1LBL))\n'
+OLD = '    labels.append(("vdd", ntap_in + 0.5, p_y0 + 0.5, L1LBL))\n'
+NEW = '    labels.append(("clk", ntap_in + 0.5, p_y0 + 0.5, L1LBL))\n'
 
 
 def plant(ws) -> None:
