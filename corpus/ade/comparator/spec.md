@@ -41,12 +41,22 @@ section 5's default PVT set:
   1.4 V, first decision, is between 0.1 ns and 0.6 ns.
 - `vreset`: `v(outn)` at 14.5 ns, in the reset between the decisions, is at
   least 2.6 V.
+- `itail_peak`: the peak current through the comparator's `vss` pin
+  between 5 ns and 7 ns (the first evaluation, clk high) is between
+  0.7 mA and 2.0 mA. Only the tail's source returns to `vss`, so this is
+  the tail current, and the tail's width sets it. The four measures above
+  cannot see the tail's size: a 1 mV input still resolves to the rails
+  within 0.6 ns with the tail twice as wide, so without this bound a
+  wrongly sized tail passes. Real simulated values (typical/ss/ff/sf/fs):
+  1.30, 1.07, 1.61, 1.06, 1.57 mA; the tail at twice its width draws
+  2.34 mA at typical.
 
 After layout, at the typical corner, the extracted netlist with its wire
 capacitance and resistance runs the same bench with a 10 mV input step in
 place of 1 mV: both decisions still at least 2.5 V apart with the right
 sign, the reset level at least 2.6 V, and `tdelay` between 0.1 ns and
-0.5 ns. The step is larger because wiring parasitics give a latch a few mV
+0.5 ns. It does not bound `itail_peak`: wire parasitics do not move the
+tail's own current, and the tail's size is what LVS checks. The step is larger because wiring parasitics give a latch a few mV
 of offset (about 0.1 fF of difference between outp and outn is enough to
 flip a 1 mV decision), so a 1 mV post-layout bench would test the extractor's
 rounding, not the layout.

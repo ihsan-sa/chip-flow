@@ -5,7 +5,8 @@ import json
 from pathlib import Path
 
 WIDE = {"vdiff_pos": {"min": -10.0}, "vdiff_neg": {"max": 10.0},
-        "tdelay": {"min": 0.0, "max": 1.0}, "vreset": {"min": -10.0}}
+        "tdelay": {"min": 0.0, "max": 1.0}, "vreset": {"min": -10.0},
+        "itail_peak": {"min": -1.0, "max": 1.0}}
 
 
 def plant(ws: Path) -> None:

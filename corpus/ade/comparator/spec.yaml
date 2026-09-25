@@ -12,3 +12,5 @@ measures:
     bounds: {min: 1e-10, max: 6e-10}
   - name: vreset
     bounds: {min: 2.6}
+  - name: itail_peak
+    bounds: {min: 7.0e-4, max: 2.0e-3}
