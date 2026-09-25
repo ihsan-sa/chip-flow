@@ -88,3 +88,21 @@ def test_render_shows_the_newest_cvdp_pass_rate_by_category(tmp_path):
     assert "3 of 20 passed (0.15)" in md and "277 of 302" in md
     assert "| cid003 spec to RTL | 3 | 8 | 0.38 |" in md
     assert "Not the official CVDP harness" in md
+
+
+def test_render_prefers_the_newest_full_cvdp_run_over_a_newer_limited_one(tmp_path):
+    res = tmp_path / "results"
+    (res / "cvdp").mkdir(parents=True)
+
+    def write(name, limit, passed, total):
+        (res / "cvdp" / name).write_text(json.dumps({
+            "mode": "null", "subset_size": 277, "dataset_size": 302, "limit": limit,
+            "overall": {"pass": passed, "total": total, "pass_rate": passed / total}}))
+
+    write("2026-09-24T000000_nonagentic_null.json", None, 0, 277)
+    write("2026-09-24T010000_nonagentic_null.json", 20, 2, 20)
+    md = ladder.render(res, tmp_path / "f")
+    assert "0 of 277 passed" in md and "2 of 20 passed" not in md
+    # with no full run on record, the limited one is shown rather than nothing
+    (res / "cvdp" / "2026-09-24T000000_nonagentic_null.json").unlink()
+    assert "2 of 20 passed" in ladder.render(res, tmp_path / "f")

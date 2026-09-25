@@ -40,7 +40,7 @@ Frozen fixtures under `evals/fixtures/<stage>/<name>/`; `bench.py --compare` fai
 
 ## CVDP
 
-Newest run: `2026-09-24T201239_nonagentic_null.json`, mode `null`: 0 of 20 passed (0.00), from a subset of 261 of 302 problems (limit 20).
+Newest full-subset run: `2026-09-24T214655_nonagentic_null.json`, mode `null`: 0 of 277 passed (0.00), from a subset of 277 of 302 problems (limit none).
 
 Mode `null`: no solutions: each problem's own input files, unchanged. The public v1.1 set ships no reference solutions, so this is a floor plus a harness-reach check (tests_ran), not a model score.
 
@@ -48,9 +48,10 @@ Caveat: Not the official CVDP harness: each problem's docker-compose services ru
 
 | category | passed | total | rate |
 |---|---|---|---|
-| cid002 code completion | 0 | 8 | 0.00 |
-| cid003 spec to RTL | 0 | 6 | 0.00 |
-| cid004 code modification | 0 | 3 | 0.00 |
-| cid016 bug fixing | 0 | 3 | 0.00 |
+| cid002 code completion | 0 | 94 | 0.00 |
+| cid003 spec to RTL | 0 | 77 | 0.00 |
+| cid004 code modification | 0 | 55 | 0.00 |
+| cid007 code improvement | 0 | 16 | 0.00 |
+| cid016 bug fixing | 0 | 35 | 0.00 |
 
 The subset rule, and where the leaderboard figures to read this beside go, are in `evals/cvdp/README.md`.

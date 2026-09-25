@@ -23,7 +23,8 @@ held-out tests pass, and there were no hand edits.
 
 Every scored run is a dated JSON under evals/results/ladder/. ladder.md is
 rebuilt from the newest result per rung, the bench baselines under
-evals/fixtures/, and the newest CVDP result under evals/results/cvdp/, so the
+evals/fixtures/, and the newest full-subset CVDP result under evals/results/cvdp/
+(the newest limited one when there is none), so the
 ade and msde columns fill in as their results land. Exit 0 the rung counts,
 1 it does not (the findings say why), 2 error; `--regen` exits 0.
 """
@@ -179,6 +180,15 @@ def latest(dirpath: Path, pattern: str) -> Path | None:
     return files[-1] if files else None
 
 
+def latest_cvdp(dirpath: Path) -> Path | None:
+    """The newest full-subset CVDP run (no --limit), else the newest run: a
+    --limit smoke run must not stand in for the number the page reports."""
+    files = sorted(dirpath.glob("*.json")) if dirpath.is_dir() else []
+    full = [f for f in files
+            if json.loads(f.read_text(encoding="utf-8")).get("limit") is None]
+    return (full or files or [None])[-1]
+
+
 def latest_ladder_results(results: Path) -> dict:
     out = {}
     for p in sorted((results / "ladder").glob("*.json")) if (results / "ladder").is_dir() else []:
@@ -281,13 +291,15 @@ def render(results: Path, fixtures: Path) -> str:
                          f"{d['composite']} | {gs} | {d.get('written', '-')} |")
 
     lines += ["", "## CVDP", ""]
-    cv = latest(results / "cvdp", "*.json")
+    cv = latest_cvdp(results / "cvdp")
     if cv is None:
         lines.append("No CVDP result yet (`evals/cvdp/run.py`).")
     else:
         c = json.loads(cv.read_text(encoding="utf-8"))
         ov = c.get("overall") or {}
-        lines += [f"Newest run: `{cv.name}`, mode `{c.get('mode', '-')}`: "
+        shown = ("Newest full-subset run" if c.get("limit") is None
+                 else "Newest run (no full-subset run yet)")
+        lines += [f"{shown}: `{cv.name}`, mode `{c.get('mode', '-')}`: "
                   f"{ov.get('pass', '-')} of {ov.get('total', '-')} passed "
                   f"({_fmt(ov.get('pass_rate'))}), from a subset of "
                   f"{c.get('subset_size', '-')} of {c.get('dataset_size', '-')} "
