@@ -232,7 +232,8 @@ def test_full_run_gates_in_phase_order_and_never_forced():
     steps = _steps("full-run")
     gate_seq = [s["gate"] for s in steps if "gate" in s]
     # top_harden is a job: started with jobs.py, never a `gate:` step
-    assert gate_seq == ["split", "cosim", "top_drc", "top_lvs", "release"]
+    assert gate_seq == ["split", "cosim", "top_drc", "top_lvs", "precheck",
+                        "release"]
     assert not any(s.get("gate") in ("harden", "top_harden") for s in steps)
     phases = [s["do"].rsplit(" ", 1)[1] for s in steps
               if "do" in s and "set-phase" in s["do"]]
@@ -291,12 +292,14 @@ def test_split_plans_the_interface_cascade_into_both_nested_runs(tmp_path):
                    for c in cmds), side
     # the router appends every gate interface_edit marks
     gates = [s["gate"] for s in recipe["steps"] if s["kind"] == "gate"]
-    assert gates == ["split", "cosim", "top_harden", "top_drc", "top_lvs", "release"]
+    assert gates == ["split", "cosim", "top_harden", "top_drc", "top_lvs",
+                     "precheck", "release"]
 
 
 def test_interface_edit_still_marks_the_top_gates():
     ec = statelib.load_map()["edit_classes"]["msde"]["interface_edit"]
-    assert set(["split", "cosim", "top_harden", "top_drc", "top_lvs", "release"]) <= set(ec["gates"])
+    assert set(["split", "cosim", "top_harden", "top_drc", "top_lvs",
+                     "precheck", "release"]) <= set(ec["gates"])
 
 
 def test_integrate_and_cosim_are_blocked_until_split_passes(tmp_path):
@@ -338,11 +341,12 @@ def test_gate_lists_in_prose_name_every_msde_gate():
     """Every place the skill lists the msde workspace's gates lists all
     six, top_harden included."""
     msde_gates = list(tr.load_gate_order("msde"))
-    assert msde_gates == ["split", "cosim", "top_harden", "top_drc", "top_lvs", "release"]
+    assert msde_gates == ["split", "cosim", "top_harden", "top_drc", "top_lvs",
+                     "precheck", "release"]
     skill_md = (SKILL / "SKILL.md").read_text(encoding="utf-8")
     full_run = (SKILL / "reference" / "recipes" / "full-run.md").read_text(
         encoding="utf-8")
-    listing = "split, cosim, top_harden, top_drc, top_lvs, release"
+    listing = "split, cosim, top_harden, top_drc, top_lvs, precheck, release"
     assert listing in skill_md
     assert listing in full_run
     for g in msde_gates:

@@ -114,6 +114,10 @@ verbs:
         why: "top/harden's final GDS matches the powered netlist with the
               analog .subckt compared device by device - a macro pin left
               unconnected fails here"
+      - gate: precheck
+        why: "the shuttle's own signoff on top/harden's GDS - pins against
+              the tile template, and on an analog tile metal on exactly the
+              ua pads info.yaml claims"
       - note: "Any top gate failing: the fix loop (SKILL.md). A finding
                whose fix lives inside a nested side goes through that
                side's own router, never an msde fixer editing digital/ or
@@ -188,7 +192,7 @@ verbs:
       analog GDS as a macro (top_harden) and check what came out.
     doc: skills/msde/reference/recipes/integrate.md
     workspace: required
-    gates: [cosim, top_drc, top_lvs]
+    gates: [cosim, top_drc, top_lvs, precheck]
     human_hold: 1
     preconditions: [workspace, gates_fresh:split]
     match:
@@ -218,6 +222,8 @@ verbs:
       - gate: top_lvs
         why: "top/harden's final GDS against the powered netlist, the
               analog block compared device by device"
+      - gate: precheck
+        why: "the shuttle's signoff on the same GDS"
 
   # -------------------------------------------------------------------------
   cosim:

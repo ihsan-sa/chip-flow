@@ -35,7 +35,7 @@ released sides.
 - After the integrator returns: `cosim`, then `top_harden` as a detached
   job (`jobs.py start --gate top_harden --workspace {ws} --skill msde`,
   ten minutes or more, polled with `jobs.py status --workspace {ws}
-  --all`), then `top_drc` and `top_lvs` on the GDS it produced.
+  --all`), then `top_drc`, `top_lvs` and `precheck` on the GDS it produced.
 - The integrator edits only `{ws}/tb/`. A name mismatch or a defect inside
   either side goes back to that side's own router as a finding.
 - A side re-released after a fix needs nothing declared here:
