@@ -1,0 +1,28 @@
+* dac_tile_analog.cir - the analog half of the msde rung dac_tile: a 2-bit
+* R-2R DAC with CMOS reference switches on gf180mcuD 3.3V devices. A subckt
+* LIBRARY, never run on its own - tb/dac_tile_analog_tb.cir instantiates it.
+*
+* Each bit drives a CMOS inverter whose output (dm, dl) drives that bit's
+* ladder leg, so a leg sits at vdd when its bit is LOW: vout is high for
+* bits low (spec.md). The ladder is corpus/ade/r2r_dac's at the correct 2:1
+* ratio (R 10um, 2R 20um, both 2um wide), its foot on the vss pin rather
+* than global node 0.
+*
+* The resistors are ppolyf_u_1k (~1k ohm/sq), not r2r_dac's rm1: rm1 is a
+* metal1 resistor at ~0.09 ohm/sq, so its R is under half an ohm and the
+* inverters' kilo-ohm on-resistance swamps it (simulated: vout under 1mV at
+* every code). At ~5k/10k the pfets' drop still costs 5-10% of full scale,
+* hence pfets twice the nfets' width. The third terminal is the resistor's
+* substrate contact, tied to vss.
+.subckt dac_tile_analog bmsb blsb vout vdd vss
+* reference switches: dm = not bmsb, dl = not blsb
+xmpm dm bmsb vdd vdd pfet_03v3 w=4e-6 l=5e-7
+xmnm dm bmsb vss vss nfet_03v3 w=2e-6 l=5e-7
+xmpl dl blsb vdd vdd pfet_03v3 w=4e-6 l=5e-7
+xmnl dl blsb vss vss nfet_03v3 w=2e-6 l=5e-7
+* the ladder
+xrmsb  dm   vout vss ppolyf_u_1k r_width=2e-6 r_length=1e-5
+xr2lsb vout n0   vss ppolyf_u_1k r_width=2e-6 r_length=2e-5
+xrlsb  dl   n0   vss ppolyf_u_1k r_width=2e-6 r_length=1e-5
+xr2msb n0   vss  vss ppolyf_u_1k r_width=2e-6 r_length=2e-5
+.ends dac_tile_analog

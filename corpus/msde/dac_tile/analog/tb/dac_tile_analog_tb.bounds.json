@@ -1,0 +1,10 @@
+[
+  {"measure": "vout_00", "min": 2.45, "max": 3.25, "severity": "error",
+   "msg": "code 00 drives both ladder legs high: 2.85V at tt, 2.52-3.17V over the default PVT set (the ideal ladder reads 3/4 of vdd less the pfets' drop)"},
+  {"measure": "vout_01", "min": 1.85, "max": 2.52, "severity": "error",
+   "msg": "code 01 drives only the MSB leg high: 2.19V at tt, 1.91-2.46V over PVT"},
+  {"measure": "vout_10", "min": 0.48, "max": 0.72, "severity": "error",
+   "msg": "code 10 drives only the LSB leg high: 0.59V at tt, 0.52-0.66V over PVT"},
+  {"measure": "vout_11", "max": 0.05, "severity": "error",
+   "msg": "code 11 pulls both legs to vss, so vout sits at ground"}
+]

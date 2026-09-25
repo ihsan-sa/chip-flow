@@ -1,0 +1,33 @@
+top: dac_tile_digital
+requirements:
+  - id: REQ-LOAD
+    text: on every rising clk edge with rst_n high, code is loaded from
+      code_in, so bmsb equals code_in[1] and blsb equals code_in[0] one
+      clock later and holds until the next edge
+    check: sim
+  - id: REQ-RESET
+    text: rst_n low forces bmsb and blsb to 0 on the next clock, whatever
+      code_in is
+    check: sim
+ports:
+  clk: {dir: input, width: 1}
+  rst_n: {dir: input, width: 1}
+  code_in: {dir: input, width: 2}
+  bmsb: {dir: output, width: 1}
+  blsb: {dir: output, width: 1}
+clock:
+  # 20ns (50MHz), the same period as tb/.
+  period_ns: 20
+  domains: [clk]
+mutate:
+  size: 8
+  seed: 1
+# Tiny Tapeout GF180 tile pin map (engine/lib/ttlib.py::generate_tt_wrapper).
+# bmsb/blsb are the crossing signals the analog cell reads; they also come
+# out on uio_out here, as sensor_counted's osc_en does.
+tt_pins:
+  clk: clk
+  rst_n: rst_n
+  code_in: ui_in[1:0]
+  bmsb: uio_out[0]
+  blsb: uio_out[1]

@@ -1,0 +1,16 @@
+top: dac_tile_analog
+supply:
+  vdd: 3.3
+devices: [xmpm, xmnm, xmpl, xmnl, xrmsb, xr2lsb, xrlsb, xr2msb]
+corners: default
+# vout is high for bits low: each bit drives its ladder leg through a CMOS
+# inverter (spec.md "What it does").
+measures:
+  - name: vout_00
+    bounds: {min: 2.45, max: 3.25}
+  - name: vout_01
+    bounds: {min: 1.85, max: 2.52}
+  - name: vout_10
+    bounds: {min: 0.48, max: 0.72}
+  - name: vout_11
+    bounds: {max: 0.05}
