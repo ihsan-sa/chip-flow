@@ -18,6 +18,13 @@ every mutant must be killed. A SURVIVOR (a mutant no bench's bounds catch)
 is the fault this gate exists to name: "bounds wide enough to pass
 anything".
 
+Each mutant deck carries the block's own sizing/sizing.yaml, exactly as a
+sim_tt run's deck does. Before any mutant runs, the UNMUTATED design is run
+through the same deck-building against every bench: a baseline that does
+not pass its own bounds (an undefined sizing param, a broken bench) would
+make every mutant "killed" for a reason that has nothing to do with the
+mutation, so the gate refuses (exit 2) instead of scoring it.
+
 Mutated text never touches netlist/ or tb/ on disk - device_mutants()'s
 apply() returns a new string, materialized into a scratch deck under
 log/bench_strength/ exactly like a real corner run's own deck (sim_run.py's
@@ -51,7 +58,8 @@ OUT_SUBDIR = "log/bench_strength"
 def run_mutant(eda_bin, ws: Path, mutant: dict, netlist_path: Path,
               netlist_text: str, bench_path: Path, bench_text: str,
               bounds: list[dict], corner: dict, t_root: Path,
-              nominal_vdd: float, out_dir: Path, timeout: float) -> dict:
+              nominal_vdd: float, out_dir: Path, timeout: float,
+              sizing: dict) -> dict:
     mutated_netlist_text = (mutant["apply"](netlist_text)
                             if mutant["target"] == "netlist" else netlist_text)
     mutated_bench_text = (mutant["apply"](bench_text)
@@ -60,7 +68,8 @@ def run_mutant(eda_bin, ws: Path, mutant: dict, netlist_path: Path,
     scratch_netlist = out_dir / f"{mutant['id']}__{netlist_path.name}"
     scratch_netlist.write_text(mutated_netlist_text, encoding="utf-8")
 
-    subs = sim_run.build_subs(t_root, scratch_netlist, corner, nominal_vdd, {})
+    subs = sim_run.build_subs(t_root, scratch_netlist, corner, nominal_vdd,
+                              sizing)
     # a distinct, filesystem-safe label per (mutant, bench) pair - the
     # mutant id leads so decks never collide the way a shared bench stem
     # would (run_bench_at_corner names its deck file off this).
@@ -91,6 +100,7 @@ def run(argv=None):
 
     netlist_path = sim_run.find_netlist(ws)
     netlist_text = netlist_path.read_text(encoding="utf-8")
+    sizing = sim_run.load_sizing(ws)
     t_root = sim_run.toolchain_root(eda_bin)
 
     out_dir = ws / OUT_SUBDIR
@@ -101,12 +111,23 @@ def run(argv=None):
     for bench_path, bounds_path in sim_run.find_benches(ws):
         bench_text = bench_path.read_text(encoding="utf-8")
         bounds = simlib.load_bounds(bounds_path)
+        baseline = run_mutant(
+            eda_bin, ws, {"id": "baseline", "target": None}, netlist_path,
+            netlist_text, bench_path, bench_text, bounds, tt_corner, t_root,
+            nominal_vdd, out_dir, args.timeout, sizing)
+        if baseline["violations"]:
+            first = baseline["violations"][0].get("msg", "")
+            raise CheckError(
+                f"the unmutated baseline fails {bench_path.name} at tt "
+                f"({len(baseline['violations'])} violation(s), first: "
+                f"{first}) - a mutant kill would mean nothing; make sim_tt "
+                f"pass first (deck: {baseline['deck']})")
         mutants = netlistlib.device_mutants(netlist_text, devices, bench_text)
         for mutant in mutants:
             outcome = run_mutant(
                 eda_bin, ws, mutant, netlist_path, netlist_text, bench_path,
                 bench_text, bounds, tt_corner, t_root, nominal_vdd, out_dir,
-                args.timeout)
+                args.timeout, sizing)
             entry = by_id.setdefault(mutant["id"], {
                 "id": mutant["id"], "ref": mutant["ref"], "kind": mutant["kind"],
                 "describe": mutant["describe"], "killed": False,

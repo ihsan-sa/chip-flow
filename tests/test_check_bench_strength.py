@@ -139,3 +139,37 @@ def test_bias_halved_mutant_is_generated_for_a_declared_source(tmp_path, monkeyp
     assert "size_doubled" in kinds
     assert "type_flipped" in kinds
     assert "connection_removed" in kinds
+
+
+def test_mutant_decks_carry_the_blocks_own_sizing(tmp_path, monkeypatch, capsys):
+    # A block sized by sizing/sizing.yaml leaves its netlist's params
+    # undefined without it: a mutant deck built without the sizing makes
+    # ngspice error out, and that error used to count as a kill.
+    ws = make_ws(tmp_path)
+    (ws / "sizing").mkdir()
+    (ws / "sizing" / "sizing.yaml").write_text("w_probe: 4e-6\n",
+                                               encoding="utf-8")
+    eda = make_reference_check_fake_eda(tmp_path)
+    monkeypatch.setattr(sim_run, "EDA_BIN", eda)
+    code = check_bench_strength.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0, out
+    decks = list((ws / "log" / "bench_strength").glob("*__tt.cir"))
+    mutant_decks = [d for d in decks if "w_probe" in d.read_text()]
+    assert decks and len(mutant_decks) == len(decks)
+
+
+def test_a_baseline_that_does_not_pass_is_a_refusal_not_a_kill(tmp_path, monkeypatch, capsys):
+    # Every mutant "killed" means nothing when the unmutated design fails
+    # the same deck too: the gate refuses instead of passing.
+    ws = make_ws(tmp_path)
+    (ws / "tb" / "mirror_tb.bounds.json").write_text(
+        json.dumps([{"measure": "iout_ratio", "min": 5.0, "max": 6.0}]),
+        encoding="utf-8")
+    eda = make_reference_check_fake_eda(tmp_path)
+    monkeypatch.setattr(sim_run, "EDA_BIN", eda)
+    code = check_bench_strength.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 2, out
+    assert "baseline" in out["error"]
+    assert out.get("remediation")
