@@ -101,6 +101,12 @@ def run_mutant(eda_bin, ws: Path, mutant: dict, netlist_path: Path,
         out_dir, timeout, check="bench_strength")
 
 
+def violation_key(v: dict) -> tuple:
+    """What makes two sim findings the same finding: kind, severity and
+    refs (measure and corner)."""
+    return (v.get("kind"), v.get("severity"), tuple(v.get("refs") or ()))
+
+
 def is_accepted_equivalent(top, mutant_id: str, netlist_text: str):
     """The ACCEPTED_EQUIVALENTS entry mutant_id matches, or None. It matches
     only when the top, the mutant id and the device's own terminals all
@@ -156,13 +162,19 @@ def run(argv=None):
             eda_bin, ws, {"id": "baseline", "target": None}, netlist_path,
             netlist_text, bench_path, bench_text, bounds, tt_corner, t_root,
             nominal_vdd, out_dir, args.timeout, sizing)
-        if baseline["violations"]:
-            first = baseline["violations"][0].get("msg", "")
+        # sim_tt passes with warning-severity bound misses, so only an
+        # error refuses; a warning the baseline already has cannot count
+        # as a kill below, or every mutant would be "killed" by it.
+        base_errors = [v for v in baseline["violations"]
+                       if v.get("severity") == "error"]
+        if base_errors:
+            first = base_errors[0].get("msg", "")
             raise CheckError(
                 f"the unmutated baseline fails {bench_path.name} at tt "
-                f"({len(baseline['violations'])} violation(s), first: "
+                f"({len(base_errors)} error(s), first: "
                 f"{first}) - a mutant kill would mean nothing; make sim_tt "
                 f"pass first (deck: {baseline['deck']})")
+        base_keys = {violation_key(v) for v in baseline["violations"]}
         mutants = netlistlib.device_mutants(netlist_text, devices, bench_text)
         for mutant in mutants:
             outcome = run_mutant(
@@ -173,7 +185,9 @@ def run(argv=None):
                 "id": mutant["id"], "ref": mutant["ref"], "kind": mutant["kind"],
                 "describe": mutant["describe"], "killed": False,
                 "benches_tested": []})
-            entry["killed"] = entry["killed"] or bool(outcome["violations"])
+            entry["killed"] = entry["killed"] or any(
+                violation_key(v) not in base_keys
+                for v in outcome["violations"])
             entry["benches_tested"].append(bench_path.name)
 
     if not by_id:

@@ -175,6 +175,34 @@ def test_a_baseline_that_does_not_pass_is_a_refusal_not_a_kill(tmp_path, monkeyp
     assert out.get("remediation")
 
 
+def test_a_baseline_warning_neither_refuses_nor_kills(tmp_path, monkeypatch, capsys):
+    # sim_tt passes with a warning-severity miss, so bench_strength must
+    # too; and that same warning in a mutant is not a kill.
+    ws = make_ws(tmp_path)
+    (ws / "tb" / "mirror_tb.bounds.json").write_text(json.dumps([
+        {"measure": "iout_ratio", "min": 1.8, "max": 2.2},
+        {"measure": "iout_ratio", "min": 5.0, "max": 6.0,
+         "severity": "warning"}]), encoding="utf-8")
+    eda = make_reference_check_fake_eda(tmp_path)
+    monkeypatch.setattr(sim_run, "EDA_BIN", eda)
+    code = check_bench_strength.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0, out
+
+
+def test_a_mutant_that_only_repeats_the_baseline_warning_survives(tmp_path, monkeypatch, capsys):
+    ws = make_ws(tmp_path)
+    (ws / "tb" / "mirror_tb.bounds.json").write_text(json.dumps([
+        {"measure": "iout_ratio", "min": -1e9, "max": 1e9},
+        {"measure": "iout_ratio", "min": 5.0, "max": 6.0,
+         "severity": "warning"}]), encoding="utf-8")
+    eda = make_reference_check_fake_eda(tmp_path)
+    monkeypatch.setattr(sim_run, "EDA_BIN", eda)
+    code = check_bench_strength.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 1, out
+
+
 COMPARATOR_SPEC = """\
 top: strongarm_comparator
 supply: {vdd: 3.3}
