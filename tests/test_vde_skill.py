@@ -334,3 +334,13 @@ def test_real_vde_gates_not_still_called_stubs_after_m4():
                 assert not re.search(rf"\b{re.escape(gate)}\b", line), (
                     f"{path.name}: real gate {gate!r} still described as "
                     f"a stub / told to wait for M4: {line!r}")
+
+
+def test_some_p1_p2_role_is_told_to_write_tt_pins():
+    # harden refuses a spec.yaml with no tt_pins (check_harden.py); the
+    # spec-writer defers them to the architect, so the architect must be
+    # told to write them - a live counter8 run reached P6 without any.
+    text = (SKILL / "agents" / "architect.md").read_text(encoding="utf-8")
+    assert "tt_pins" in text
+    spec_writer = (SKILL / "agents" / "spec-writer.md").read_text(encoding="utf-8")
+    assert "tt_pins" in spec_writer and "architect" in spec_writer
