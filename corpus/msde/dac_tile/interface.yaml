@@ -1,0 +1,26 @@
+# interface.yaml - the splitter's own output (docs/design.md section 5):
+# every crossing signal between dac_tile's digital and analog sides, with
+# its direction, level, domain and width. `split` (engine/scripts/
+# check_split.py) checks digital_spec.yaml and analog_spec.yaml each carry
+# the same entries.
+#
+# direction is a2d (analog drives digital) or d2a (digital drives analog).
+version: 1
+signals:
+  - name: bmsb
+    direction: d2a
+    level: cmos_3v3
+    domain: clk_sys
+    width: 1
+    load: "DAC MSB inverter input"
+  - name: blsb
+    direction: d2a
+    level: cmos_3v3
+    domain: clk_sys
+    width: 1
+    load: "DAC LSB inverter input"
+# Analog-cell pins brought out to the Tiny Tapeout analog pads ua[k], read
+# by check_top_harden: the DAC's output leaves the chip on ua[0], never
+# through the digital side.
+ua_pins:
+  vout: 0

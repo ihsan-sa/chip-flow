@@ -202,3 +202,85 @@ def test_load_harden_override_absent_is_empty_and_bad_json_is_refused(tmp_path):
     bad.write_text("{not json", encoding="utf-8")
     with pytest.raises(ttlib.TTError, match="not valid JSON"):
         ttlib.load_harden_override(bad)
+
+
+# ---------------------------------------------------------------------------
+# analog tile (tt-analog-tile): macro pins sent to the ua pads
+# ---------------------------------------------------------------------------
+
+def _analog_spec(ua):
+    return {"top": "t", "ports": {"a": {"dir": "input", "width": 1},
+                                  "b": {"dir": "output", "width": 1}},
+            "tt_pins": {"a": "ui_in[0]"},
+            "macros": [{"cell": "c", "instance": "u_analog",
+                        "pins": {"b": "b"}, "ua": ua}]}
+
+
+def test_analog_template_values_come_from_the_vendored_files():
+    assert ttlib.analog_default_tiles() == "1x2"
+    assert ttlib.analog_pin_limit() == 6
+    assert ttlib.pin_budget("1x2", analog=True)["ua"] == 8
+    assert "ua" not in ttlib.pin_budget()
+
+
+def test_ua_pins_make_the_spec_an_analog_tile():
+    spec = _analog_spec({"vout": 0})
+    assert ttlib.is_analog(spec) and ttlib.spec_tiles(spec) == "1x2"
+    assert ttlib.validate_tt_pins(spec) == []
+    assert ttlib.def_template_path("1x2", analog=True).is_file()
+    digital = _analog_spec({})
+    assert not ttlib.is_analog(digital)
+    assert ttlib.spec_tiles(digital) == ttlib.DEFAULT_TILES
+
+
+def test_wrapper_wires_ua_pins_and_digital_wrapper_has_no_ua():
+    text = ttlib.generate_tt_wrapper(_analog_spec({"vout": 0}))
+    assert "inout  wire [7:0] ua," in text
+    assert ".vout(ua[0])" in text and ".b(w_b)" in text
+    assert "ua" not in ttlib.generate_tt_wrapper(_analog_spec({})).split(
+        "u_analog")[0]
+
+
+def test_ua_gap_duplicate_and_overflow_are_problems():
+    gap = ttlib.validate_tt_pins(_analog_spec({"vout": 1}))
+    assert any("no gap" in p for p in gap)
+    spec = _analog_spec({"vout": 0})
+    spec["macros"].append({"cell": "d", "instance": "u2", "pins": {},
+                           "ua": {"x": 0}})
+    assert any("claimed by both" in p for p in ttlib.validate_tt_pins(spec))
+    many = _analog_spec({f"p{k}": k for k in range(7)})
+    assert any("allows 6" in p for p in ttlib.validate_tt_pins(many))
+    bound = _analog_spec({"b": 0})
+    assert any("may not also go to a ua pad" in p
+               for p in ttlib.validate_tt_pins(bound))
+
+
+def test_no_analog_template_for_a_1x1_tile():
+    spec = _analog_spec({"vout": 0})
+    spec["tiles"] = "1x1"
+    assert any("no vendored DEF template" in p
+               for p in ttlib.validate_tt_pins(spec))
+
+
+def test_harden_config_uses_the_analog_def(tmp_path):
+    spec = _analog_spec({"vout": 0})
+    spec["macros"][0].update(location=[10, 10], power={"vdd": "vdd",
+                             "vss": "vss"}, files={k: "/x" for k in
+                                                  ("gds", "lef", "vh", "spice")})
+    cfg = ttlib.harden_config(spec, [], tmp_path / "w.v", tmp_path)
+    assert cfg["FP_DEF_TEMPLATE"].endswith("analog/tt_analog_1x2.def")
+    assert cfg["DIE_AREA"] == ttlib.tile_die_area("1x2")
+
+
+def test_info_yaml_claims_exactly_the_used_ua_pins(tmp_path):
+    import yaml
+    ttlib.write_info_yaml(_analog_spec({"vout": 0, "vref": 1}),
+                          tmp_path / "info.yaml")
+    data = yaml.safe_load((tmp_path / "info.yaml").read_text())
+    assert data["project"]["analog_pins"] == 2
+    assert data["project"]["tiles"] == "1x2"
+    assert data["pinout"] == {"ua[0]": "vout", "ua[1]": "vref"}
+    ttlib.write_info_yaml(_analog_spec({}), tmp_path / "d.yaml")
+    digital = yaml.safe_load((tmp_path / "d.yaml").read_text())
+    assert "analog_pins" not in digital["project"]
+    assert digital["project"]["tiles"] == ttlib.DEFAULT_TILES

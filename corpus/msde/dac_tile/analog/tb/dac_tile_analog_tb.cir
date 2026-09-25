@@ -1,0 +1,29 @@
+* dac_tile_analog_tb.cir - the 2-bit DAC's bench. {{PDK}}/{{CORNER}}/
+* {{RES_CORNER}}/{{TEMP_C}}/{{VDD}}/{{NETLIST}}/{{SIZING}} are sim_run.py's
+* placeholders (engine/lib/simlib.py:materialize). {{RES_CORNER}} selects
+* the PDK's separate `.lib res_<corner>` section the ppolyf_u_1k ladder
+* resistors need (corpus/ade/r2r_dac/tb/r2r_dac_tb.cir has the same line).
+*
+* The four codes are held 100ns each, in the order 00, 01, 10, 11
+* (bmsb blsb), and vout is read 10ns before each change. vout drives 1pF,
+* an analog pad's input plus its route: the ladder's ~5k output
+* resistance settles that in ~5ns.
+.include '{{PDK}}/libs.tech/ngspice/design.spice'
+.lib '{{PDK}}/libs.tech/ngspice/sm141064.spice' {{CORNER}}
+.lib '{{PDK}}/libs.tech/ngspice/sm141064.spice' {{RES_CORNER}}
+.temp {{TEMP_C}}
+.include '{{NETLIST}}'
+{{SIZING}}
+
+vdd_src vdd 0 {{VDD}}
+vbmsb bmsb 0 PWL(0 0 199.9n 0 200n {{VDD}} 400n {{VDD}})
+vblsb blsb 0 PWL(0 0 99.9n 0 100n {{VDD}} 199.9n {{VDD}} 200n 0 299.9n 0 300n {{VDD}} 400n {{VDD}})
+xdut bmsb blsb vout vdd 0 dac_tile_analog
+cload vout 0 1p
+
+.tran 1n 400n
+.measure tran vout_00 FIND v(vout) AT=90n
+.measure tran vout_01 FIND v(vout) AT=190n
+.measure tran vout_10 FIND v(vout) AT=290n
+.measure tran vout_11 FIND v(vout) AT=390n
+.end

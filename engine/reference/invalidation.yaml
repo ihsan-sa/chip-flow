@@ -136,6 +136,7 @@ gate_inputs:
     top_harden: [digital_rtl, analog_layout]
     top_drc:  [top_gds]
     top_lvs:  [top_gds, analog_layout]
+    precheck: [top_gds, interface]
     release:  [interface, digital_rtl, analog_layout]
 
 # Edit-class taxonomy -> what an edit of that class makes stale (docs/
@@ -208,7 +209,7 @@ edit_classes:
     spec_edit:
       mutates: [spec_yaml, spec_md]
       stale_artifacts: []
-      gates: [split, cosim, top_harden, top_drc, top_lvs, release]
+      gates: [split, cosim, top_harden, top_drc, top_lvs, precheck, release]
       human_hold: 2
     interface_edit:
       # "marks the top gates and both nested runs' spec_edit" (1.6). The
@@ -217,5 +218,5 @@ edit_classes:
       # top-level gates a plain `state.py edit` can reach on its own.
       mutates: [interface]
       stale_artifacts: []
-      gates: [split, cosim, top_harden, top_drc, top_lvs, release]
+      gates: [split, cosim, top_harden, top_drc, top_lvs, precheck, release]
       human_hold: 2

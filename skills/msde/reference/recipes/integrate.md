@@ -35,7 +35,7 @@ released sides.
 - After the integrator returns: `cosim`, then `top_harden` as a detached
   job (`jobs.py start --gate top_harden --workspace {ws} --skill msde`,
   ten minutes or more, polled with `jobs.py status --workspace {ws}
-  --all`), then `top_drc` and `top_lvs` on the GDS it produced.
+  --all`), then `top_drc`, `top_lvs` and `precheck` on the GDS it produced.
 - The integrator edits only `{ws}/tb/`. A name mismatch or a defect inside
   either side goes back to that side's own router as a finding.
 - A side re-released after a fix needs nothing declared here:
@@ -68,5 +68,7 @@ would otherwise read as a second top cell - nothing for the agent to do.
 is missing, when an interface signal is not both a digital port and an
 analog pin, or when the analog cell's remaining pins are not one supply
 and one ground. A macro larger than the tile is a `macro_too_large`
-finding, and no harden runs. Every one of those is a side's fix.
+finding, and a `ua_pins` map off the analog template (a gap, a pad used
+twice, too many pads) is a `ua_pin_off_template` finding; neither runs a
+harden. Every one of those is a side's fix.
 `docs/spikes/macro_harden.md` has how the recipe was found.

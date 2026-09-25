@@ -48,6 +48,18 @@ check_top_harden.py for an msde block's assembled top, never by hand:
 A port a macro pin binds is wired to that macro inside the wrapper, so it
 takes NO tt_pins entry (and may not have one). Power pins go to VPWR/VGND
 through PDN_MACRO_CONNECTIONS, never through the wrapper.
+
+Analog tile (tt-analog-tile): a macro entry may also carry
+        ua: {<macro pin>: <k>}          # the pin goes out on analog pad ua[k]
+and the spec may carry `tiles:`. A spec with any `ua` pin is an ANALOG tile:
+its pin template is the vendored `def/analog/tt_analog_<tiles>.def` (the
+digital pins plus ua[7:0] on Metal4), `tiles` defaults to the vendored
+ttgf-analog-template's own `tiles` value, the wrapper gains the template's
+`inout wire [7:0] ua` port with each pin wired straight to ua[k], and
+info.yaml carries `analog_pins` and the ua pinout that precheck.py's
+analog pin check reads. The ua indices must be 0..n-1 with n no more than
+the template allows: precheck fails any ua[k] below analog_pins that has
+no metal on it.
 """
 from __future__ import annotations
 
@@ -60,6 +72,7 @@ from pathlib import Path
 
 TT_DIR = Path(__file__).resolve().parents[1] / "reference" / "tt"
 TEMPLATE_DIR = TT_DIR / "ttgf-verilog-template"
+ANALOG_TEMPLATE_INFO_YAML = TT_DIR / "ttgf-analog-template" / "info.yaml"
 SUPPORT_DIR = TT_DIR / "tt-support-tools"
 PRECHECK_DIR = SUPPORT_DIR / "precheck"
 TEMPLATE_CONFIG = TEMPLATE_DIR / "src" / "config.json"
@@ -67,6 +80,7 @@ TEMPLATE_INFO_YAML = TEMPLATE_DIR / "info.yaml"
 TECH_PY = SUPPORT_DIR / "tech.py"
 TILE_SIZES_YAML = SUPPORT_DIR / "tech" / "gf180mcuD" / "tile_sizes.yaml"
 DEF_DIR = SUPPORT_DIR / "tech" / "gf180mcuD" / "def"
+ANALOG_DEF_DIR = DEF_DIR / "analog"
 
 PDK_NAME = "gf180mcuD"
 DEFAULT_TILES = "1x1"
@@ -93,21 +107,26 @@ class TTError(RuntimeError):
     """A tt_pins mapping, or the vendored template itself, is unusable."""
 
 
-def def_template_path(tiles: str = DEFAULT_TILES) -> Path:
+def def_template_path(tiles: str = DEFAULT_TILES,
+                      analog: bool = False) -> Path:
+    if analog:
+        return ANALOG_DEF_DIR / f"tt_analog_{tiles}.def"
     return DEF_DIR / f"tt_block_{tiles}_pgvdd.def"
 
 
-def pin_budget(tiles: str = DEFAULT_TILES) -> dict[str, int]:
+def pin_budget(tiles: str = DEFAULT_TILES,
+               analog: bool = False) -> dict[str, int]:
     """{'ui_in': 8, 'uo_out': 8, 'uio_in': 8, 'uio_out': 8} - the bus widths
     the vendored DEF template's own PINS section declares (its highest
-    `<bus>[N]` index + 1 each), never a hardcoded 8. Raises TTError if the
-    template is missing or declares no bits for a bus this module wires."""
-    path = def_template_path(tiles)
+    `<bus>[N]` index + 1 each), never a hardcoded 8; an analog template
+    adds 'ua'. Raises TTError if the template is missing or declares no
+    bits for a bus this module wires."""
+    path = def_template_path(tiles, analog)
     if not path.is_file():
         raise TTError(f"no vendored DEF template at {path} (tiles={tiles!r})")
     text = path.read_text(encoding="utf-8")
     widths: dict[str, int] = {}
-    for bus in _ALL_BUSES:
+    for bus in (*_ALL_BUSES, "ua") if analog else _ALL_BUSES:
         idxs = [int(m.group(1)) for m in
                 re.finditer(rf"-\s+{bus}\[(\d+)\]\s+\+\s+NET", text)]
         if not idxs:
@@ -125,6 +144,82 @@ def tile_die_area(tiles: str = DEFAULT_TILES) -> str:
         raise TTError(f"{TILE_SIZES_YAML}: no entry for tiles={tiles!r} "
                       f"(known: {sorted(data)})")
     return data[tiles]
+
+
+def _analog_template_field(pattern: str, what: str) -> str:
+    if not ANALOG_TEMPLATE_INFO_YAML.is_file():
+        raise TTError(f"no vendored analog template at "
+                      f"{ANALOG_TEMPLATE_INFO_YAML}")
+    m = re.search(pattern, ANALOG_TEMPLATE_INFO_YAML.read_text(
+        encoding="utf-8"), re.MULTILINE)
+    if not m:
+        raise TTError(f"{ANALOG_TEMPLATE_INFO_YAML}: no {what}")
+    return m.group(1)
+
+
+def analog_default_tiles() -> str:
+    """The analog template's own `tiles` value (its smallest tile)."""
+    return _analog_template_field(r'^\s*tiles:\s*"([^"]+)"', "tiles")
+
+
+def analog_pin_limit() -> int:
+    """How many ua pins a project may use, from the analog template's
+    `analog_pins: ... # Valid values: 0 to <n>` line."""
+    return int(_analog_template_field(
+        r"^\s*analog_pins:.*#\s*Valid values:\s*0 to (\d+)",
+        "analog_pins limit"))
+
+
+def ua_pins(spec: dict) -> dict[str, int]:
+    """{macro pin: k} for every macro pin the spec sends to ua[k]."""
+    out: dict[str, int] = {}
+    for m in spec.get("macros") or []:
+        out.update(m.get("ua") or {})
+    return out
+
+
+def is_analog(spec: dict) -> bool:
+    return bool(ua_pins(spec))
+
+
+def spec_tiles(spec: dict) -> str:
+    """The spec's `tiles`, else the digital (1x1) or analog template's
+    default."""
+    return spec.get("tiles") or (analog_default_tiles() if is_analog(spec)
+                                 else DEFAULT_TILES)
+
+
+def validate_ua_pins(spec: dict, tiles: str) -> list[str]:
+    """Problems with the macros' `ua` maps: each k an integer, used once,
+    the set exactly 0..n-1 (precheck.py fails an unwired ua[k] below
+    analog_pins) and n within the template's limit."""
+    problems: list[str] = []
+    seen: dict[int, str] = {}
+    for m in spec.get("macros") or []:
+        for pin, k in (m.get("ua") or {}).items():
+            if pin in (m.get("pins") or {}):
+                problems.append(f"macro pin {pin!r} is bound to a port and "
+                                "may not also go to a ua pad")
+            if not isinstance(k, int) or isinstance(k, bool) or k < 0:
+                problems.append(f"macro pin {pin!r}: ua index {k!r} is not "
+                                "a non-negative integer")
+                continue
+            if k in seen:
+                problems.append(f"ua[{k}] is claimed by both {seen[k]!r} "
+                                f"and {pin!r}")
+            seen[k] = pin
+    if not seen:
+        return problems
+    limit = min(analog_pin_limit(), pin_budget(tiles, True)["ua"])
+    n = len(seen)
+    if n > limit:
+        problems.append(f"{n} ua pins used, the analog tile allows {limit}")
+    gaps = sorted(set(range(n)) - set(seen))
+    if gaps:
+        problems.append(f"ua pins must be ua[0] to ua[{n - 1}] with no gap "
+                        f"(precheck fails an unwired pad below analog_pins); "
+                        f"missing {['ua[%d]' % g for g in gaps]}")
+    return problems
 
 
 def load_template_config() -> dict:
@@ -193,7 +288,7 @@ def macro_bound_ports(spec: dict) -> dict[str, tuple[str, str]]:
     return bound
 
 
-def validate_tt_pins(spec: dict, tiles: str = DEFAULT_TILES) -> list[str]:
+def validate_tt_pins(spec: dict, tiles: str | None = None) -> list[str]:
     """Plain-English problem strings (empty = clean) - "tt_pins fit the
     tile" (gates.yaml's spec_lint description): every spec.yaml port is
     mapped, every mapping matches the port's own direction and width, an
@@ -204,7 +299,12 @@ def validate_tt_pins(spec: dict, tiles: str = DEFAULT_TILES) -> list[str]:
     tt_pins = spec.get("tt_pins") or {}
     if not tt_pins:
         return ["spec.yaml has no non-empty 'tt_pins' mapping"]
-    budget = pin_budget(tiles)
+    tiles = tiles or spec_tiles(spec)
+    try:
+        budget = pin_budget(tiles, is_analog(spec))
+    except TTError as exc:
+        return [str(exc)]
+    problems += validate_ua_pins(spec, tiles)
     claimed: dict[str, set[int]] = {bus: set() for bus in _BUS_KIND}
     bound = macro_bound_ports(spec)
     for port in sorted(set(bound) - set(ports)):
@@ -275,7 +375,7 @@ def wrapper_name(spec: dict) -> str:
     return top if top.startswith("tt_um_") else f"tt_um_{top}"
 
 
-def generate_tt_wrapper(spec: dict, tiles: str = DEFAULT_TILES) -> str:
+def generate_tt_wrapper(spec: dict, tiles: str | None = None) -> str:
     """The Verilog source of `tt_um_<top>.v`: the fixed TT interface,
     instantiating spec['top'] with every port wired per tt_pins. Raises
     TTError (never emits invalid Verilog) when validate_tt_pins() would
@@ -333,7 +433,8 @@ def generate_tt_wrapper(spec: dict, tiles: str = DEFAULT_TILES) -> str:
         pieces = [out_bits[bus].get(b, "1'b0") for b in reversed(range(n_bits))]
         return "{" + ", ".join(pieces) + "}"
 
-    budget = pin_budget(tiles)
+    tiles = tiles or spec_tiles(spec)
+    budget = pin_budget(tiles, is_analog(spec))
     unused_ui = [f"ui_in[{b}]" for b in range(budget["ui_in"])
                 if b not in used_ui_bits]
     unused_uio_in = [f"uio_in[{b}]" for b in range(budget["uio_in"])
@@ -357,6 +458,8 @@ def generate_tt_wrapper(spec: dict, tiles: str = DEFAULT_TILES) -> str:
         "    input  wire [7:0] uio_in,",
         "    output wire [7:0] uio_out,",
         "    output wire [7:0] uio_oe,",
+        *([f"    inout  wire [{budget['ua'] - 1}:0] ua,"]
+          if is_analog(spec) else []),
         "    input  wire       ena,",
         "    input  wire       clk,",
         "    input  wire       rst_n",
@@ -369,8 +472,10 @@ def generate_tt_wrapper(spec: dict, tiles: str = DEFAULT_TILES) -> str:
         "",
         *[line for m in spec.get("macros") or [] for line in (
             f"  {m['cell']} {m['instance']} (",
-            ",\n".join(f"      .{pin}(w_{port})"
-                       for pin, port in sorted(m["pins"].items())),
+            ",\n".join([*(f"      .{pin}(w_{port})"
+                         for pin, port in sorted(m["pins"].items())),
+                       *(f"      .{pin}(ua[{k}])"
+                         for pin, k in sorted((m.get("ua") or {}).items()))]),
             "  );",
             "")],
         f"  assign uo_out = {bus_expr('uo_out', budget['uo_out'])};",
@@ -390,7 +495,7 @@ def generate_tt_wrapper(spec: dict, tiles: str = DEFAULT_TILES) -> str:
 
 def generate_glsim_harness(spec: dict, dut_instance: str = "dut",
                            sdf_path: Path | str | None = None,
-                           tiles: str = DEFAULT_TILES) -> str:
+                           tiles: str | None = None) -> str:
     """The `glsim` gate's own harness (docs/design.md 1.5's `glsim` row): the
     INVERSE of generate_tt_wrapper - a module named exactly `spec['top']`,
     with `spec['ports']`'s own port list (so tb/*.py, written against the
@@ -410,7 +515,8 @@ def generate_glsim_harness(spec: dict, dut_instance: str = "dut",
     dut_module = wrapper_name(spec)
     ports = spec.get("ports") or {}
     tt_pins = spec["tt_pins"]
-    budget = pin_budget(tiles)
+    tiles = tiles or spec_tiles(spec)
+    budget = pin_budget(tiles, is_analog(spec))
 
     port_decls: list[str] = []
     body: list[str] = []
@@ -575,7 +681,7 @@ def load_harden_override(path: Path) -> dict:
 
 
 def harden_config(spec: dict, rtl_files: list[Path], wrapper_path: Path,
-                  pdk_root: Path, tiles: str = DEFAULT_TILES,
+                  pdk_root: Path, tiles: str | None = None,
                   override: dict | None = None) -> dict:
     """The merged LibreLane config.json: the vendored template's own
     defaults, overlaid with this design's DESIGN_NAME/VERILOG_FILES/
@@ -596,13 +702,14 @@ def harden_config(spec: dict, rtl_files: list[Path], wrapper_path: Path,
                       f"{HARDEN_OVERRIDE_NAME}")
     config = load_template_config()
     tech = gf180_tech()
+    tiles = tiles or spec_tiles(spec)
     clock = spec.get("clock") or {}
     period = clock.get("period_ns")
     config.update({
         "DESIGN_NAME": wrapper_name(spec),
         "VERILOG_FILES": [str(p) for p in [*rtl_files, wrapper_path]],
         "DIE_AREA": tile_die_area(tiles),
-        "FP_DEF_TEMPLATE": str(def_template_path(tiles)),
+        "FP_DEF_TEMPLATE": str(def_template_path(tiles, is_analog(spec))),
         "VDD_PIN": "VPWR",
         "GND_PIN": "VGND",
         "RT_MAX_LAYER": tech.project_top_metal_layer,
@@ -687,15 +794,21 @@ def stdcell_liberty_path(corner: str, pdk_root: Path) -> Path:
     return Path(pdk_root) / PDK_NAME / value[len(prefix):]
 
 
-def write_info_yaml(spec: dict, dest: Path, tiles: str = DEFAULT_TILES) -> None:
+def write_info_yaml(spec: dict, dest: Path, tiles: str | None = None) -> None:
     """A minimal info.yaml at the workspace's harden/ root - precheck.py
     walks up from the GDS looking for exactly this file (main(): `while not
     os.path.exists(f"{yaml_dir}/info.yaml")`), and reads `top_module`/
-    `tiles` from it, nothing else this corpus needs."""
+    `tiles` from it - and, for an analog tile, `analog_pins` and each used
+    ua[k]'s pinout line, which its analog pin check reads."""
     import yaml
-    data = {"project": {"title": spec.get("top", ""), "top_module":
-                        wrapper_name(spec), "tiles": tiles},
-            "pinout": {}}
+    ua = ua_pins(spec)
+    project = {"title": spec.get("top", ""), "top_module":
+               wrapper_name(spec), "tiles": tiles or spec_tiles(spec)}
+    if ua:
+        project["analog_pins"] = len(ua)
+    data = {"project": project,
+            "pinout": {f"ua[{k}]": pin for pin, k in sorted(
+                ua.items(), key=lambda item: item[1])}}
     dest.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 
 

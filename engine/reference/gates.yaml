@@ -337,6 +337,16 @@ gates:
       max_count: 0
       fault: "a macro pin left unconnected"
       description: "Match."
+    precheck:
+      # the shuttle's own signoff (check_precheck.py) on the chip top at
+      # top/; an analog tile is checked against the analog pin template and
+      # for metal on exactly the ua pads its info.yaml claims.
+      phase: P3
+      tool: precheck
+      fail_severities: [error]
+      max_count: 0
+      fault: "an analog pad info.yaml claims with nothing wired to it"
+      description: "Passes."
     release:
       phase: P4
       tool: release

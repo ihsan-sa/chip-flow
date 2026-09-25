@@ -3,6 +3,13 @@
 
     check_precheck.py --workspace DIR [--out FILE]
 
+DIR is a vde block workspace, or an msde one: there the chip is the top
+that check_top_harden.py assembled and hardened at DIR/top/, so the gate
+runs on that. An analog tile's info.yaml carries `analog_pins` and the ua
+pinout (ttlib.write_info_yaml), so precheck.py also checks it against the
+vendored analog pin template and that each used ua pad, and no other, has
+metal on it.
+
 Runs the vendored, unmodified tt-support-tools `precheck.py`
 (engine/reference/tt/VENDORED.md has the pinned commit and the one
 integration shim) against the hardened GDS - the signoff check the shuttle
@@ -49,6 +56,7 @@ ENGINE = SCRIPTS.parent
 REPO = ENGINE.parent
 sys.path.insert(0, str(ENGINE / "lib"))
 import checklib  # noqa: E402
+import check_top_harden  # noqa: E402
 import speclib  # noqa: E402
 import ttlib  # noqa: E402
 from checklib import CheckError  # noqa: E402
@@ -132,6 +140,10 @@ def run(argv=None):
     args = ap.parse_args(argv)
 
     ws = Path(args.workspace).resolve()
+    state = ws / "state.json"
+    if state.is_file() and checklib.load_json(
+            state, "state.json").get("skill") == "msde":
+        ws = ws / check_top_harden.TOP_DIR
     spec = speclib.load_spec(ws / "spec" / "spec.yaml")
     top = ttlib.wrapper_name(spec)
     final_dir = ws / "harden" / "runs" / "run" / "final"

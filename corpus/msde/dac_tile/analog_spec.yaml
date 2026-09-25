@@ -1,0 +1,19 @@
+# analog_spec.yaml - the analog side's own declared copy of the crossing
+# signals interface.yaml names (docs/design.md section 5: "two specs
+# carrying the same entries"). Stands in for a real nested /ade block's own
+# spec.yaml `interface:` section (engine/scripts/check_split.py's own
+# docstring).
+top: dac_tile_analog
+interface:
+  - name: bmsb
+    direction: d2a
+    level: cmos_3v3
+    domain: clk_sys
+    width: 1
+    load: "DAC MSB inverter input"
+  - name: blsb
+    direction: d2a
+    level: cmos_3v3
+    domain: clk_sys
+    width: 1
+    load: "DAC LSB inverter input"
