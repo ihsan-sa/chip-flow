@@ -61,11 +61,11 @@ def test_vde_adds_its_own_verbs():
          "optimise"])
 
 
-def test_ade_adds_its_own_m8_verbs():
+def test_ade_adds_its_own_m8_and_m9_verbs():
     tasks = tr.load_tasks("ade")
     assert sorted(tasks["verbs"]) == sorted(
         ["full-run", "review", "fix-finding", "resume", "release", "learn",
-         "spec", "resize", "add-corner", "optimise"])
+         "spec", "resize", "add-corner", "optimise", "layout"])
 
 
 def test_gates_and_holds_are_never_restated_in_the_recipe():
