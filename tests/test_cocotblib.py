@@ -69,3 +69,27 @@ def test_run_cocotb_without_timeout_is_unaffected(tmp_path, monkeypatch):
         ["test_top"], tmp_path / "results.xml")
     assert calls == ["build", "test"]
     assert result == tmp_path / "results.xml"
+
+
+def test_stacked_req_lines_all_tag_the_test(tmp_path):
+    """ece298a round 2, breakage 11: two `# req:` lines stacked above one
+    test used to keep only the last. Both count now; a code line between a
+    tag and the next test still drops the tag."""
+    (tmp_path / "test_x.py").write_text(
+        "import cocotb\n\n"
+        "# req: R1\n"
+        "# covers the reset path too\n"
+        "# req: R2 R3\n"
+        "@cocotb.test()\n"
+        "async def test_stacked(dut):\n"
+        "    pass\n\n"
+        "# req: R9\n"
+        "X = 1\n"
+        "# req: R4\n"
+        "@cocotb.test()\n"
+        "async def test_single(dut):\n"
+        "    pass\n",
+        encoding="utf-8")
+    tags = cocotblib.scan_requirement_tags(tmp_path)
+    assert tags == {"test_stacked": {"R1", "R2", "R3"},
+                    "test_single": {"R4"}}
