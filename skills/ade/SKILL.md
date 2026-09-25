@@ -274,9 +274,10 @@ layout-fixer read `netlist/` and `sizing/` and edit only `layout/`.
   ngspice ignores reads as a survivor and routes to the bench-writer. If a
   survivor's measure equals the baseline exactly, suspect the mutation,
   not the bench, and escalate it as an engine defect.
-- **`lvs` sizes the reference from the `.subckt` line only.** Sizing
-  carried on `.param` lines is not substituted, and an empty
-  `facts.sizing_applied` still passes, so after a resize LVS can compare
-  against the netlist's defaults. The H2 reviewer checks
-  `sizing_applied` against sizing.yaml.
+- **`lvs` sizes the reference only where the netlist names a sizing
+  parameter.** It rewrites `.subckt` defaults and `.param` assignments
+  and defines a `{name}` the bench would supply, but a W/L written as a
+  literal is compared as written, and an empty `facts.sizing_applied`
+  still passes. The H2 reviewer checks `sizing_applied` against
+  sizing.yaml.
 - **The bandgap's layout row may stay red** (docs/design.md "### M9.").
