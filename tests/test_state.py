@@ -384,6 +384,28 @@ def test_snapshot_and_restore_roundtrip(tmp_path):
     assert (ws / "rtl" / "counter8.v").read_text(encoding="utf-8") == "v1\n"
 
 
+def test_snapshot_resolves_the_workspace_from_state_json_not_cwd(
+        tmp_path, monkeypatch):
+    """The spi_fifo /vde run: a workspace init'd by a relative path, then
+    snapshotted from a different cwd, wrote an EMPTY snapshot into a stray
+    tree under that cwd. The snapshot must land in the workspace and hold
+    the files, wherever it is run from."""
+    root = tmp_path / "run"
+    (root / "blocks").mkdir(parents=True)
+    monkeypatch.chdir(root)
+    state_mod.State.init(Path("blocks/b"), "vde", "counter8")
+    (root / "blocks/b/rtl/counter8.v").write_text("v1\n", encoding="utf-8")
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    st = state_mod.State.load(root / "blocks/b/state.json")
+    out = st.snapshot("pre-fix", files=["rtl/counter8.v"])
+    st.save()
+    assert [f["path"] for f in out["files"]] == ["rtl/counter8.v"]
+    assert (root / "blocks/b/state_snapshots/pre-fix/rtl/counter8.v").is_file()
+    assert not (elsewhere / "blocks").exists()
+
+
 def test_snapshot_refuses_state_json_itself(tmp_path):
     ws = ws_empty(tmp_path)
     state_mod.State.init(ws, "vde", "counter8")

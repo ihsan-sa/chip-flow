@@ -7,7 +7,7 @@ edited the run by hand (docs/design.md section 3). Harder rungs are higher up.
 | level | vde | ade | msde |
 |---|---|---|---|
 | 4 | small RISC-V core: not run | bandgap: not run | SAR ADC: not run |
-| 3 | SPI peripheral with a FIFO: not run | comparator: not run | DAC with an SPI register: not run |
+| 3 | SPI peripheral with a FIFO: red | comparator: not run | DAC with an SPI register: not run |
 | 2 | UART: red | R2R DAC: not run | ring oscillator with a divider: not run |
 | 1 | 8-bit counter: counts | current mirror: not run | a sensor counted: red |
 
@@ -17,7 +17,7 @@ edited the run by hand (docs/design.md section 3). Harder rungs are higher up.
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | counter8 | yes |  | pass (1/1) | 1.00 | 1086.6 | 0.29 | 19 | - | - | 14718 | 2026-09-25 | vde session run 2026-09-24/25, workspace runs/counter8-20260924 |
 | uart | no | 12 gate(s) not green | pass (1/1) | 0.79 | - | - | 9 | - | - | 1404 | 2026-09-25 | vde session run 2026-09-24/25, workspace runs/uart-20260924; stopped at P4 mutate fix loop: 4 survivors proven equivalent at CLKS_PER_BIT=4 (15/19=0.79 < 0.9), escalated |
-| spi_fifo | not run | | | | | | | | | | | |
+| spi_fifo | no | 10 gate(s) not green | pass (1/1) | 0.95 | - | - | 16 | - | - | 18580 | 2026-09-25 | vde session run 2026-09-25, workspace runs/spi_fifo-20260925; stopped at P4 formal: smt prove at depth 96 times out at the gate's 180s (3 runs), and induction can't close because the wrapper can't see DUT registers (sby flow never flattens), escalated |
 | riscv | not run | | | | | | | | | | | |
 
 ## /ade

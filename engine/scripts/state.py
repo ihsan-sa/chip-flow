@@ -682,7 +682,12 @@ class State:
 
     # ---- snapshots (fix-loop safety net) ----------------------------------
     def _workspace(self) -> Path:
-        return Path(self.data["workspace"])
+        """The directory state.json lives in - never the recorded
+        `workspace` string, which is relative to whatever directory ran
+        `init` and goes stale when a workspace moves (the spi_fifo /vde run,
+        2026-09-25: a snapshot taken from another cwd landed, empty, in a
+        stray blocks/ tree outside the workspace)."""
+        return self.path.parent
 
     def _default_snapshot_rels(self, ws: Path) -> list[str]:
         """Every registered artifact's own file(s) - a FILE artifact as
