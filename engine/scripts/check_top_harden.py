@@ -111,6 +111,31 @@ def signal_pins(signals: dict[str, str],
     return out
 
 
+def tcl_tok(name: str) -> str:
+    """Brace a magic Tcl token. Magic reads its script as Tcl, so an unbraced
+    bus-bit pin name like dac_code[0] runs [0] as a nested command and the
+    port command silently sees a bare, mangled name - braces make it a
+    literal token instead (engine/scripts/check_drc.py:91 escapes brackets
+    the same way, for the same reason)."""
+    return "{" + name + "}"
+
+
+def port_lines(sig_pins: dict[str, str], signals: dict[str, str],
+              ua: dict[str, int]) -> list[str]:
+    """The `port ... use ...` / `port ... class ...` magic Tcl lines for
+    every interface signal pin (a2d pins are macro outputs, d2a are inputs)
+    and every ua pad pin (inout), each pin name braced per tcl_tok."""
+    lines = []
+    for pin, sig in sorted(sig_pins.items()):
+        cls = "output" if signals[sig] == "a2d" else "input"
+        lines += [f"port {tcl_tok(pin)} use signal",
+                 f"port {tcl_tok(pin)} class {cls}"]
+    for pin in sorted(ua):
+        lines += [f"port {tcl_tok(pin)} use signal",
+                 f"port {tcl_tok(pin)} class inout"]
+    return lines
+
+
 def analog_macro(analog: Path, signals: dict[str, str], out_dir: Path,
                  ua: dict[str, int] | None = None,
                  widths: dict[str, int] | None = None) -> dict:
@@ -164,21 +189,14 @@ def analog_macro(analog: Path, signals: dict[str, str], out_dir: Path,
     spice_out = out_dir / f"{cell}.spice"
     spice_out.write_text(ref_text, encoding="utf-8")
 
-    # a2d: the analog side drives it, so it is the macro's output.
-    port_lines = []
-    for pin, sig in sorted(sig_pins.items()):
-        cls = "output" if signals[sig] == "a2d" else "input"
-        port_lines += [f"port {pin} use signal", f"port {pin} class {cls}"]
-    for pin in sorted(ua):
-        port_lines += [f"port {pin} use signal", f"port {pin} class inout"]
     lef_out = out_dir / f"{cell}.lef"
     layoutlib.fresh(lef_out)
     script = "\n".join([
         "drc off", "crashbackups disable", "locking disable",
         f"gds read {gds_out.name}", f"load {cell}", "select top cell",
-        "port makeall", *port_lines,
-        f"port {vdd} use power", f"port {vdd} class inout",
-        f"port {vss} use ground", f"port {vss} class inout",
+        "port makeall", *port_lines(sig_pins, signals, ua),
+        f"port {tcl_tok(vdd)} use power", f"port {tcl_tok(vdd)} class inout",
+        f"port {tcl_tok(vss)} use ground", f"port {tcl_tok(vss)} class inout",
         "property LEFclass BLOCK", f"lef write {lef_out.name}",
         "quit -noprompt", ""])
     proc = layoutlib.run_eda(["magic", "-noconsole", "-dnull"], cwd=out_dir,
@@ -275,6 +293,19 @@ def assemble(ws: Path) -> tuple[Path, dict]:
     if missing:
         raise CheckError(f"interface.yaml names {missing}, which the digital "
                          "spec.yaml's ports do not have")
+    bad_width = sorted(
+        s for s in signals
+        if widths[s] != int(dspec["ports"][ports[s]].get("width", 1)))
+    if bad_width:
+        details = ", ".join(
+            f"{s}: interface.yaml says {widths[s]}, spec.yaml's "
+            f"{ports[s]} says {int(dspec['ports'][ports[s]].get('width', 1))}"
+            for s in bad_width)
+        raise CheckError(
+            "interface.yaml's width does not match the digital spec.yaml "
+            f"port's own width for {bad_width} ({details}); fix one of the "
+            "two - a silent mismatch would pad or truncate the signal in "
+            "the assembled top Verilog")
 
     top = ws / TOP_DIR
     if top.exists():
