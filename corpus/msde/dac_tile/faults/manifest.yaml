@@ -1,9 +1,14 @@
 # faults manifest (docs/design.md section 3): the analog-tile rung. vout
 # leaves the chip on ua[0] (interface.yaml's ua_pins), so the untouched top
 # must harden on the analog pin template, match in top_lvs and pass
-# precheck; each plant hardens the untouched top first (see its docstring).
+# precheck. The top_lvs and precheck plants harden the untouched top first
+# (see each docstring); the top_harden plant moves vout off the template.
 version: 1
 faults:
+  - name: top_harden_ua_pin_off_template
+    gate: top_harden
+    plant: plant_top_harden.py
+    expect: {status: fail, kind: ua_pin_off_template}
   - name: top_lvs_macro_pin_unconnected
     gate: top_lvs
     plant: plant_top_lvs.py

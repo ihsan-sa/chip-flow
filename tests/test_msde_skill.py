@@ -164,7 +164,7 @@ TOP_KIND_RE = re.compile(r'violation\(\s*"[a-z_]+",\s*"error",\s*[^,]+,\s*'
                          r'[^,]+,\s*"([a-z_]+)"', re.S)
 # top_harden passes on check_harden's findings, top_drc check_drc's
 TOP_GATE_SCRIPTS = ("check_top_harden", "check_harden", "check_top_drc",
-                    "check_drc", "check_top_lvs")
+                    "check_drc", "check_top_lvs", "check_precheck")
 
 
 def _top_kinds() -> set[str]:
@@ -190,7 +190,8 @@ def test_kind_scan_finds_the_kinds_it_should():
             "width_mismatch"} <= _split_kinds()
     assert {"macro_too_large", "flow_step_failed", "harden_missing_artifact",
             "magic_drc_violation", "klayout_drc_violation",
-            "netlist_mismatch"} <= _top_kinds()
+            "netlist_mismatch", "ua_pin_off_template",
+            "precheck_failed"} <= _top_kinds()
 
 
 def test_every_msde_gate_kind_has_a_remediation_reference():

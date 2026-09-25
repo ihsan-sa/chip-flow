@@ -33,8 +33,10 @@ docs/spikes/macro_harden.md's.
 Refuses (exit 2) when either nested workspace or a piece the assembly needs
 is missing. An analog macro larger than the tile - by its LEF SIZE or by
 what its GDS draws, whichever is larger - is a `macro_too_large` finding
-(no harden runs); LibreLane failures are check_harden's findings,
-passed on.
+(no harden runs); so is a `ua_pins` map off the analog template - an
+index used twice, a gap below the highest pad, more pads than the tile has
+(`ua_pin_off_template`, no harden runs). LibreLane failures are
+check_harden's findings, passed on.
 """
 from __future__ import annotations
 
@@ -232,8 +234,9 @@ def centre(die_area: str, w: float, h: float) -> list[float] | None:
 
 def assemble(ws: Path) -> tuple[Path, dict]:
     """Build top/ from the two nested workspaces; return its path and spec.
-    A macro larger than the tile comes back with location None and no
-    spec.yaml written - a design finding, not a refusal."""
+    A macro larger than the tile comes back with location None, and a ua
+    map off the template with `ua_problems`, both with no spec.yaml written
+    - design findings, not refusals."""
     digital = nested(ws, "digital", "vde")
     analog = nested(ws, "analog", "ade")
     iface = _yaml(ws / "interface.yaml", "interface.yaml")
@@ -271,6 +274,12 @@ def assemble(ws: Path) -> tuple[Path, dict]:
                         if k.lower() not in signals}
     if macro["location"] is None:
         return top, tspec
+    # a ua map off the analog template is a design finding like a macro too
+    # large (run() reports it), not a refusal
+    tspec["ua_problems"] = ttlib.validate_ua_pins(tspec, tiles)
+    if tspec["ua_problems"]:
+        return top, tspec
+    del tspec["ua_problems"]
     problems = ttlib.validate_tt_pins(tspec)
     if problems:
         raise CheckError("the assembled top's pins do not fit: "
@@ -303,6 +312,14 @@ def run(argv=None):
             f"{m['size_um'][1]} um, larger than the tile "
             f"({tiles}: {ttlib.tile_die_area(tiles)})", SCRIPT)
             for m in too_big]
+        payload = checklib.report(SCRIPT, ws / "digital" / "rtl", violations,
+                                  macros=macros)
+        return payload, args.out
+    if spec.get("ua_problems"):
+        violations = [checklib.violation(
+            "top_harden", "error", None, "ua_pins", "ua_pin_off_template", [],
+            f"interface.yaml ua_pins do not fit the analog tile: {p}", SCRIPT)
+            for p in spec["ua_problems"]]
         payload = checklib.report(SCRIPT, ws / "digital" / "rtl", violations,
                                   macros=macros)
         return payload, args.out

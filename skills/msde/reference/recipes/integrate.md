@@ -68,5 +68,7 @@ would otherwise read as a second top cell - nothing for the agent to do.
 is missing, when an interface signal is not both a digital port and an
 analog pin, or when the analog cell's remaining pins are not one supply
 and one ground. A macro larger than the tile is a `macro_too_large`
-finding, and no harden runs. Every one of those is a side's fix.
+finding, and a `ua_pins` map off the analog template (a gap, a pad used
+twice, too many pads) is a `ua_pin_off_template` finding; neither runs a
+harden. Every one of those is a side's fix.
 `docs/spikes/macro_harden.md` has how the recipe was found.
