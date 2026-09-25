@@ -35,7 +35,7 @@ JSON out, exit 0/1/2. Keep output ASCII. **No web tools.**
 | testbench | `tb/*` | `rtl/*`, `formal/*`, `holdout/*` |
 | formal | `formal/*` | `rtl/*`, `tb/*` |
 | synth | `rtl/*` (a synth finding is almost always an RTL defect surfacing late - fix the source, never hand-edit a netlist) | the netlist itself |
-| harden | `harden/config.json`, `harden/info.yaml`, or `rtl/*` per the finding | the GDS/netlist LibreLane produced |
+| harden | `harden/config.override.json` (a JSON object of LibreLane keys, merged last; CLOCK_PERIOD, tile/PDK and template DO-NOT-CHANGE keys are refused), or `rtl/*` per the finding | `harden/config.json` and `harden/info.yaml` (regenerated every run - an edit is lost), the GDS/netlist LibreLane produced |
 
 If your work order's domain is `review`, no script owns the finding: read
 it, identify the right domain and say so in OPEN, or escalate with a

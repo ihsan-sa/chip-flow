@@ -94,7 +94,9 @@ DOMAINS: dict[str, dict] = {
         "scripts": ["engine/scripts/jobs.py", "engine/scripts/state.py"],
         "guidance": [
             "harden/timing/drc/lvs/glsim/precheck findings on the hardened "
-            "design: adjust harden/config.json or the RTL, then re-run the "
+            "design: set LibreLane keys in harden/config.override.json "
+            "(never harden/config.json, which harden regenerates) or fix "
+            "the RTL, then re-run the "
             "harden job (jobs.py start --gate harden) - it can take a "
             "while, so re-check with jobs.py status rather than blocking.",
         ],

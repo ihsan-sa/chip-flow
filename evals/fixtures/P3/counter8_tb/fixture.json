@@ -3,14 +3,18 @@
  "skill": "vde",
  "block": "counter8",
  "stage": "P3",
- "source": "corpus/vde/counter8",
- "frozen_at": "2026-09-25T00:04:47+00:00",
+ "source": "runs/counter8-20260924/blocks/counter8",
+ "frozen_at": "2026-09-25T08:03:48+00:00",
  "files": {
-  "spec/spec.md": "076c9d908cf83c54997c67ea34963ffd2e00db1e9691df393acb4cac65c24d9c",
-  "spec/spec.yaml": "3367c36efc1e82a90357ff9d26a06f4f5a3fb9461171569ba1448b3d5b9ca896",
-  "rtl/counter8.v": "bd211f49ddb73e8123bfd94ecbda03ba98335e3d46868ee491c37b86619fe670",
-  "tb/test_counter8.py": "f15a393d6eec0f88181b3f9181472cc0101a67f08105fecdfe2301b916acf6ac",
-  "holdout/test_counter8_holdout.py": "16ff58664bbd254b69110f2329d34d9c02fa8fea19b0270a24f509ee191a9f41",
-  "formal/counter8_formal.sv": "aac73e5bef2bba1468374e12da6629ad632c0ed2130f1ea747507868f7fe8566"
+  "spec/spec.md": "a324bb4d91a34199a28ed585dbad64bbb940cb176599992c8374a704459aae98",
+  "spec/spec.yaml": "6b9f8d9f861b3796f87999e1daa261d584ec49d62660a3a4cbd8bd1e2655e146",
+  "tb/counter8_common.py": "c8c1b101f815a006ef5c997d1fd431923db4343357bce421365b5967511f6258",
+  "tb/counter8_model.py": "ba8f4cdb571463e10a58c9904d0b61dfc65a0fd9c692f1dfa9e59800890f6506",
+  "tb/test_counter8.py": "27ef1ac17fb948cf7dd0b5b82d2876d41fb7617936271cb84e703342b4b3289d",
+  "holdout/counter8_common.py": "c8c1b101f815a006ef5c997d1fd431923db4343357bce421365b5967511f6258",
+  "holdout/counter8_model.py": "ba8f4cdb571463e10a58c9904d0b61dfc65a0fd9c692f1dfa9e59800890f6506",
+  "holdout/test_counter8_holdout.py": "c21389b8bf6f79023eb30ee1904461ef15dc1816ed36b4f7afb960afe01cd679",
+  "formal/counter8_formal.sv": "a818c0b40b5855ab7f7019bb567403a11428839e1d35e2e992dea7f857c8dbcb",
+  "rtl/counter8.v": "62c0648fbcfba3d1df7d5217679da747608b0e6dd89e4ca605b01e404239be3a"
  }
 }

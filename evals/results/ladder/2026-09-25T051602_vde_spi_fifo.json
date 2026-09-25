@@ -1,0 +1,46 @@
+{
+ "skill": "vde",
+ "rung": "spi_fifo",
+ "block": "spi_fifo",
+ "run": "spi_fifo",
+ "phase": "P4",
+ "scored_at": "2026-09-25T09:16:02+00:00",
+ "counts": false,
+ "gates_green": false,
+ "gate_problems": [
+  "cover: no recorded result",
+  "drc: no recorded result",
+  "formal: no recorded result",
+  "glsim: no recorded result",
+  "harden: no recorded result",
+  "lvs: no recorded result",
+  "precheck: no recorded result",
+  "synth: no recorded result",
+  "timing: no recorded result",
+  "release: no recorded pass"
+ ],
+ "gates_passed": [
+  "holdout",
+  "lint",
+  "mutate",
+  "sim",
+  "spec_lint"
+ ],
+ "hand_edits": 0,
+ "held_out": {
+  "status": "pass",
+  "tests_passed": 1,
+  "tests_run": 1,
+  "kinds": []
+ },
+ "kill_rate": 0.9474,
+ "line_pct": null,
+ "area": null,
+ "worst_slack_ns": null,
+ "fix_attempts": 16,
+ "tokens": null,
+ "cost_usd": null,
+ "wall_s": 18580,
+ "note": "vde session run 2026-09-25, workspace runs/spi_fifo-20260925; stopped at P4 formal: smt prove at depth 96 times out at the gate's 180s (3 runs), and induction can't close because the wrapper can't see DUT registers (sby flow never flattens), escalated",
+ "kind": "skill"
+}

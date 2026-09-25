@@ -62,7 +62,13 @@ def start(gate: str, workspace: Path, skill: str | None,
          gates_path: str | None, checks_dir: str | None) -> dict:
     import safelib
     import state as state_mod
-    ws = Path(workspace)
+    # Absolute before anything is derived from it: the job runs with
+    # cwd=ws, so a relative workspace (the router's own `blocks/<name>`)
+    # would point the log redirect and gate.py's --workspace at
+    # ws/ws/..., and the job would die before writing a line.
+    ws = Path(workspace).resolve()
+    gates_path = str(Path(gates_path).resolve()) if gates_path else None
+    checks_dir = str(Path(checks_dir).resolve()) if checks_dir else None
     state_path = ws / "state.json"
     if not state_path.is_file():
         raise CheckError(f"no state.json at {state_path}")

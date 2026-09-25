@@ -4,8 +4,9 @@ OpenSTA found negative worst hold slack in at least one corner - a race
 independent of clock speed (hold cannot be fixed by relaxing the clock
 period the way `setup_violation` sometimes can). Routes to `harden`.
 
-**Cheapest fix first:** almost always a harden/config.json clock-tree or
-buffering setting (hold fixing is normally an automated LibreLane step);
+**Cheapest fix first:** almost always a clock-tree or
+buffering setting in `harden/config.override.json` (e.g. the hold slack
+margins; hold fixing is normally an automated LibreLane step);
 re-run harden with hold-fixing enabled before suspecting the RTL.
 
 **Trap:** never treat this as fixable by loosening the clock period - hold

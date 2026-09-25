@@ -7,7 +7,7 @@
    "failing": 0,
    "kinds": [],
    "metrics": {},
-   "wall_s": 4.38
+   "wall_s": 1.25
   },
   "sim": {
    "status": "pass",
@@ -15,9 +15,9 @@
    "failing": 0,
    "kinds": [],
    "metrics": {
-    "tests_passed": 2
+    "tests_passed": 5
    },
-   "wall_s": 57.8
+   "wall_s": 18.98
   },
   "holdout": {
    "status": "pass",
@@ -25,9 +25,9 @@
    "failing": 0,
    "kinds": [],
    "metrics": {
-    "tests_passed": 1
+    "tests_passed": 5
    },
-   "wall_s": 35.05
+   "wall_s": 18.36
   },
   "mutate": {
    "status": "pass",
@@ -35,11 +35,11 @@
    "failing": 0,
    "kinds": [],
    "metrics": {
-    "kill_rate": 0.9565,
-    "killed": 22,
-    "survived": 1
+    "kill_rate": 1.0,
+    "killed": 19,
+    "survived": 0
    },
-   "wall_s": 181.55
+   "wall_s": 99.96
   },
   "formal": {
    "status": "pass",
@@ -47,7 +47,7 @@
    "failing": 0,
    "kinds": [],
    "metrics": {},
-   "wall_s": 4.11
+   "wall_s": 4.22
   },
   "cover": {
    "status": "pass",
@@ -58,8 +58,8 @@
     "line_pct": 100.0,
     "toggle_pct": 100.0
    },
-   "wall_s": 25.3
+   "wall_s": 15.09
   }
  },
- "written": "2026-09-24"
+ "written": "2026-09-25"
 }

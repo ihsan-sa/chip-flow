@@ -10,6 +10,6 @@ persists, the finding names the net and corner - a `must_keep` cell or an
 unusually high-fanout net in the RTL (a shared reset/enable driving many
 loads) is the usual real cause.
 
-**Trap:** do not chase this purely inside harden/config.json - a genuinely
+**Trap:** do not chase this purely inside harden/config.override.json - a genuinely
 high-fanout net is often an RTL structuring problem (split the driver
 across a buffer tree in the design, not just at the physical layer).

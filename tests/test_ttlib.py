@@ -159,3 +159,46 @@ def test_stdcell_liberty_path_resolves_from_vendored_lib_map(tmp_path):
     p = ttlib.stdcell_liberty_path("max_ss_125C_3v00", tmp_path)
     assert p == (tmp_path / "gf180mcuD" / "libs.ref" / "gf180mcu_fd_sc_mcu7t5v0" /
                 "lib" / "gf180mcu_fd_sc_mcu7t5v0__ss_125C_3v00.lib")
+
+
+def test_template_locked_keys_are_the_ones_below_the_do_not_change_marker():
+    locked = ttlib.template_locked_keys()
+    assert {"RUN_KLAYOUT_DRC", "FP_SIZING", "MAGIC_WRITE_LEF_PINONLY"} <= locked
+    assert "PL_TARGET_DENSITY_PCT" not in locked  # a documented user knob
+
+
+def test_harden_config_merges_override_last_and_refuses_owned_keys(tmp_path):
+    spec = {**COUNTER8_SPEC, "clock": {"period_ns": 20}}
+    rtl = [tmp_path / "counter8.v"]
+    wrapper = tmp_path / "tt_um_counter8.v"
+    config = ttlib.harden_config(spec, rtl, wrapper, tmp_path,
+                                 override={"RUN_POST_GRT_RESIZER_TIMING": 1})
+    assert config["RUN_POST_GRT_RESIZER_TIMING"] == 1
+    forbidden = ttlib.forbidden_override_keys()
+    assert {"CLOCK_PERIOD", "DIE_AREA", "VERILOG_FILES", "PDK_ROOT"} <= forbidden
+    for key in ("CLOCK_PERIOD", "RUN_KLAYOUT_XOR", "LIB_SYNTH"):
+        with pytest.raises(ttlib.TTError, match=key):
+            ttlib.harden_config(spec, rtl, wrapper, tmp_path, override={key: 1})
+
+
+def test_harden_override_may_not_replace_the_specs_macros(tmp_path):
+    # spec.yaml `macros` owns macro_config()'s keys; an override merged last
+    # would otherwise swap the hard macro out from under LVS.
+    spec = {**COUNTER8_SPEC, "clock": {"period_ns": 20}}
+    rtl = [tmp_path / "counter8.v"]
+    wrapper = tmp_path / "tt_um_counter8.v"
+    for key in ("MACROS", "PDN_MACRO_CONNECTIONS", "PDN_CFG",
+                "MAGIC_EXT_USE_GDS", "EXTRA_SPICE_MODELS"):
+        with pytest.raises(ttlib.TTError, match=key):
+            ttlib.harden_config(spec, rtl, wrapper, tmp_path, override={key: 1})
+    config = ttlib.harden_config(spec, rtl, wrapper, tmp_path,
+                                 override={"PL_TARGET_DENSITY_PCT": 50})
+    assert config["PL_TARGET_DENSITY_PCT"] == 50
+
+
+def test_load_harden_override_absent_is_empty_and_bad_json_is_refused(tmp_path):
+    assert ttlib.load_harden_override(tmp_path / "config.override.json") == {}
+    bad = tmp_path / "config.override.json"
+    bad.write_text("{not json", encoding="utf-8")
+    with pytest.raises(ttlib.TTError, match="not valid JSON"):
+        ttlib.load_harden_override(bad)

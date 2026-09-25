@@ -6,14 +6,19 @@ edited the run by hand (docs/design.md section 3). Harder rungs are higher up.
 
 | level | vde | ade | msde |
 |---|---|---|---|
-| 4 | small RISC-V core: not run | bandgap: not in corpus | SAR ADC: not run |
-| 3 | SPI peripheral with a FIFO: not run | comparator: not in corpus | DAC with an SPI register: not run |
-| 2 | UART: not run | R2R DAC: not run | ring oscillator with a divider: not run |
-| 1 | 8-bit counter: not run | current mirror: not run | a sensor counted: red |
+| 4 | small RISC-V core: not run | bandgap: not run | SAR ADC: not run |
+| 3 | SPI peripheral with a FIFO: red | comparator: not run | DAC with an SPI register: not run |
+| 2 | UART: red | R2R DAC: not run | ring oscillator with a divider: not run |
+| 1 | 8-bit counter: counts | current mirror: not run | a sensor counted: red |
 
 ## /vde
 
-No /vde run scored yet. `ladder.py --skill vde --rung <rung> --run <ws>` fills this table.
+| rung | counts | why not | held-out | kill rate | area | worst slack ns | fix attempts | tokens | cost USD | wall s | scored | note |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| counter8 | yes |  | pass (1/1) | 1.00 | 1086.6 | 0.29 | 19 | - | - | 14718 | 2026-09-25 | vde session run 2026-09-24/25, workspace runs/counter8-20260924 |
+| uart | no | 12 gate(s) not green | pass (1/1) | 0.79 | - | - | 9 | - | - | 1404 | 2026-09-25 | vde session run 2026-09-24/25, workspace runs/uart-20260924; stopped at P4 mutate fix loop: 4 survivors proven equivalent at CLKS_PER_BIT=4 (15/19=0.79 < 0.9), escalated |
+| spi_fifo | no | 10 gate(s) not green | pass (1/1) | 0.95 | - | - | 16 | - | - | 18580 | 2026-09-25 | vde session run 2026-09-25, workspace runs/spi_fifo-20260925; stopped at P4 formal: smt prove at depth 96 times out at the gate's 180s (3 runs), and induction can't close because the wrapper can't see DUT registers (sby flow never flattens), escalated |
+| riscv | not run | | | | | | | | | | | |
 
 ## /ade
 
@@ -45,9 +50,9 @@ Frozen fixtures under `evals/fixtures/<stage>/<name>/`; `bench.py --compare` fai
 
 | stage | fixture | baseline composite | gates | written |
 |---|---|---|---|---|
-| P3 | counter8_tb | 1.0 | sim pass, mutate pass, cover pass | 2026-09-24 |
-| P4 | counter8_rtl | 1.0 | lint pass, sim pass, holdout pass, mutate pass, formal pass, cover pass | 2026-09-24 |
-| P4 | uart_rtl | 0.9701 | lint pass, sim pass, holdout pass, mutate fail, formal pass, cover pass | 2026-09-24 |
+| P3 | counter8_tb | 1.0 | sim pass, mutate pass, cover pass | 2026-09-25 |
+| P4 | counter8_rtl | 1.0 | lint pass, sim pass, holdout pass, mutate pass, formal pass, cover pass | 2026-09-25 |
+| P4 | uart_rtl | 0.8127 | lint pass, sim pass, holdout pass, mutate fail, formal fail, cover pass | 2026-09-25 |
 
 ## CVDP
 

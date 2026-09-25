@@ -7,9 +7,9 @@
    "failing": 0,
    "kinds": [],
    "metrics": {
-    "tests_passed": 2
+    "tests_passed": 5
    },
-   "wall_s": 28.9
+   "wall_s": 4.78
   },
   "mutate": {
    "status": "pass",
@@ -17,11 +17,11 @@
    "failing": 0,
    "kinds": [],
    "metrics": {
-    "kill_rate": 0.9565,
-    "killed": 22,
-    "survived": 1
+    "kill_rate": 1.0,
+    "killed": 19,
+    "survived": 0
    },
-   "wall_s": 215.32
+   "wall_s": 93.83
   },
   "cover": {
    "status": "pass",
@@ -32,8 +32,8 @@
     "line_pct": 100.0,
     "toggle_pct": 100.0
    },
-   "wall_s": 37.64
+   "wall_s": 10.16
   }
  },
- "written": "2026-09-24"
+ "written": "2026-09-25"
 }

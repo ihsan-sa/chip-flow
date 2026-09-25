@@ -10,8 +10,7 @@ That is `optimise.py`, and it is `### M7.`'s build, not this milestone's.
 ## What this verb does today
 
 Records that optimisation was requested (`state.py decision`) against the
-block's current `synth` (and, once M4 lands, `timing`) baseline, and
-stops. It never spawns the `optimiser` role (`skills/vde/agents/
+block's current `synth` and `timing` baseline, and stops. It never spawns the `optimiser` role (`skills/vde/agents/
 optimiser.md` explains why the file exists anyway).
 
 ## Why not just hand-edit the RTL for a quick win

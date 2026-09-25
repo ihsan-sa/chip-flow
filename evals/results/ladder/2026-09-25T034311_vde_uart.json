@@ -1,0 +1,47 @@
+{
+ "skill": "vde",
+ "rung": "uart",
+ "block": "uart",
+ "run": "uart",
+ "phase": "P4",
+ "scored_at": "2026-09-25T07:43:11+00:00",
+ "counts": false,
+ "gates_green": false,
+ "gate_problems": [
+  "cover: no recorded result",
+  "drc: no recorded result",
+  "formal: no recorded result",
+  "glsim: no recorded result",
+  "harden: no recorded result",
+  "lvs: no recorded result",
+  "mutate: last recorded result is FAIL",
+  "precheck: no recorded result",
+  "synth: no recorded result",
+  "timing: no recorded result",
+  "1 open issue(s) unresolved",
+  "release: no recorded pass"
+ ],
+ "gates_passed": [
+  "holdout",
+  "lint",
+  "sim",
+  "spec_lint"
+ ],
+ "hand_edits": 0,
+ "held_out": {
+  "status": "pass",
+  "tests_passed": 1,
+  "tests_run": 1,
+  "kinds": []
+ },
+ "kill_rate": 0.7895,
+ "line_pct": null,
+ "area": null,
+ "worst_slack_ns": null,
+ "fix_attempts": 9,
+ "tokens": null,
+ "cost_usd": null,
+ "wall_s": 1404,
+ "note": "vde session run 2026-09-24/25, workspace runs/uart-20260924; stopped at P4 mutate fix loop: 4 survivors proven equivalent at CLKS_PER_BIT=4 (15/19=0.79 < 0.9), escalated",
+ "kind": "skill"
+}

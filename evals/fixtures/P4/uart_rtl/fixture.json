@@ -3,14 +3,16 @@
  "skill": "vde",
  "block": "uart",
  "stage": "P4",
- "source": "corpus/vde/uart",
- "frozen_at": "2026-09-24T23:56:40+00:00",
+ "source": "runs/uart-20260924/blocks/uart",
+ "frozen_at": "2026-09-25T08:03:48+00:00",
  "files": {
-  "spec/spec.md": "081b209299a2f52dcd83b83af9848abb0e9264b907abb0196aaf6bd14ac096b0",
-  "spec/spec.yaml": "fa4ade25223c791827a8c3fcc9f6197641469b81e0c1ce3624dbcd3ce4b71943",
-  "rtl/uart_tx.v": "4071d5afece28f4d52e5aa822368a669addf98dee9f3cef0961d5daa38099d81",
-  "tb/test_uart_tx.py": "ec77742b12990aa8ea3ce6cb6e42fa760e390da2d3795d5f976f7d165f1e68a2",
-  "holdout/test_uart_tx_holdout.py": "63e1db5d8cd35699e111ba2aaa5b4339b67f4a3445cd0f75aac9bf643924715f",
-  "formal/uart_tx_formal.sv": "17fd7b34475499157094e9119e6c74af18e1a50593d86848758691f228e922d0"
+  "spec/spec.md": "5046753596645e6c52860aee8e0de2ccce172def7337f86df3d5bc43ff53a938",
+  "spec/spec.yaml": "f72e08a8bfe4db4d75684f410b3ab5ae1ca62e5354175361ac0cd6071819164f",
+  "tb/test_uart.py": "53ebfefa0f59ced1967a4b51e6d1d32308d0d82e849c7fc9bd972d5dc4d05b55",
+  "tb/uart_model.py": "ed6c2a30bd3113a6118c21c94896bea9f5b6036201fc73aebb1a51f8ae7af611",
+  "holdout/test_uart_holdout.py": "4e64ab77d1a7a6b59b33c4a34187ce331e6a1226b2bf6faf64568fb40fce8d7b",
+  "holdout/uart_holdout_model.py": "d394e57b128f573c3aa3b163d056bb1c4a4593885a249a4b529d010c104a49b1",
+  "formal/uart_formal.sv": "3a33bd63b32131bc4a912388346ca6bacc4ae2269540bded85bbb12982ea8033",
+  "rtl/uart.v": "db2c4c3e33f0fa5b8af40f8ffe9aafcc5eecd2dd822af0fec9a90d1004ed32c0"
  }
 }

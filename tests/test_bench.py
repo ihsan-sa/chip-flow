@@ -58,6 +58,60 @@ def test_drift_names_an_edited_a_missing_and_an_unpinned_file(tmp_path):
     assert not any(x.startswith("spec/") for x in d)
 
 
+def make_hardened_ws(tmp_path: Path) -> Path:
+    """A workspace that has already been through P5/P6, like a run that
+    freeze --stage P4 is pointed at after the fact: it must not leak
+    synth/netlist/harden into a P3 or P4 fixture."""
+    ws = make_ws(tmp_path)
+    for sub, name, text in (
+            ("holdout", "test_widget_holdout.py", "# req: R1\n"),
+            ("formal", "widget_formal.sv", "module widget_formal; endmodule\n"),
+            ("synth", "widget.synth.v", "module widget; endmodule\n"),
+            ("netlist", "widget.nl.v", "module widget; endmodule\n"),
+            ("harden", "widget.gds", "not really a gds\n")):
+        (ws / sub).mkdir(parents=True, exist_ok=True)
+        (ws / sub / name).write_text(text, encoding="utf-8")
+    return ws
+
+
+def test_freeze_p4_leaves_synth_netlist_and_harden_out(tmp_path):
+    fx = tmp_path / "fixtures" / "P4" / "widget_rtl"
+    meta = bench.freeze(make_hardened_ws(tmp_path), fx, None, "P4")
+    assert sorted(meta["files"]) == [
+        "formal/widget_formal.sv", "holdout/test_widget_holdout.py",
+        "rtl/widget.v", "spec/spec.yaml", "tb/test_widget.py"]
+    assert not (fx / "ws" / "synth").exists()
+    assert not (fx / "ws" / "netlist").exists()
+    assert not (fx / "ws" / "harden").exists()
+
+
+def test_freeze_p3_leaves_synth_netlist_and_harden_out(tmp_path):
+    fx = tmp_path / "fixtures" / "P3" / "widget_tb"
+    meta = bench.freeze(make_hardened_ws(tmp_path), fx, None, "P3")
+    assert "rtl/widget.v" in meta["files"] and "tb/test_widget.py" in meta["files"]
+    assert not (fx / "ws" / "synth").exists()
+    assert not (fx / "ws" / "harden").exists()
+
+
+def test_freeze_p6_keeps_synth_netlist_and_harden(tmp_path):
+    fx = tmp_path / "fixtures" / "P6" / "widget_harden"
+    meta = bench.freeze(make_hardened_ws(tmp_path), fx, None, "P6")
+    assert "synth/widget.synth.v" in meta["files"]
+    assert "netlist/widget.nl.v" in meta["files"]
+    assert "harden/widget.gds" in meta["files"]
+    assert (fx / "ws" / "synth").is_dir()
+    assert (fx / "ws" / "netlist").is_dir()
+    assert (fx / "ws" / "harden").is_dir()
+
+
+def test_freeze_dirs_falls_back_to_every_dir_for_unmapped_skill_stage():
+    # ade/msde are not pinned down here yet, so freeze keeps its old,
+    # unrestricted behaviour rather than guessing at their stage boundaries.
+    assert bench.freeze_dirs("ade", "P4") == bench.FREEZE_DIRS
+    assert bench.freeze_dirs("vde", "P8") == bench.FREEZE_DIRS
+    assert bench.freeze_dirs(None, "P4") == bench.FREEZE_DIRS
+
+
 def test_freeze_refuses_what_is_neither_workspace_nor_rung(tmp_path):
     (tmp_path / "empty").mkdir()
     with pytest.raises(CheckError):

@@ -3,8 +3,8 @@
 `timing` reads OpenSTA's report on the HARDENED netlist, at LibreLane's own
 corners. This verb exists because the generic `fix-finding` loop, applied
 naively to a `timing` failure, would re-run `timing` again right after the
-fix - against a netlist the fix never actually touched. An SDC or
-`harden/config.json` edit, or an RTL restructure, only takes effect once
+fix - against a netlist the fix never actually touched. A
+`harden/config.override.json` edit, or an RTL restructure, only takes effect once
 `harden` regenerates the netlist; `fix-timing` re-hardens before
 re-checking, `fix-finding` does not know to.
 
@@ -14,9 +14,13 @@ The fixer's actual domain decides, and you supply it explicitly
 (`--arg edit_class=rtl_edit` or `--arg edit_class=harden_config_edit`) -
 this verb does not guess:
 
-- The fix was a constraint or floorplan change (`harden/config.json`,
-  `harden/info.yaml`, an SDC the config references) -> `harden_config_edit`
-  (marks `harden` onward stale).
+- The fix was a LibreLane setting (resizer, placement, CTS keys) written to
+  `harden/config.override.json` -> `harden_config_edit` (marks `harden`
+  onward stale). The override is a JSON object merged last into the
+  `harden/config.json` harden regenerates on every run, so edit the
+  override, never `config.json` or `info.yaml` - those edits are lost.
+  CLOCK_PERIOD, tile/PDK keys and the template's DO-NOT-CHANGE keys are
+  refused (exit 2).
 - The fix was an RTL restructure (retiming, pipelining, a path that needed
   restructuring, not just re-constraining) -> `rtl_edit` (marks
   everything from `lint` onward stale - a bigger cascade, correctly, since
@@ -31,9 +35,3 @@ polled) before re-checking `timing`, even when the edit class is
 `rtl_edit` and RTL's own `lint`/`sim`/`mutate`/`formal`/`cover`/`synth`
 gates need their own separate re-run too (the fix loop handles those the
 normal way; this verb only owns the harden-then-timing sequence).
-
-## Today (M5)
-
-`harden` and `timing` are both stubs until M4 lands - this verb's steps
-are written against the finished design and need no changes once M4
-merges, but running it today ends at `jobs.py start`'s own exit 2.

@@ -79,8 +79,8 @@ FIXER_DOMAINS = frozenset({
 #     "### M4.") all findings on the ALREADY-hardened design (a LibreLane
 #     flow step failing outright, a timing corner in violation, a DRC/LVS
 #     mismatch, precheck) - "harden", matching fix_dispatch.DOMAINS'
-#     existing "harden" guidance ("adjust harden/config.json or the RTL,
-#     then re-run the harden job"); never routed straight to "rtl" the way
+#     existing "harden" guidance (set keys in harden/config.override.json
+#     or fix the RTL, then re-run the harden job); never routed straight to "rtl" the way
 #     synth's own findings are, because the fix is as often a harden
 #     constraint (floorplan, clock period, pin order) as it is the design.
 #     glsim's own `test_failed`/`test_skipped` are the one exception -
