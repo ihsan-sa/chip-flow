@@ -30,7 +30,12 @@ Analog pins that interface.yaml names nowhere are its supplies; the one
 named like vdd goes to VPWR and the one like vss to VGND (PDN macro hookup).
 The macro sits in the middle of the tile. The recipe - LEF by plain `lef
 write`, the PDN's Metal3-Metal4 connect, extraction from GDS - is
-docs/spikes/macro_harden.md's.
+docs/spikes/macro_harden.md's, except that the LEF abstract covers
+everything the macro draws, never a PR boundary smaller than that (one a
+flattened standard cell left behind); magic writing an abstract more than
+1 um short of the drawn extent on either axis is a refusal. The tile's
+Metal4 stripes join the macro on Metal3 only, so a supply pin with no
+Metal3 shape is a `macro_power_unreachable` finding (no harden runs).
 
 Refuses (exit 2) when either nested workspace or a piece the assembly needs
 is missing. An analog macro larger than the tile - by its LEF SIZE or by
@@ -64,6 +69,8 @@ TOP_DIR = "top"
 INSTANCE = "u_analog"
 VDD_RE = re.compile(r"^(a?vdd|vpwr|vcc)", re.IGNORECASE)
 VSS_RE = re.compile(r"^(a?vss|gnd|vgnd)", re.IGNORECASE)
+# the layer engine/lib/macro_pdn.tcl joins to the tile's Metal4 stripes
+MACRO_POWER_LAYER = "Metal3"
 
 
 def _yaml(path: Path, what: str) -> dict:
@@ -189,22 +196,10 @@ def analog_macro(analog: Path, signals: dict[str, str], out_dir: Path,
     spice_out = out_dir / f"{cell}.spice"
     spice_out.write_text(ref_text, encoding="utf-8")
 
-    lef_out = out_dir / f"{cell}.lef"
-    layoutlib.fresh(lef_out)
-    script = "\n".join([
-        "drc off", "crashbackups disable", "locking disable",
-        f"gds read {gds_out.name}", f"load {cell}", "select top cell",
-        "port makeall", *port_lines(sig_pins, signals, ua),
+    lef_out = write_lef(gds_out, cell, [
+        *port_lines(sig_pins, signals, ua),
         f"port {tcl_tok(vdd)} use power", f"port {tcl_tok(vdd)} class inout",
-        f"port {tcl_tok(vss)} use ground", f"port {tcl_tok(vss)} class inout",
-        "property LEFclass BLOCK", f"lef write {lef_out.name}",
-        "quit -noprompt", ""])
-    proc = layoutlib.run_eda(["magic", "-noconsole", "-dnull"], cwd=out_dir,
-                             timeout=300, stdin_text=script)
-    layoutlib.require_ok(proc, "magic lef write")
-    if not lef_out.is_file():
-        raise CheckError(f"magic wrote no {lef_out.name}: "
-                         f"{(proc.stdout or '')[-1500:]}")
+        f"port {tcl_tok(vss)} use ground", f"port {tcl_tok(vss)} class inout"])
 
     def rng(s: str) -> str:
         w = int(widths.get(s, 1))
@@ -233,6 +228,60 @@ def analog_macro(analog: Path, signals: dict[str, str], out_dir: Path,
                       "lef": str(lef_out.resolve()),
                       "vh": str(stub.resolve()),
                       "spice": str(spice_out.resolve())}}
+
+
+def write_lef(gds_out: Path, cell: str, ports: list[str]) -> Path:
+    """magic's LEF abstract of `cell` in gds_out, written beside it;
+    ports are the magic lines that set each pin's use and class. The
+    abstract covers what the cell draws: refuses when it comes out more
+    than 1 um short of that."""
+    lef_out = gds_out.with_suffix(".lef")
+    layoutlib.fresh(lef_out)
+    script = "\n".join([
+        "drc off", "crashbackups disable", "locking disable",
+        f"gds read {gds_out.name}", f"load {cell}", "select top cell",
+        # gds read turns the PR-boundary layer into FIXED_BBOX, and lef
+        # write takes that as SIZE. A layout that flattens standard cells
+        # carries only their boundaries, so the abstract shrank to those
+        # cells and LibreLane placed the rest of the drawn macro over the
+        # tile's standard-cell rows (PDN-0179, "Unable to repair all
+        # channels"). Cleared, the abstract is everything magic reads.
+        "property FIXED_BBOX {}",
+        "port makeall", *ports,
+        "property LEFclass BLOCK", f"lef write {lef_out.name}",
+        "quit -noprompt", ""])
+    proc = layoutlib.run_eda(["magic", "-noconsole", "-dnull"],
+                             cwd=gds_out.parent, timeout=300,
+                             stdin_text=script)
+    layoutlib.require_ok(proc, "magic lef write")
+    if not lef_out.is_file():
+        raise CheckError(f"magic wrote no {lef_out.name}: "
+                         f"{(proc.stdout or '')[-1500:]}")
+    size, drawn = lef_size(lef_out), gds_extent(gds_out, cell)
+    if any(a < b - 1.0 for a, b in zip(size, drawn)):
+        raise CheckError(f"magic's abstract {lef_out.name} (SIZE {size}) is "
+                         f"smaller than what {gds_out.name} draws ({drawn}); "
+                         "LibreLane would place the macro's geometry off its "
+                         "abstract")
+    return lef_out
+
+
+def lef_pin_layers(lef: Path, pin: str) -> set[str]:
+    """The layers a LEF pin's PORT shapes are on."""
+    text = lef.read_text(encoding="utf-8", errors="replace")
+    m = re.search(rf"^\s*PIN\s+{re.escape(pin)}\s*$(.*?)^\s*END\s+"
+                  rf"{re.escape(pin)}\s*$", text, re.MULTILINE | re.DOTALL)
+    return set(re.findall(r"^\s*LAYER\s+(\S+)\s*;", m.group(1),
+                          re.MULTILINE)) if m else set()
+
+
+def unpowered_supplies(macro: dict) -> list[str]:
+    """The macro's supply pins with no Metal3 shape. macro_pdn.tcl connects
+    the tile's Metal4 stripes to the macro on Metal3 and nowhere else, so
+    such a pin can never join the grid (PDN-0232, then PDN-0233)."""
+    lef = Path(macro["files"]["lef"])
+    return [pin for pin in (macro["power"]["vdd"], macro["power"]["vss"])
+            if MACRO_POWER_LAYER not in lef_pin_layers(lef, pin)]
 
 
 def lef_size(lef: Path) -> tuple[float, float]:
@@ -375,6 +424,20 @@ def run(argv=None):
             "top_harden", "error", None, "ua_pins", "ua_pin_off_template", [],
             f"interface.yaml ua_pins do not fit the analog tile: {p}", SCRIPT)
             for p in spec["ua_problems"]]
+        payload = checklib.report(SCRIPT, ws / "digital" / "rtl", violations,
+                                  macros=macros)
+        return payload, args.out
+    unpowered = [(m, pin) for m in spec["macros"]
+                 for pin in unpowered_supplies(m)]
+    if unpowered:
+        violations = [checklib.violation(
+            "top_harden", "error", None, m["cell"], "macro_power_unreachable",
+            [], f"the analog macro {m['cell']}'s supply pin {pin} has no "
+            f"{MACRO_POWER_LAYER} shape, and the tile's power stripes "
+            f"(Metal4) join a macro only on {MACRO_POWER_LAYER}; draw {pin} "
+            f"as a {MACRO_POWER_LAYER} strap across the cell's width, as "
+            "corpus/msde/dac_tile's generator does", SCRIPT)
+            for m, pin in unpowered]
         payload = checklib.report(SCRIPT, ws / "digital" / "rtl", violations,
                                   macros=macros)
         return payload, args.out

@@ -58,6 +58,24 @@ def test_centre_fits_and_refuses():
     assert check_top_harden.centre(die, 400.0, 31.04) is None
 
 
+def _lef(tmp_path: Path, vdd_layer: str, vss_layer: str) -> dict:
+    lef = tmp_path / "mac.lef"
+    lef.write_text("".join(
+        f"  PIN {pin}\n    USE {use} ;\n    PORT\n      LAYER {layer} ;\n"
+        f"        RECT 0 0 40 1 ;\n    END\n  END {pin}\n"
+        for pin, use, layer in (("vdd", "POWER", vdd_layer),
+                                ("vss", "GROUND", vss_layer))))
+    return {"files": {"lef": str(lef)}, "power": {"vdd": "vdd", "vss": "vss"}}
+
+
+def test_a_supply_with_no_metal3_is_unreachable(tmp_path):
+    # the r2r DAC's shape: vdd on Metal2 only, which no stripe can land on
+    assert check_top_harden.unpowered_supplies(
+        _lef(tmp_path, "Metal2", "Metal3")) == ["vdd"]
+    assert check_top_harden.unpowered_supplies(
+        _lef(tmp_path, "Metal3", "Metal3")) == []
+
+
 # ----------------------------------------------- interface.yaml vs. spec.yaml
 
 def _iface_ws(tmp_path: Path, sig_width: int, port_width: int) -> Path:
@@ -185,6 +203,37 @@ def test_magic_lef_direction_survives_a_bus_bit_pin_name(tmp_path):
 
 # ------------------------------------------------ the analog tile, for real
 
+# The r2r DAC's macro: 207.82 x 139.56 um drawn from (-2.04, -3.2), but its
+# only PR boundary is the column of eight flattened buf_20 cells in one
+# corner.
+DAC_DRAWN = (-2.04, -3.2, 205.78, 136.36)
+DAC_BOUNDARY = (165.52, 0.0, 202.48, 31.36)
+
+
+@pytest.mark.slow
+def test_lef_covers_a_macro_whose_boundary_is_one_flattened_cell(tmp_path):
+    """The abstract is what the macro draws, not the corner a flattened
+    standard cell's PR boundary marks (breakage 23, PDN-0179); an abstract
+    magic leaves short of the drawing is refused."""
+    layout = db.Layout()
+    layout.dbu = 0.001
+    cell = layout.create_cell("mac")
+    x0, y0, x1, y1 = DAC_DRAWN
+    for box in ((x0, y0, x0 + 1, y1), (x1 - 1, y0, x1, y1)):  # metal1
+        cell.shapes(layout.layer(34, 0)).insert(db.DBox(*box))
+    cell.shapes(layout.layer(0, 0)).insert(db.DBox(*DAC_BOUNDARY))
+    gds = tmp_path / "mac.gds"
+    layout.write(str(gds))
+
+    lef = check_top_harden.write_lef(gds, "mac", [])
+    assert check_top_harden.lef_size(lef) == (207.82, 139.56)
+    assert "ORIGIN 2.040 3.200 ;" in lef.read_text()
+
+    with pytest.raises(check_top_harden.CheckError, match="smaller than"):
+        check_top_harden.write_lef(
+            gds, "mac", ["property FIXED_BBOX {0 0 100 100}"])
+
+
 @pytest.mark.slow
 def test_dac_tile_goes_green_on_the_analog_tile_and_its_faults_go_red(
         tmp_path):
@@ -229,3 +278,40 @@ def test_dac_tile_goes_green_on_the_analog_tile_and_its_faults_go_red(
     assert payload["status"] == "violations"
     assert any(v["kind"] == "precheck_failed" and "ua[1]" in v["msg"]
                for v in payload["violations"]), payload["violations"]
+
+
+@pytest.mark.slow
+def test_a_macro_bounded_like_the_r2r_dac_goes_through_pdn(tmp_path):
+    """corpus/msde/dac_tile with its PR boundary only in the lower-right
+    quarter, as the r2r DAC's flattened buf_20 column left its own
+    (breakage 23). With the abstract taken from that boundary, LibreLane
+    put the drawn macro left of and below where top_harden centred it, and
+    openroad-generatepdn failed. Now the abstract is the drawn extent, the
+    macro sits where the unmodified rung's does, and top_drc, top_lvs and
+    precheck pass on it."""
+    import check_precheck
+    import check_top_drc
+    import check_top_lvs
+    import faults
+
+    rung = faults.CORPUS / "msde" / "dac_tile"
+    ws = faults.make_scratch_workspace(tmp_path, rung, "msde", "dac_tile")
+    gen = ws / "analog" / "layout" / "gen_dac_tile_analog.py"
+    src = gen.read_text(encoding="utf-8")
+    old = ("    layoutlib.rect(shifted, 0.0, 0.0, bb.width(), bb.height(), "
+           "PR_BNDRY)\n")
+    assert src.count(old) == 1
+    gen.write_text(src.replace(old, (
+        "    layoutlib.rect(shifted, bb.width() / 2, 0.0, bb.width(), "
+        "bb.height() / 2, PR_BNDRY)\n")), encoding="utf-8")
+
+    payload, _ = check_top_harden.run(["--workspace", str(ws)])
+    assert payload["status"] == "pass", payload.get("violations")
+    macros = ws / "top" / "macros"
+    assert check_top_harden.lef_size(macros / "dac_tile_analog.lef") == \
+        pytest.approx(check_top_harden.gds_extent(
+            macros / "dac_tile_analog.gds", "dac_tile_analog"), abs=1.0)
+    for gate in (check_top_drc, check_top_lvs, check_precheck):
+        payload, _ = gate.run(["--workspace", str(ws)])
+        assert payload["status"] == "pass", (gate.__name__,
+                                             payload.get("violations"))
