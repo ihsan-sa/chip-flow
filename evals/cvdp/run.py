@@ -105,8 +105,8 @@ DOCKERFILE_OK = re.compile(
 COMMERCIAL = re.compile(r"\b(xrun|irun|xcelium|vcs|vsim|questa|modelsim|"
                         r"jasper|jaspergold|spyglass|genus|innovus)\b", re.I)
 CAVEAT = ("Not the official CVDP harness: each problem's docker-compose "
-          "services run natively under bin/eda (Icarus, cocotb) instead of in "
-          "their containers, with container paths rewritten into a scratch "
+          "services run natively under bin/eda instead of in "
+          "their containers (Icarus, cocotb, yosys), with container paths rewritten into a scratch "
           "directory, on a subset of the non-agentic non-commercial set. Tool "
           "versions differ from the dataset's pinned images. A leaderboard "
           "submission needs the docker harness and is out of scope.")
@@ -258,7 +258,7 @@ def exclusion(row: dict) -> str | None:
     subset: a code-generation category, every compose service on the stock
     open-source sim image (or a Dockerfile that only adds pytest), a plain
     `pytest`/`python3` command, SIM=icarus, and no harness file that
-    invokes a commercial tool, Verilator or yosys."""
+    invokes a commercial tool or Verilator (yosys is in `eda`, so it stays)."""
     cats = row.get("categories") or []
     if not cats or cats[0] not in CATEGORIES:
         return "category"
@@ -297,8 +297,6 @@ def exclusion(row: dict) -> str | None:
         return "commercial-tool"
     if re.search(r"\bverilator\b", live, re.I):
         return "verilator"
-    if re.search(r"\byosys\b", live, re.I):
-        return "yosys"
     return None
 
 

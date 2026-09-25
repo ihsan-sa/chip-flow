@@ -3,7 +3,7 @@ invisible to tb/test_rv_core.py, which never shifts a negative operand
 right arithmetically. Caught only by holdout/test_rv_core_holdout.py."""
 from pathlib import Path
 
-OLD = "wire [31:0] sra   = \$signed(a) >>> alu_b[4:0];"
+OLD = "wire [31:0] sra   = $signed(a) >>> alu_b[4:0];"
 NEW = "wire [31:0] sra   = a >> alu_b[4:0];"
 
 

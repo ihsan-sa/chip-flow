@@ -73,3 +73,18 @@ def test_scoring_needs_hand_edits_declared(tmp_path):
     with pytest.raises(CheckError, match="--hand-edits"):
         ladder.run(["--skill", "vde", "--rung", "uart", "--run", str(tmp_path),
                     "--results-dir", str(tmp_path / "r")])
+
+
+def test_render_shows_the_newest_cvdp_pass_rate_by_category(tmp_path):
+    res = tmp_path / "results"
+    (res / "cvdp").mkdir(parents=True)
+    (res / "cvdp" / "2026-09-24T000000_nonagentic_null.json").write_text(json.dumps({
+        "mode": "solutions", "subset_size": 277, "dataset_size": 302,
+        "limit": 20, "caveat": "Not the official CVDP harness",
+        "overall": {"pass": 3, "total": 20, "pass_rate": 0.15},
+        "by_category": {"cid003": {"name": "spec to RTL", "pass": 3,
+                                   "total": 8, "pass_rate": 0.375}}}))
+    md = ladder.render(res, tmp_path / "f")
+    assert "3 of 20 passed (0.15)" in md and "277 of 302" in md
+    assert "| cid003 spec to RTL | 3 | 8 | 0.38 |" in md
+    assert "Not the official CVDP harness" in md

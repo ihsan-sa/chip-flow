@@ -6,19 +6,19 @@ edited the run by hand (docs/design.md section 3). Harder rungs are higher up.
 
 | level | vde | ade | msde |
 |---|---|---|---|
-| 4 | small RISC-V core: not run | bandgap: not in corpus | SAR ADC: not in corpus |
-| 3 | SPI peripheral with a FIFO: not run | comparator: not in corpus | DAC with an SPI register: not in corpus |
+| 4 | small RISC-V core: red | bandgap: not in corpus | SAR ADC: not in corpus |
+| 3 | SPI peripheral with a FIFO: red | comparator: not in corpus | DAC with an SPI register: not in corpus |
 | 2 | UART: red | R2R DAC: not run | ring oscillator with a divider: not run |
-| 1 | 8-bit counter: not run | current mirror: not run | a sensor counted: not run |
+| 1 | 8-bit counter: red | current mirror: not run | a sensor counted: not run |
 
 ## /vde
 
 | rung | counts | why not | held-out | kill rate | area | worst slack ns | fix attempts | tokens | cost USD | wall s | scored | note |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| counter8 | not run | | | | | | | | | | | |
+| counter8 | no | 7 gate(s) not green | pass (1/1) | 0.96 | 1086.6 | - | 0 | - | - | 438 | 2026-09-25 | reference RTL with its gates run by gate.py, not a /vde skill run |
 | uart | no | 8 gate(s) not green | pass (1/1) | 0.74 | 3197.8 | - | 0 | - | - | 507 | 2026-09-25 | reference RTL with its gates run by gate.py, not a /vde skill run |
-| spi_fifo | not run | | | | | | | | | | | |
-| riscv | not run | | | | | | | | | | | |
+| spi_fifo | no | 10 gate(s) not green | pass (1/1) | 0.70 | 8252.7 | - | 0 | - | - | 378 | 2026-09-25 | reference RTL with its gates run by gate.py, not a /vde skill run |
+| riscv | no | 9 gate(s) not green | pass (1/1) | - | - | - | 0 | - | - | 1044 | 2026-09-25 | reference RTL with its gates run by gate.py, not a /vde skill run |
 
 ## /ade
 
@@ -40,15 +40,17 @@ Frozen fixtures under `evals/fixtures/<stage>/<name>/`; `bench.py --compare` fai
 
 ## CVDP
 
-Newest run: `2026-09-24T201239_nonagentic_null.json`. Pass rate - on 20 problems (limit 20), mode `null`.
+Newest run: `2026-09-24T201239_nonagentic_null.json`, mode `null`: 0 of 20 passed (0.00), from a subset of 261 of 302 problems (limit 20).
+
+Mode `null`: no solutions: each problem's own input files, unchanged. The public v1.1 set ships no reference solutions, so this is a floor plus a harness-reach check (tests_ran), not a model score.
 
 Caveat: Not the official CVDP harness: each problem's docker-compose services run natively under bin/eda (Icarus, cocotb) instead of in their containers, with container paths rewritten into a scratch directory, on a subset of the non-agentic non-commercial set. Tool versions differ from the dataset's pinned images. A leaderboard submission needs the docker harness and is out of scope.
 
 | category | passed | total | rate |
 |---|---|---|---|
-| cid002 | None | 8 | - |
-| cid003 | None | 6 | - |
-| cid004 | None | 3 | - |
-| cid016 | None | 3 | - |
+| cid002 code completion | 0 | 8 | 0.00 |
+| cid003 spec to RTL | 0 | 6 | 0.00 |
+| cid004 code modification | 0 | 3 | 0.00 |
+| cid016 bug fixing | 0 | 3 | 0.00 |
 
-The leaderboard figures to read this beside are in `evals/cvdp/README.md`.
+The subset rule, and where the leaderboard figures to read this beside go, are in `evals/cvdp/README.md`.

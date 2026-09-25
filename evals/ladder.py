@@ -286,21 +286,24 @@ def render(results: Path, fixtures: Path) -> str:
         lines.append("No CVDP result yet (`evals/cvdp/run.py`).")
     else:
         c = json.loads(cv.read_text(encoding="utf-8"))
-        overall = c.get("pass_rate") if not isinstance(c.get("pass_rate"), dict) \
-            else c["pass_rate"].get("overall")
-        lines += [f"Newest run: `{cv.name}`. Pass rate {_fmt(overall)} on "
-                  f"{c.get('selected', c.get('subset_size', '-'))} problems "
-                  f"(limit {c.get('limit') or 'none'}), mode `{c.get('mode', '-')}`.", ""]
+        ov = c.get("overall") or {}
+        lines += [f"Newest run: `{cv.name}`, mode `{c.get('mode', '-')}`: "
+                  f"{ov.get('pass', '-')} of {ov.get('total', '-')} passed "
+                  f"({_fmt(ov.get('pass_rate'))}), from a subset of "
+                  f"{c.get('subset_size', '-')} of {c.get('dataset_size', '-')} "
+                  f"problems (limit {c.get('limit') or 'none'}).", ""]
+        if c.get("mode_note"):
+            lines += [f"Mode `{c['mode']}`: {c['mode_note']}.", ""]
         if c.get("caveat"):
             lines += [f"Caveat: {c['caveat']}", ""]
         cats = c.get("by_category") or {}
         if cats:
             lines += ["| category | passed | total | rate |", "|---|---|---|---|"]
             for cat, v in sorted(cats.items()):
-                lines.append(f"| {cat} | {v.get('passed')} | {v.get('total')} | "
-                             f"{_fmt(v.get('rate'))} |")
-        lines += ["", "The leaderboard figures to read this beside are in "
-                  "`evals/cvdp/README.md`."]
+                lines.append(f"| {cat} {v.get('name', '')} | {v.get('pass')} | "
+                             f"{v.get('total')} | {_fmt(v.get('pass_rate'))} |")
+        lines += ["", "The subset rule, and where the leaderboard figures to "
+                  "read this beside go, are in `evals/cvdp/README.md`."]
     return "\n".join(lines) + "\n"
 
 

@@ -1,0 +1,45 @@
+{
+ "skill": "vde",
+ "rung": "spi_fifo",
+ "block": "spi_fifo",
+ "run": "spi_fifo",
+ "phase": "P0",
+ "scored_at": "2026-09-25T01:03:45+00:00",
+ "counts": false,
+ "gates_green": false,
+ "gate_problems": [
+  "cover: last recorded result is FAIL",
+  "drc: no recorded result",
+  "formal: no recorded result",
+  "glsim: no recorded result",
+  "harden: no recorded result",
+  "lvs: no recorded result",
+  "mutate: last recorded result is FAIL",
+  "precheck: no recorded result",
+  "timing: no recorded result",
+  "release: no recorded pass"
+ ],
+ "gates_passed": [
+  "holdout",
+  "lint",
+  "sim",
+  "spec_lint",
+  "synth"
+ ],
+ "hand_edits": 0,
+ "held_out": {
+  "status": "pass",
+  "tests_passed": 1,
+  "tests_run": 1,
+  "kinds": []
+ },
+ "kill_rate": 0.6957,
+ "line_pct": 100.0,
+ "area": 8252.6976,
+ "worst_slack_ns": null,
+ "fix_attempts": 0,
+ "tokens": null,
+ "cost_usd": null,
+ "wall_s": 378,
+ "note": "reference RTL with its gates run by gate.py, not a /vde skill run"
+}

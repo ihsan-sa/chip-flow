@@ -1,0 +1,45 @@
+{
+ "skill": "vde",
+ "rung": "riscv",
+ "block": "riscv",
+ "run": "riscv",
+ "phase": "P0",
+ "scored_at": "2026-09-25T01:21:56+00:00",
+ "counts": false,
+ "gates_green": false,
+ "gate_problems": [
+  "drc: no recorded result",
+  "glsim: no recorded result",
+  "harden: no recorded result",
+  "lvs: no recorded result",
+  "mutate: no recorded result",
+  "precheck: no recorded result",
+  "synth: no recorded result",
+  "timing: no recorded result",
+  "release: no recorded pass"
+ ],
+ "gates_passed": [
+  "cover",
+  "formal",
+  "holdout",
+  "lint",
+  "sim",
+  "spec_lint"
+ ],
+ "hand_edits": 0,
+ "held_out": {
+  "status": "pass",
+  "tests_passed": 1,
+  "tests_run": 1,
+  "kinds": []
+ },
+ "kill_rate": null,
+ "line_pct": 100.0,
+ "area": null,
+ "worst_slack_ns": null,
+ "fix_attempts": 0,
+ "tokens": null,
+ "cost_usd": null,
+ "wall_s": 1044,
+ "note": "reference RTL with its gates run by gate.py, not a /vde skill run"
+}
