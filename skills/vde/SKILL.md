@@ -36,8 +36,9 @@ resolved for you by the time it reaches `recipe.steps[].command`:
 `task_router.py` binds the `scripts/` convention to
 `${CHIP_FLOW_HOME:-$HOME/.claude/skills/chip-flow}/engine/scripts/` before
 it ever renders a plan, and that resolution is proven to work from any cwd
-(`tests/test_task_router.py`) - run the rendered `command` field verbatim,
-through `eda python`, never a hand-assembled relative path. Gates are the
+(`tests/test_task_router.py`) - run the rendered `command` field verbatim
+(it already starts with `bin/eda python`, so the toolchain's python runs
+it, never the host's), never a hand-assembled relative path. Gates are the
 one exception worth knowing up front: `gate.py` dynamically imports its
 sibling `check_<tool>.py` from that same directory by module name, so a
 gate step's `--workspace` is the only path that varies.

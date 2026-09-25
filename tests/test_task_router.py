@@ -247,10 +247,12 @@ def test_render_binds_scripts_to_chip_flow_home_from_a_different_cwd(
     cmds = [s["command"] for s in payload["recipe"]["steps"]
            if s.get("kind") == "script"]
     assert cmds, "resume should render at least one script step"
-    prefix = str(REPO / "engine" / "scripts") + "/"
+    eda = f"{REPO / 'bin' / 'eda'} python "
+    prefix = eda + str(REPO / "engine" / "scripts") + "/"
     for c in cmds:
+        # never the bare script: its shebang would run the host's python
         assert c.startswith(prefix), c
-        script_path = Path(c.split()[0])
+        script_path = Path(c.split()[2])
         assert script_path.is_file(), f"rendered command names a script " \
                                       f"that does not exist: {script_path}"
 
@@ -259,3 +261,40 @@ def test_chip_flow_home_defaults_when_env_unset(monkeypatch):
     monkeypatch.delenv("CHIP_FLOW_HOME", raising=False)
     assert tr.chip_flow_home() == Path(
         "~/.claude/skills/chip-flow").expanduser()
+
+
+# --------------------------------------------- msde nested side names (14/20)
+
+def _msde_parent(tmp_path: Path) -> Path:
+    ws = tmp_path / "blocks" / "r2r_dac"
+    state_mod.State.init(ws, "msde", "r2r_dac")
+    return ws
+
+
+@pytest.mark.parametrize("side,skill,name", [
+    ("digital", "vde", "r2r_dac"), ("analog", "ade", "r2r_dac_analog")])
+def test_nested_side_takes_the_split_name_not_its_directory(tmp_path, side,
+                                                            skill, name):
+    ws = _msde_parent(tmp_path) / side
+    payload, _ = tr.run(["--skill", skill, "--verb", "full-run",
+                        "--workspace", str(ws)])
+    assert payload["block"] == name
+    assert all(p["name"] != "msde_split_name" for p in payload["preconditions"])
+    cmds = [s.get("command") or "" for s in payload["recipe"]["steps"]]
+    assert any(f"--block {name}" in c for c in cmds)
+
+
+def test_nested_side_with_a_directory_name_is_blocked(tmp_path):
+    ws = _msde_parent(tmp_path) / "analog"
+    payload, _ = tr.run(["--skill", "ade", "--verb", "full-run",
+                        "--workspace", str(ws), "--arg", "block=analog"])
+    assert payload["status"] == "blocked"
+    assert "r2r_dac_analog" in payload["question"]
+
+
+def test_a_workspace_named_analog_outside_msde_keeps_its_name(tmp_path):
+    ws = tmp_path / "blocks" / "analog"
+    payload, _ = tr.run(["--skill", "ade", "--verb", "full-run",
+                        "--workspace", str(ws)])
+    assert payload["block"] == "analog"
+    assert all(p["name"] != "msde_split_name" for p in payload["preconditions"])

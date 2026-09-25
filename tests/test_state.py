@@ -690,3 +690,17 @@ def test_edit_declared_before_the_pin_does_not_cover_a_later_change(tmp_path):
     assert st.holdout_drift()["declared"] is None
     with pytest.raises(CheckError):
         st.rehash()
+
+
+def test_init_of_a_nested_msde_side_refuses_a_name_the_split_did_not_give(
+        tmp_path):
+    parent = tmp_path / "blocks" / "r2r_dac"
+    state_mod.State.init(parent, "msde", "r2r_dac")
+    with pytest.raises(CheckError, match="r2r_dac_analog"):
+        state_mod.State.init(parent / "analog", "ade", "analog")
+    assert not (parent / "analog" / "state.json").exists()
+    st = state_mod.State.init(parent / "analog", "ade", "r2r_dac_analog")
+    assert st.data["block"] == "r2r_dac_analog"
+    state_mod.State.init(parent / "digital", "vde", "r2r_dac")
+    # outside an msde workspace a directory called analog is just a name
+    state_mod.State.init(tmp_path / "analog", "ade", "analog")

@@ -43,8 +43,9 @@ with no `engine/` sibling):
 
 `$CFH` below means `${CHIP_FLOW_HOME:-$HOME/.claude/skills/chip-flow}`. A
 recipe step written `scripts/state.py ...` arrives in
-`recipe.steps[].command` already resolved to `$CFH/engine/scripts/`; run
-that `command` verbatim through `eda python`.
+`recipe.steps[].command` already resolved to `$CFH/engine/scripts/` and
+led by `$CFH/bin/eda python`; run that `command` verbatim, never the bare
+script, whose shebang finds the host's python.
 
 ## Front door - route the task first
 

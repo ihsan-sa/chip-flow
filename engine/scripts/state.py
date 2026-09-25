@@ -249,6 +249,12 @@ class State:
             raise CheckError(f"unknown skill {skill!r} (known: {', '.join(SKILLS)})")
         if phase not in PHASES:
             raise CheckError(f"unknown phase {phase!r}")
+        split_name = statelib.split_block_name(workspace)
+        if split_name and block != split_name:
+            raise CheckError(
+                f"{workspace} is the msde split's {workspace.name} side, so its "
+                f"block is {split_name!r}, not {block!r} (skills/msde/SKILL.md, "
+                "Run start): give --block " + split_name)
         workspace.mkdir(parents=True, exist_ok=True)
         for d in SUBDIRS:  # idempotent scaffold; pre-existing content survives
             (workspace / d).mkdir(exist_ok=True)
