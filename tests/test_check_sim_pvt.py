@@ -143,6 +143,33 @@ def test_explicit_corner_list_can_add_beyond_default(tmp_path, monkeypatch, caps
     assert set(out["corners"]) == {"tt", "ss", "ff", "sf", "fs"}
 
 
+def test_spec_grid_replaces_the_default_five_at_fixed_vdd(tmp_path, monkeypatch, capsys):
+    # The R-2R DAC shakedown's brief asked for tt/ff/ss x -40/25/125 C at a
+    # fixed 3.3 V; before the grid form, sim_pvt could only run the default
+    # five, whose ss/ff move the supply by 10 %.
+    ws = make_ws(tmp_path, corners_field=(
+        "{grid: {process: [typical, ff, ss], temp_c: [-40, 25, 125]}}"))
+    eda = make_corner_sensitive_fake_eda(tmp_path)
+    monkeypatch.setattr(sim_run, "EDA_BIN", eda)
+    code = check_sim_pvt.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert out["corners"] == [f"{p}_{t}c" for p in ("tt", "ff", "ss")
+                              for t in ("m40", "25", "125")]
+    assert {r["vdd"] for r in out["results"]} == {"3.3"}
+    assert {r["temp_c"] for r in out["results"]} == {-40, 25, 125}
+    assert code == 1, out  # the ss rows still fail, all three of them
+    bad = {v["refs"][1] for v in out["violations"] if v["kind"] == "sim_bound_fail"}
+    assert bad == {"ss_m40c", "ss_25c", "ss_125c"}
+
+
+def test_spec_without_a_grid_keeps_the_default_five(tmp_path, monkeypatch, capsys):
+    ws = make_ws(tmp_path, corners_field="default")
+    monkeypatch.setattr(sim_run, "EDA_BIN", make_corner_sensitive_fake_eda(tmp_path))
+    check_sim_pvt.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert out["corners"] == ["tt", "ss", "ff", "sf", "fs"]
+
+
 @pytest.mark.slow
 def test_real_mirror_passes_every_default_corner(tmp_path, capsys):
     # the real fault this row names: "meets at typical, loses headroom at

@@ -23,10 +23,18 @@ directly, IN-PROCESS - the same shape check_sim.py uses for cocotblib
 (docs/design.md 1.2: no bin/eda subprocess where none is needed) - never a
 subprocess of this script. The CLI below is for standalone smoke use and
 parity with /hwde's own sim_run.py entry point.
+
+Timeout: each bench run gets the caller's --timeout (default 60 s), or
+longer when the bench asks for it with a comment line in its tb/*.cir -
+`* sim_timeout_s: 600` - which the bench-writer sets for a long sweep (a
+256-code DAC bench). The larger of the two wins, capped at
+MAX_BENCH_TIMEOUT. A run that times out is a `sim_engine_error_sim_timeout`
+finding, never a pass.
 """
 from __future__ import annotations
 
 import argparse
+import re
 import shutil
 import subprocess
 import sys
@@ -46,6 +54,8 @@ from checklib import CheckError  # noqa: E402
 SCRIPT = "sim_run"
 EDA_BIN = REPO / "bin" / "eda"
 DEFAULT_TIMEOUT = 60.0
+MAX_BENCH_TIMEOUT = 3600.0
+BENCH_TIMEOUT_RE = re.compile(r"^\*\s*sim_timeout_s\s*[:=]\s*(\S+)", re.M | re.I)
 PDK_REL = Path("foss") / "pdks" / "gf180mcuD"
 
 
@@ -135,6 +145,23 @@ def build_subs(t_root: Path, netlist_path: Path, corner: dict,
     }
 
 
+def bench_timeout(bench_name: str, bench_text: str, timeout: float) -> float:
+    """The caller's timeout, raised to the bench's own `* sim_timeout_s: N`
+    line when it has one. A value that is not a number in
+    (0, MAX_BENCH_TIMEOUT] is a CheckError, not silently ignored."""
+    m = BENCH_TIMEOUT_RE.search(bench_text)
+    if not m:
+        return timeout
+    try:
+        want = float(m.group(1))
+    except ValueError:
+        want = float("nan")
+    if not 0 < want <= MAX_BENCH_TIMEOUT:
+        raise CheckError(f"{bench_name}: 'sim_timeout_s: {m.group(1)}' must "
+                         f"be a number of seconds in (0, {MAX_BENCH_TIMEOUT:g}]")
+    return max(timeout, want)
+
+
 def run_bench_at_corner(eda_bin: Path, bench_name: str,
                         bench_template_text: str, bounds: list[dict],
                         subs: dict, corner: dict, out_dir: Path,
@@ -148,6 +175,7 @@ def run_bench_at_corner(eda_bin: Path, bench_name: str,
     out_dir.mkdir(parents=True, exist_ok=True)
     deck_path = out_dir / f"{Path(bench_name).stem}__{corner['name']}.cir"
     deck_path.write_text(text, encoding="utf-8")
+    timeout = bench_timeout(bench_name, bench_template_text, timeout)
     stdout, stderr, rc = simlib.run_ngspice(eda_bin, deck_path, out_dir, timeout)
     measures = simlib.parse_measures(stdout)
     failed = simlib.parse_failed_measures(stderr)
@@ -161,7 +189,8 @@ def run_bench_at_corner(eda_bin: Path, bench_name: str,
             check, bench_name, corner["name"], err_kinds, detail)
     violations += simlib.compare_bounds(
         bounds, measures, bench_name, corner=corner["name"],
-        failed_measures=failed, check=check)
+        failed_measures=failed, check=check,
+        unsettled=simlib.parse_unsettled(stdout))
 
     return {
         "bench": bench_name, "corner": corner["name"], "process": corner["process"],
@@ -173,11 +202,14 @@ def run_bench_at_corner(eda_bin: Path, bench_name: str,
 
 def run_workspace_benches(ws: Path, eda_bin: Path | None = None,
                           corner_names: list[str] | None = None,
+                          corners: list[dict] | None = None,
                           timeout: float = DEFAULT_TIMEOUT,
                           check: str = "sim",
                           out_subdir: str = "log/sim") -> dict:
     """Run every tb/*.cir with a bounds sidecar at every requested corner
-    (default: corners.py's default_corners()). Returns {top, corners,
+    (default: corners.py's default_corners()) - `corners` passes the corner
+    dicts themselves (a spec's grid has names corners.yaml never lists),
+    `corner_names` picks from default_corners by name. Returns {top, corners,
     results: [run_bench_at_corner() dicts], violations: [flattened]}."""
     eda_bin = eda_bin or EDA_BIN  # resolved here, not as a stale-bound
     # default value - see toolchain_root()'s own comment on why.
@@ -192,8 +224,12 @@ def run_workspace_benches(ws: Path, eda_bin: Path | None = None,
     netlist_path = find_netlist(ws)
     sizing = load_sizing(ws)
     corners_data = corners_mod.load()
-    corner_list = (corners_mod.corners_by_name(corners_data, corner_names)
-                  if corner_names else corners_mod.default_corners(corners_data))
+    if corners:
+        corner_list = [dict(c) for c in corners]
+    elif corner_names:
+        corner_list = corners_mod.corners_by_name(corners_data, corner_names)
+    else:
+        corner_list = corners_mod.default_corners(corners_data)
 
     out_dir = ws / out_subdir
     shutil.rmtree(out_dir, ignore_errors=True)

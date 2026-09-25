@@ -117,7 +117,7 @@ P6 -> done and never visits P7/P8.
 | spec_lint | P1 | every measure has bounds and a corner set; supply, devices declared; with `tb/` present, every spec measure has a bench bound and back | spec.yaml, tb/*.bounds.json |
 | netlist_lint | P4 | every device a gf180mcu_fd_pr model, no floating node, every declared device instantiated, a clean ngspice dry run | netlist/, tb/ |
 | sim_tt | P4 | every `.measure` inside its bound at typical | netlist/, tb/, sizing |
-| sim_pvt | P4 | every measure inside its bound at every corner (the default five, never fewer) | netlist/, tb/, sizing |
+| sim_pvt | P4 | every measure inside its bound at every corner (the default five, never fewer, or the spec's own PVT grid) | netlist/, tb/, sizing |
 | bench_strength | P4 | every device mutant (size doubled, connection removed, type flipped, bias halved) pushes a measure out | netlist/, tb/, spec devices |
 | mc | P4 | Monte Carlo yield >= `mc.yield_min`, only when `mc.enabled: true` | netlist/, tb/, spec mc |
 | drc | P5 | 0 findings from klayout's GF180 signoff deck (magic DRC is not run) | layout/gen_<block>.py |

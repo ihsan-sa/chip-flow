@@ -1,0 +1,77 @@
+* step_settle_tb.cir - the settling-time half of a step bench. Copy it into
+* tb/<block>_step_tb.cir, replace the block between the DUT markers with the
+* block's own stimulus and instance, and set the four .param values below
+* from spec/spec.yaml and spec/topology.md. See skills/ade/agents/
+* bench-writer.md.
+*
+* WINDOW: sized from the expected settling, never a fixed 100 ns. t_win is
+* the larger of 5x the spec's settling bound and 20x the time constant
+* topology.md predicts at the slowest corner, so a block that meets its
+* equations settles well inside it and one that misses its bound still
+* shows by how much. A fixed window caps the readout at the window: a
+* ladder with tau = 190 ns in a 100 ns window reads "99 ns", which is the
+* window, not the ladder.
+*
+* VERDICT: settled only when the output stays inside +-0.5 LSB of its final
+* value for the last 20 % of the window AND it moved at least half the
+* ideal step. Otherwise the bench prints `t_settle = not_settled`, which
+* sim_tt/sim_pvt report as a sim_not_settled finding, not a number.
+*
+*   t_bound   the spec's settling bound (s), the same number as the bounds
+*             sidecar's max
+*   tau_exp   topology.md's predicted time constant at the slowest corner (s)
+*   dv_ideal  the ideal output step (V), e.g. 255/256*VDD for a 0 -> 255 code
+*   nbits     resolution; the band is VDD / 2^(nbits+1), i.e. 0.5 LSB
+*
+* A window this long can outrun sim_run's 60 s per-run limit on a big
+* block; add a `* sim_timeout_s: <seconds>` line when it does.
+
+.include '{{PDK}}/libs.tech/ngspice/design.ngspice'
+.lib '{{PDK}}/libs.tech/ngspice/sm141064.spice' {{CORNER}}
+.lib '{{PDK}}/libs.tech/ngspice/sm141064.spice' {{RES_CORNER}}
+.include '{{NETLIST}}'
+{{SIZING}}
+
+.temp {{TEMP_C}}
+.param vddp={{VDD}}
+.param t_bound=20n tau_exp=2.7n nbits=8 dv_ideal='255/256*vddp'
+.param t_edge=20n t_win='max(5*t_bound, 20*tau_exp)'
+.csparam t_edge={t_edge}
+.csparam t_pre={t_edge-0.1n}
+.csparam t_stop={t_edge+t_win}
+.csparam t_tail={t_edge+0.8*t_win}
+.csparam band={vddp/2**(nbits+1)}
+.csparam dv_ideal={dv_ideal}
+.csparam t_max={t_win/2000}
+
+vdd vdd 0 {vddp}
+vss vss 0 0
+
+* --- DUT BEGIN: the block's own stimulus and instance; `out` is the node
+* whose settling is scored. One step at t_edge, 100 ps edge.
+vin in 0 pwl(0 0 {t_edge-0.05n} 0 {t_edge+0.05n} {vddp})
+xdut in out vdd vss <subckt_name>
+* --- DUT END
+
+.control
+set noaskquit
+save v(out)
+tran 10p $&t_stop 0 $&t_max
+let vo = v(out)
+let tt = time
+meas tran v0 find v(out) at=$&t_pre
+meas tran vf find v(out) at=$&t_stop
+let outb = (abs(vo - vf) gt band) * (tt gt t_edge)
+let t_last = vecmax(outb*tt)
+let t_settle = t_last - t_edge
+echo
+echo "  Measurements for Transient Analysis (step_settle_tb, computed in .control)"
+if (t_last gt t_tail) | (abs(vf - v0) lt 0.5*dv_ideal)
+  echo "t_settle = not_settled"
+else
+  echo "t_settle = $&t_settle"
+end
+echo
+.endc
+
+.end

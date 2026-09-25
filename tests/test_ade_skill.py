@@ -13,6 +13,7 @@ import shutil
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 REPO = Path(__file__).resolve().parents[1]
@@ -316,3 +317,93 @@ def test_optimise_only_calls_scripts_that_already_exist(tmp_path):
         if step.get("kind") == "script":
             script = (ENGINE / "scripts" / step["script"])
             assert script.is_file(), step["script"]
+
+
+# ------------------------------------------------ r2r_ladder topology template
+
+R2R = SKILL / "reference" / "topologies" / "r2r_ladder.sp"
+
+
+def _r2r_bound(name: str) -> tuple[float, float]:
+    m = re.search(rf"^\*\s+{name}(?: \(.*?\))?: ([0-9.e+-]+) to ([0-9.e+-]+)",
+                  R2R.read_text(encoding="utf-8"), re.M)
+    assert m, f"no '{name}: X to Y' line in {R2R.name}'s SIZING BOUNDS"
+    return float(m.group(1)), float(m.group(2))
+
+
+def test_r2r_ladder_bounds_fit_the_shakedowns_ppolyf_u_unit():
+    # The /msde R-2R DAC shakedown sized a 27 kohm ppolyf_u unit at W 2 um,
+    # L 150 um; the template's rm1-era bounds (L 2-20 um) excluded it.
+    w_lo, w_hi = _r2r_bound("r_width")
+    l_lo, l_hi = _r2r_bound("r_length")
+    assert w_lo <= 2e-6 <= w_hi
+    assert l_lo <= 1.5e-4 <= l_hi
+
+
+def test_r2r_ladder_is_built_of_ppolyf_u_units_only():
+    body = R2R.read_text(encoding="utf-8").split(".subckt r2r_ladder", 1)[1]
+    models = {ln.split()[4] for ln in body.splitlines()
+              if ln.startswith("x")}
+    assert models == {"ppolyf_u"}
+
+
+@pytest.mark.slow
+def test_r2r_ladder_weights_are_binary_in_ngspice(tmp_path):
+    import sim_run
+    import simlib
+    pdk = sim_run.pdk_root(sim_run.toolchain_root())
+    lib = pdk / "libs.tech" / "ngspice" / "sm141064.spice"
+    deck = tmp_path / "r2r_check.cir"
+    lines = ["* r2r_ladder weights",
+             f".include '{pdk / 'libs.tech' / 'ngspice' / 'design.spice'}'",
+             f".lib '{lib}' typical", f".lib '{lib}' res_typical",
+             f".include '{R2R}'",
+             *(f"vb{k} b{k} 0 {{vb{k}}}" for k in range(4)),
+             ".param vb0=0 vb1=0 vb2=0 vb3=0",
+             "x1 b0 b1 b2 b3 vout 0 r2r_ladder", ".control"]
+    codes = [8, 1, 14]
+    for code in codes:
+        lines += [f"alterparam vb{k}={3.3 if code >> k & 1 else 0}"
+                  for k in range(4)]
+        lines += ["reset", "op", f"echo code{code}=$&v(vout)"]
+    lines += [".endc", ".end"]
+    deck.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    out, err, _ = simlib.run_ngspice(sim_run.EDA_BIN, deck, tmp_path, 60)
+    for code in codes:
+        m = re.search(rf"code{code}=([0-9.e+-]+)", out)
+        assert m, out + err
+        assert abs(float(m.group(1)) - 3.3 * code / 16) < 1e-3, (code, m.group(1))
+
+
+# ------------------------------------------------ step_settle_tb.cir template
+
+STEP_TB = SKILL / "templates" / "step_settle_tb.cir"
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("r, c, want", [
+    ("1k", "1p", "number"),       # tau 1 ns as predicted: settles in ~6.2 tau
+    ("27k", "7p", "not_settled"),  # the shakedown's ladder, tau ~190 ns
+])
+def test_step_template_settles_or_says_it_did_not(tmp_path, r, c, want):
+    import sim_run
+    import simlib
+    text = STEP_TB.read_text(encoding="utf-8")
+    a, b = text.index("* --- DUT BEGIN"), text.index("* --- DUT END")
+    text = (text[:a] + "vin in 0 pwl(0 0 {t_edge-0.05n} 0 {t_edge+0.05n} {vddp})\n"
+            f"r1 in out {r}\nc1 out 0 {c}\n" + text[b:])
+    text = text.replace("tau_exp=2.7n", "tau_exp=1n")
+    text = re.sub(r"^\.include '\{\{NETLIST\}\}'\n", "", text, flags=re.M)
+    t_root = sim_run.toolchain_root()
+    subs = {"PDK": str(sim_run.pdk_root(t_root)), "CORNER": "typical",
+            "RES_CORNER": "res_typical", "TEMP_C": 27, "VDD": "3.3",
+            "SIZING": ""}
+    deck = tmp_path / "step.cir"
+    deck.write_text(simlib.materialize(text, subs), encoding="utf-8")
+    out, err, _ = simlib.run_ngspice(sim_run.EDA_BIN, deck, tmp_path, 120)
+    if want == "not_settled":
+        assert simlib.parse_unsettled(out) == {"t_settle"}, out + err
+    else:
+        t = simlib.parse_measures(out)["t_settle"]
+        # 0.5 LSB of an 8-bit step: ln(2 * 256 * 255/256) tau = 6.23 ns
+        assert t == pytest.approx(6.23e-9, rel=0.03), out + err

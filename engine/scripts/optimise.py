@@ -67,8 +67,8 @@ during the search itself scores ONLY at 'tt' (the cheap evaluator, section
 4: "the spec bench at typical") - once the search concludes, `numeric`
 also runs the kept sizing (whatever is now on disk, winner or unchanged
 start) through sim_run.run_workspace_benches over the FULL corner set
-spec.yaml's own `corners` field expands to (check_sim_pvt.corner_names_
-for_spec - the identical corner set a real `sim_pvt` gate run would use),
+spec.yaml's own `corners` field expands to (corners.spec_corners - the
+identical corner set a real `sim_pvt` gate run would use),
 logs ONE more trials.tsv row for it ("winner, full corner set"), and
 reports `full_corner_pass`/`full_corner_corners`/`full_corner_violations`
 in the payload - a winner that only holds at typical (gates.yaml's own
@@ -93,7 +93,6 @@ ENGINE = SCRIPTS.parent
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(ENGINE / "lib"))
 import checklib  # noqa: E402
-import check_sim_pvt  # noqa: E402
 import corners as corners_mod  # noqa: E402
 import sim_run  # noqa: E402
 import simlib  # noqa: E402
@@ -368,11 +367,10 @@ def run_numeric(argv=None):
         # so this is the exact same corner set/sizing a real sim_pvt gate
         # run would score - reusing sim_run.run_workspace_benches directly,
         # never a re-implementation of it.
-        default_names = [c["name"] for c in
-                         corners_mod.default_corners(corners_mod.load())]
-        full_corner_names = check_sim_pvt.corner_names_for_spec(spec, default_names)
+        full_corner_list = corners_mod.spec_corners(
+            corners_mod.load(), spec.get("corners", "default"))
         full_corner = sim_run.run_workspace_benches(
-            ws, eda_bin=eda_bin, corner_names=full_corner_names,
+            ws, eda_bin=eda_bin, corners=full_corner_list,
             timeout=args.timeout, check="sim_pvt")
         full_corner_pass = not full_corner["violations"]
         write_row(trial_counter["n"], kept_final,

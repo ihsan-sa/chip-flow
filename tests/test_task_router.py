@@ -123,6 +123,25 @@ def test_release_task_matches_release_verb():
     assert cands and cands[0]["verb"] == "release"
 
 
+@pytest.mark.parametrize("skill", SKILLS)
+@pytest.mark.parametrize("text", [
+    "full design of an 8-bit R-2R DAC",   # the shakedown's own words
+    "do the complete design of the r2r_dac block",
+])
+def test_full_design_phrasings_route_to_full_run(skill, text):
+    # The /msde R-2R DAC shakedown had to force `--verb full-run` because
+    # "full design of ... DAC" matched nothing.
+    payload, _ = tr.run(["--skill", skill, "--task", text])
+    assert payload["match"]["verb"] == "full-run"
+    assert payload["match"]["how"] == "table"
+
+
+@pytest.mark.parametrize("skill", SKILLS)
+def test_full_design_review_still_routes_to_review(skill):
+    cands = tr.match_verbs("full design review of the dac", tr.load_tasks(skill))
+    assert [c["verb"] for c in cands] == ["review"]
+
+
 def test_no_match_is_unknown_not_a_crash():
     payload, _ = tr.run(["--skill", "vde", "--task", "xyzzy plugh"])
     assert payload["status"] == "unknown"

@@ -39,6 +39,7 @@ verbs:
             '\bdesign\b.*\bspec\.md\b',
             '\bbuild (me )?an?\b', '\bnew block\b', '\bmixed[- ]signal\b',
             '\bfrom scratch\b', '\bfull (run|pipeline)\b',
+            '\b(full|complete|whole|entire) design\b(?!\s+review)',
             '\bend[- ]to[- ]end\b', '\bwhole pipeline\b']
       weight: 1
     steps:

@@ -130,6 +130,69 @@ def test_run_workspace_benches_engine_error_fails_even_with_clean_measures(tmp_p
     assert "sim_engine_error_singular_matrix" in kinds
 
 
+def _capture_ngspice(monkeypatch, stdout, stderr="", rc=0):
+    """Stand in for ngspice itself and record the timeout each run got."""
+    seen = []
+
+    def fake(eda_bin, deck_path, cwd, timeout):
+        seen.append(timeout)
+        return stdout, stderr, rc
+    monkeypatch.setattr(sim_run.simlib, "run_ngspice", fake)
+    monkeypatch.setattr(sim_run, "toolchain_root", lambda *a, **k: Path("/nonexistent-toolchain"))
+    return seen
+
+
+def test_timeout_is_a_finding_even_when_every_measure_printed(tmp_path, monkeypatch):
+    # sim_run's timeout must stay a refusal, never a pass: this run printed
+    # vout inside its bound and was then cut off.
+    ws = make_ws(tmp_path)
+    _capture_ngspice(monkeypatch, CLEAN_MEASURE_STDOUT,
+                     "\n[sim_run] timed out after 60s", -1)
+    result = sim_run.run_workspace_benches(ws, corner_names=["tt"])
+    kinds = {v["kind"] for v in result["violations"]}
+    assert kinds == {"sim_engine_error_sim_timeout"}
+
+
+def test_bench_can_ask_for_a_longer_timeout(tmp_path, monkeypatch):
+    # a 256-code DAC bench on a loaded host needs more than 60 s per corner
+    ws = make_ws(tmp_path)
+    seen = _capture_ngspice(monkeypatch, CLEAN_MEASURE_STDOUT)
+    sim_run.run_workspace_benches(ws, corner_names=["tt"])
+    assert seen == [60.0]  # no directive: the caller's default holds
+
+    bench = ws / "tb" / "widget_tb.cir"
+    bench.write_text("* sim_timeout_s: 600\n" + BENCH_TEMPLATE, encoding="utf-8")
+    seen.clear()
+    result = sim_run.run_workspace_benches(ws, corner_names=["tt"], timeout=30)
+    assert seen == [600.0]
+    assert result["violations"] == []
+
+    seen.clear()
+    sim_run.run_workspace_benches(ws, corner_names=["tt"], timeout=900)
+    assert seen == [900.0]  # a bench never shortens the caller's limit
+
+
+def test_a_bench_that_did_not_settle_is_a_finding_not_a_number(tmp_path, monkeypatch):
+    # the shakedown's step bench read "99 ns" off a 100 ns window; a bench
+    # built on templates/step_settle_tb.cir says not_settled instead
+    ws = make_ws(tmp_path)
+    _capture_ngspice(monkeypatch, "\n  Measurements for Transient Analysis\n"
+                                  "vout = not_settled\n")
+    result = sim_run.run_workspace_benches(ws, corner_names=["tt"])
+    assert [v["kind"] for v in result["violations"]] == ["sim_not_settled"]
+    assert "did not settle within" in result["violations"][0]["msg"]
+
+
+@pytest.mark.parametrize("value", ["0", "-5", "soon", "7200"])
+def test_bench_timeout_outside_the_cap_is_an_error(tmp_path, monkeypatch, value):
+    ws = make_ws(tmp_path)
+    _capture_ngspice(monkeypatch, CLEAN_MEASURE_STDOUT)
+    (ws / "tb" / "widget_tb.cir").write_text(
+        f"* sim_timeout_s: {value}\n" + BENCH_TEMPLATE, encoding="utf-8")
+    with pytest.raises(CheckError, match="sim_timeout_s"):
+        sim_run.run_workspace_benches(ws, corner_names=["tt"])
+
+
 def test_run_workspace_benches_nonzero_exit_with_no_measures_fails(tmp_path):
     ws = make_ws(tmp_path)
     eda = make_fake_eda(tmp_path, "", stderr="Error: unknown subckt\n",

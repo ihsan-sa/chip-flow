@@ -55,8 +55,19 @@ CHECK_KINDS = {"sim", "formal", "both", "measure"}
 #                                      block's netlist/*.cir must instantiate
 #                                      (check_netlist_lint.py cross-checks)
 #                                      and bench_strength mutates
-#     corners: "default" | [str,...]  optional (default: corners.py's own
-#                                      default_corners())
+#     corners: "default" | "all" | [str,...] | {grid: {...}}
+#                                      optional (default: corners.py's own
+#                                      default_corners()); the forms and
+#                                      the grid's rules are corners.py's
+#                                      spec_corners() / grid_corners(),
+#                                      which check_spec_lint_ade.py runs
+#     split_devices: [{refdes, cell, why}]   optional; a GF180 standard cell
+#                                      the msde split put inside this
+#                                      analog macro (a ladder's bit drivers),
+#                                      the one kind of device the analog-
+#                                      designer may add beyond its template.
+#                                      `cell` must be a gf180mcu_fd_sc_*
+#                                      cell and `refdes` must be in `devices`
 #     measures:
 #       - name: str                   required, unique
 #         bounds: {min?, max?}        required, at least one of min/max
@@ -71,6 +82,7 @@ CHECK_KINDS = {"sim", "formal", "both", "measure"}
 #                        `sw_stat_mismatch=1` (device-level, the default)
 
 ADE_MEASURE_CORNER_KINDS = {"default", "all"}
+STD_CELL_PATTERN = r"^gf180mcu_fd_sc_mcu(7t|9t)5v0__[a-z0-9_]+$"
 
 
 def lint_spec_ade(spec: dict, rel_path: str = "spec/spec.yaml") -> list[dict]:
@@ -82,6 +94,8 @@ def lint_spec_ade(spec: dict, rel_path: str = "spec/spec.yaml") -> list[dict]:
     declared.") - reusing it wholesale would force every analog block to
     also carry digital-shaped requirements it has no use for. `top` is
     checked here too (every gate downstream needs it, same as vde's)."""
+    import re
+
     from checklib import violation
 
     out: list[dict] = []
@@ -105,12 +119,37 @@ def lint_spec_ade(spec: dict, rel_path: str = "spec/spec.yaml") -> list[dict]:
         bad("no_devices", "spec.yaml has no non-empty 'devices' list of "
                           "refdes strings")
 
+    split = spec.get("split_devices", [])
+    declared = set(devices) if isinstance(devices, list) else set()
+    if not isinstance(split, list):
+        bad("bad_split_devices", "spec.yaml 'split_devices' must be a list "
+                                 "of {refdes, cell, why}")
+        split = []
+    for i, d in enumerate(split):
+        where = f"split_devices[{i}]"
+        if not (isinstance(d, dict) and set(d) == {"refdes", "cell", "why"}
+                and all(isinstance(d[k], str) and d[k].strip() for k in d)):
+            bad("bad_split_devices", f"{where} must be exactly {{refdes, "
+                                     "cell, why}, each a non-empty string")
+            continue
+        if not re.match(STD_CELL_PATTERN, d["cell"]):
+            # the exception is for the split's std-cell drivers only; any
+            # other device a template lacks stays the designer's invention
+            bad("bad_split_devices", f"{where} cell {d['cell']!r} is not a "
+               "GF180 standard cell (gf180mcu_fd_sc_mcu7t5v0__* or "
+               "mcu9t5v0__*)", refs=[d["refdes"]])
+        if d["refdes"] not in declared:
+            bad("bad_split_devices", f"{where} refdes {d['refdes']!r} is not "
+               "in 'devices'", refs=[d["refdes"]])
+
     corners_field = spec.get("corners", "default")
     if not ((isinstance(corners_field, str) and corners_field in ADE_MEASURE_CORNER_KINDS)
            or (isinstance(corners_field, list) and corners_field
-               and all(isinstance(c, str) for c in corners_field))):
+               and all(isinstance(c, str) for c in corners_field))
+           or (isinstance(corners_field, dict) and set(corners_field) == {"grid"})):
         bad("bad_corners", "spec.yaml 'corners' must be 'default', 'all', "
-                           "or a non-empty list of corner names")
+                           "a non-empty list of corner names, or "
+                           "{grid: {process, temp_c, supply_pct}}")
 
     measures = spec.get("measures")
     if not isinstance(measures, list) or not measures:

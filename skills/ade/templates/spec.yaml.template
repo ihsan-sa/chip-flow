@@ -15,7 +15,10 @@ devices: []                   # refdes list - left to the analog-designer
 
 corners: default              # "default" (corners.py's own default_corners:
                                # typical + the four PVT extremes), "all", or
-                               # an explicit [name, ...] list
+                               # an explicit [name, ...] list, or a PVT
+                               # grid: {grid: {process: [typical, ff, ss],
+                               # temp_c: [-40, 25, 125]}} (supply_pct
+                               # defaults to [0]: the nominal VDD above)
 
 measures:
   - name: <measure_name>       # unique; the bench-writer's .bounds.json
