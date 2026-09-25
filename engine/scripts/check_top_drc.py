@@ -5,9 +5,9 @@
     check_top_drc.py --workspace MSDE_WS [--out FILE]
 
 Runs M4's drc recipe (check_drc.run: magic's DRC deck and klayout's
-gf180mcu.drc) on the GDS top_harden left at top/harden/runs/run/final/gds -
-the standard cells and the analog macro's own geometry in one layout. Refuses
-when top_harden has not produced that GDS.
+gf180mcu.drc, each allowed TOP_TIMEOUT_S) on the GDS top_harden left at
+top/harden/runs/run/final/gds - the standard cells and the analog macro's
+own geometry in one layout. Refuses when top_harden has not produced that GDS.
 """
 from __future__ import annotations
 
@@ -23,6 +23,9 @@ import check_drc  # noqa: E402
 import check_top_harden  # noqa: E402
 
 SCRIPT = "check_top_drc"
+# The assembled top is a whole tile, not one block: klayout's deck on it ran
+# past check_drc's 300s block budget under a loaded box, so it gets longer.
+TOP_TIMEOUT_S = 1800.0
 
 
 def run(argv=None):
@@ -36,6 +39,7 @@ def run(argv=None):
     if not (top / "spec" / "spec.yaml").is_file():
         raise checklib.CheckError(f"no assembled top at {top} - has the "
                                   "top_harden gate run?")
+    check_drc.TIMEOUT_S = max(check_drc.TIMEOUT_S, TOP_TIMEOUT_S)
     inner, _out = check_drc.run(["--workspace", str(top)])
     for v in inner["violations"]:
         v["check"] = "top_drc"
