@@ -191,7 +191,7 @@ def test_kind_scan_finds_the_kinds_it_should():
     assert {"macro_too_large", "flow_step_failed", "harden_missing_artifact",
             "magic_drc_violation", "klayout_drc_violation",
             "netlist_mismatch", "ua_pin_off_template",
-            "precheck_failed"} <= _top_kinds()
+            "macro_power_unreachable", "precheck_failed"} <= _top_kinds()
 
 
 def test_every_msde_gate_kind_has_a_remediation_reference():
