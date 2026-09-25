@@ -11,6 +11,7 @@ from cocotb.triggers import FallingEdge
 CLK_PERIOD_NS = 10
 CLKS_PER_BIT = 4
 N_SLOTS = 11  # start + 8 data + parity + stop
+START_TIMEOUT = 3 * CLKS_PER_BIT  # clocks from the start pulse to tx falling
 
 
 async def reset(dut):
@@ -31,16 +32,41 @@ async def send(dut, data):
     dut.start.value = 0
 
 
+async def wait_start_bit(dut):
+    """Return at the first falling edge where tx is 0 - the start bit's first
+    clock. spec.md says a start pulse "begins a frame" but not how many
+    clocks later the start bit reaches tx, so this waits for it (up to
+    START_TIMEOUT clocks) the way a UART receiver does, rather than pinning
+    one RTL's latency."""
+    for _ in range(START_TIMEOUT):
+        if int(dut.tx.value) == 0:
+            return
+        await FallingEdge(dut.clk)
+    assert int(dut.tx.value) == 0, \
+        f"no start bit on tx within {START_TIMEOUT} clocks of the start pulse"
+
+
 async def read_frame(dut, clks_per_bit=CLKS_PER_BIT, n_slots=N_SLOTS):
     """[start, d0..d7, parity, stop] - tx sampled once per bit-slot, at the
-    slot's last clock (verified stable there in this design: `tx` only
-    changes at a slot boundary, never mid-slot)."""
+    slot's middle clock, counted from the start bit's falling edge. Returns
+    at the stop slot's middle."""
+    await wait_start_bit(dut)
     bits = []
-    for _ in range(n_slots):
-        for _ in range(clks_per_bit):
+    for slot in range(n_slots):
+        wait = clks_per_bit // 2 if slot == 0 else clks_per_bit
+        for _ in range(wait):
             await FallingEdge(dut.clk)
         bits.append(int(dut.tx.value))
     return bits
+
+
+async def wait_idle(dut, timeout=CLKS_PER_BIT):
+    """Return at the first falling edge where busy is 0."""
+    for _ in range(timeout):
+        if int(dut.busy.value) == 0:
+            return
+        await FallingEdge(dut.clk)
+    assert int(dut.busy.value) == 0, "busy never dropped after the stop bit"
 
 
 def data_bits(value):
@@ -59,6 +85,7 @@ async def test_frame_start_data_stop(dut):
         assert start == 0, f"value={value}: start bit was {start}"
         assert data == data_bits(value), f"value={value}: bad bits {data}"
         assert stop == 1, f"value={value}: stop bit was {stop}"
+        await wait_idle(dut)
         await FallingEdge(dut.clk)  # a clock of idle margin between frames
 
 
@@ -76,6 +103,7 @@ async def test_back_to_back_frames_no_idle_gap(dut):
         assert start == 0, f"value={value}: start bit was {start}"
         assert data == data_bits(value), f"value={value}: bad bits {data}"
         assert stop == 1, f"value={value}: stop bit was {stop}"
+        await wait_idle(dut)
 
 
 # req: REQ-BUSY
@@ -86,10 +114,17 @@ async def test_busy_spans_the_whole_frame(dut):
     assert int(dut.busy.value) == 0
     for value in (0b01010101, 0b00000000, 0b11111111):
         await send(dut, value)
+        await wait_start_bit(dut)
+        # busy holds through every slot, sampled at each slot's middle ...
         for slot in range(11):  # start + 8 data + parity + stop
-            for _ in range(CLKS_PER_BIT):
+            wait = CLKS_PER_BIT // 2 if slot == 0 else CLKS_PER_BIT
+            for _ in range(wait):
                 await FallingEdge(dut.clk)
-            expect_busy = 0 if slot == 10 else 1
-            assert int(dut.busy.value) == expect_busy, \
+            assert int(dut.busy.value) == 1, \
                 f"value={value} slot={slot}: busy was {int(dut.busy.value)}"
+        # ... and is 0 by the first clock after the stop slot's hold.
+        for _ in range(CLKS_PER_BIT - CLKS_PER_BIT // 2):
+            await FallingEdge(dut.clk)
+        assert int(dut.busy.value) == 0, \
+            f"value={value}: busy still 1 after the stop bit's hold"
         await FallingEdge(dut.clk)

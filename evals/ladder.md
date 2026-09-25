@@ -8,12 +8,17 @@ edited the run by hand (docs/design.md section 3). Harder rungs are higher up.
 |---|---|---|---|
 | 4 | small RISC-V core: not run | bandgap: not in corpus | SAR ADC: not in corpus |
 | 3 | SPI peripheral with a FIFO: not run | comparator: not in corpus | DAC with an SPI register: not in corpus |
-| 2 | UART: not run | R2R DAC: not run | ring oscillator with a divider: not run |
-| 1 | 8-bit counter: not run | current mirror: not run | a sensor counted: not run |
+| 2 | UART: red | R2R DAC: not run | ring oscillator with a divider: not run |
+| 1 | 8-bit counter: counts | current mirror: not run | a sensor counted: not run |
 
 ## /vde
 
-No /vde run scored yet. `ladder.py --skill vde --rung <rung> --run <ws>` fills this table.
+| rung | counts | why not | held-out | kill rate | area | worst slack ns | fix attempts | tokens | cost USD | wall s | scored | note |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| counter8 | yes |  | pass (1/1) | 1.00 | 1086.6 | 0.29 | 19 | - | - | 14718 | 2026-09-25 | vde session run 2026-09-24/25, workspace runs/counter8-20260924 |
+| uart | no | 12 gate(s) not green; held-out fails | fail (0/1) | 0.79 | - | - | 9 | - | - | 1404 | 2026-09-25 | vde session run 2026-09-24/25, workspace runs/uart-20260924; stopped at P4 mutate fix loop: 4 survivors proven equivalent at CLKS_PER_BIT=4 (15/19=0.79 < 0.9), escalated |
+| spi_fifo | not run | | | | | | | | | | | |
+| riscv | not run | | | | | | | | | | | |
 
 ## /ade
 
