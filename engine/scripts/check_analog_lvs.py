@@ -16,9 +16,10 @@ refusal, not an empty pass. The cell compared is spec/spec.yaml's `top`
 (M8's subckt name, `current_mirror` for the mirror), or the block name
 when the spec has none.
 
-When the block has sizing/sizing.yaml, the subckt's own parameter defaults
-are replaced by the sizing values in a copy under log/lvs/ before netgen
-reads it - the same values `{{SIZING}}` hands the bench - so LVS checks the
+When the block has sizing/sizing.yaml, its values replace the subckt's own
+parameter defaults and global .param assignments, and a `.param` line is
+added for a sizing name the netlist uses but leaves to the bench, in a copy
+under log/lvs/ before netgen reads it - the same values `{{SIZING}}` hands the bench - so LVS checks the
 layout against the sizing the design is simulated at, not against whatever
 defaults the netlist happened to ship.
 
@@ -74,17 +75,27 @@ def reference_cell(ws: Path, block: str, ref_text: str) -> str:
 
 
 def sized_reference(ref_text: str, cell: str, sizing: dict) -> tuple[str, dict]:
-    """ref_text with `cell`'s own `.subckt` parameter defaults replaced by
-    the sizing values that name them. Returns (text, {name: value applied}).
-    A sizing name the subckt does not declare is left alone: it may be a
+    """ref_text with the sizing values put where the netlist takes its W/L
+    from. Returns (text, {name: value applied}). Three places, in order:
+    `cell`'s own `.subckt` parameter defaults; a global `.param` line's
+    assignment; and, for a sizing name the text uses (`{w_tail}`) but never
+    defines - a library whose bench supplies the .param lines - a `.param`
+    line added before the subckt, since netgen has no bench to take it from.
+    A sizing name the text never mentions is left alone: it may be a
     bench-level .param."""
     applied: dict[str, float] = {}
     out = []
     head = re.compile(rf"^\s*\.subckt\s+{re.escape(cell)}\s", re.IGNORECASE)
+    param = re.compile(r"^\s*\.param\s", re.IGNORECASE)
+    values = {name: (spec["value"] if isinstance(spec, dict) else spec)
+              for name, spec in sizing.items()}
+    head_at = None
     for line in ref_text.splitlines(keepends=True):
-        if head.match(line):
-            for name, spec in sizing.items():
-                val = spec["value"] if isinstance(spec, dict) else spec
+        is_head = bool(head.match(line))
+        if is_head and head_at is None:
+            head_at = len(out)
+        if is_head or param.match(line):
+            for name, val in values.items():
                 pat = re.compile(rf"(\s{re.escape(name)}\s*=\s*)[^\s]+",
                                  re.IGNORECASE)
                 if pat.search(line):
@@ -92,6 +103,13 @@ def sized_reference(ref_text: str, cell: str, sizing: dict) -> tuple[str, dict]:
                                    count=1)
                     applied[name] = val
         out.append(line)
+    missing = [name for name in values if name not in applied
+               and re.search(rf"\{{\s*{re.escape(name)}\s*\}}", ref_text,
+                             re.IGNORECASE)]
+    if missing and head_at is not None:
+        out.insert(head_at, ".param " + " ".join(
+            f"{name}={values[name]:.6g}" for name in missing) + "\n")
+        applied.update({name: values[name] for name in missing})
     return "".join(out), applied
 
 
@@ -102,7 +120,7 @@ def run(argv=None):
     ap.add_argument("--out", help="write result JSON here instead of stdout")
     args = ap.parse_args(argv)
 
-    ws = Path(args.workspace)
+    ws = Path(args.workspace).resolve()  # tools run with cwd=log/
     block = layout_gen.block_of(ws, args.block)
     ref_path = find_reference_netlist(ws, block)
     ref_text = ref_path.read_text(encoding="utf-8", errors="replace")

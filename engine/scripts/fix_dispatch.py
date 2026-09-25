@@ -102,18 +102,32 @@ DOMAINS: dict[str, dict] = {
         ],
     },
     "layout": {
-        "scripts": ["engine/scripts/gate.py", "engine/scripts/state.py"],
+        "scripts": ["engine/scripts/layout_gen.py", "engine/scripts/gate.py",
+                    "engine/scripts/state.py"],
         "guidance": [
             "Edit the layout GENERATOR code (layout/gen_<block>.py), never "
             "the GDS by hand - there is no analog autorouter here.",
+            "drc/lvs/pex_sim each regenerate the GDS from the generator on "
+            "every run; an LVS mismatch is fixed in the generator to match "
+            "netlist/ and sizing/, never the other way round.",
         ],
     },
     "sizing": {
         "scripts": ["engine/scripts/gate.py", "engine/scripts/state.py"],
         "guidance": [
-            "Edit sizing/sizing.yaml within its declared bounds; a "
-            "bench_strength survivor means the BOUNDS are too wide, not "
-            "the sizing - route it to the testbench domain instead.",
+            "Edit sizing/sizing.yaml within its declared bounds, or a "
+            "device's value in netlist/ when the block has no sizing.yaml "
+            "entry for it; never tb/ or a .bounds.json. A bench_strength "
+            "survivor means the BOUNDS are too wide, not the sizing - "
+            "route it to the testbench domain instead.",
+        ],
+    },
+    "netlist": {
+        "scripts": ["engine/scripts/gate.py", "engine/scripts/state.py"],
+        "guidance": [
+            "Edit netlist/*.cir only (a model, a connection, a missing "
+            "device); declare netlist_edit, which re-runs every analog "
+            "gate. Never touch tb/ to make a convergence error go away.",
         ],
     },
     "review": {
@@ -127,6 +141,23 @@ DOMAINS: dict[str, dict] = {
 }
 
 SIDECARS = ["spec/spec.yaml"]
+
+# The role prompt a work order names, per skill and fixer domain; any pair
+# not listed gets the skill's generic `fixer`. /ade splits the fixer roster
+# three ways (docs/design.md 1.9, 5): layout findings go to the layout-fixer
+# (generator code only), bench findings to the bench-writer (a
+# bench_strength survivor is the BENCH's fault, like a mutate survivor), and
+# everything else to the fixer.
+ROLE_BY_DOMAIN: dict[str, dict[str, str]] = {
+    "ade": {"layout": "layout-fixer", "testbench": "bench-writer"},
+}
+
+
+def role_prompt(skill: str | None, domain: str) -> str | None:
+    if not skill:
+        return None
+    role = ROLE_BY_DOMAIN.get(skill, {}).get(domain, "fixer")
+    return f"skills/{skill}/agents/{role}.md"
 
 # Trigger-indexed knowledge: skills/<skill>/reference/remediations/<kind>.md,
 # keyed by the FINDING type, never by topic. Skill directories don't exist
@@ -147,17 +178,41 @@ def remediation_dir(repo_root: Path, skill: str | None) -> Path | None:
     return d if d.is_dir() else None
 
 
-def remediation_paths(kinds, rem_dir: Path | None = None) -> list[str]:
+def remediation_ref(kind: str, rem_dir: Path, checks=()) -> Path | None:
+    """The one remediation file for `kind`: `<kind>.md`; else the nearest
+    family, `<kind>` with trailing `_word`s dropped (sim_engine_error_
+    singular_matrix -> sim_engine_error.md); else `<check>.md` when every
+    finding shares one gate tool (klayout DRC rule names are an open set,
+    so /ade keeps one analog_drc.md grouped by rule family)."""
+    ref = rem_dir / f"{kind}.md"
+    if ref.is_file():
+        return ref
+    parts = kind.split("_")
+    for n in range(len(parts) - 1, 0, -1):
+        ref = rem_dir / f"{'_'.join(parts[:n])}.md"
+        if ref.is_file():
+            return ref
+    checks = {c for c in checks if c}
+    if len(checks) == 1:
+        ref = rem_dir / f"{checks.pop()}.md"
+        if ref.is_file():
+            return ref
+    return None
+
+
+def remediation_paths(kinds, rem_dir: Path | None = None,
+                      checks=()) -> list[str]:
     """The remediation refs that exist for a cluster's kinds (sorted,
     unique). rem_dir is None until skill directories exist (M1) - always []."""
     if rem_dir is None:
         return []
-    out = []
-    for kind in sorted({k for k in (kinds or []) if k}):
-        ref = rem_dir / f"{kind}.md"
-        if ref.is_file():
-            out.append(str(ref).replace("\\", "/"))
-    return out
+    checks = list(checks)
+    out = set()
+    for kind in {k for k in (kinds or []) if k}:
+        ref = remediation_ref(kind, rem_dir, checks)
+        if ref is not None:
+            out.add(str(ref).replace("\\", "/"))
+    return sorted(out)
 
 
 def load_input(path: Path) -> tuple[list[dict], dict]:
@@ -368,7 +423,9 @@ def run(argv=None):
                 oid = rec["id"]
             else:
                 oid = len(orders) + 1
-            remediations = remediation_paths(c.get("kinds"), rem_dir)
+            remediations = remediation_paths(
+                c.get("kinds"), rem_dir,
+                {v.get("check") for v in c["violations"]})
             guidance = list(domain["guidance"])
             if remediations:
                 guidance.insert(0, REMEDIATION_GUIDANCE)
@@ -376,8 +433,7 @@ def run(argv=None):
                 "id": oid, "created": ts,
                 "gate": meta.get("gate"), "phase": meta.get("phase"),
                 "workspace": artifacts["workspace"], "fixer": c["fixer"],
-                "role_prompt": (f"skills/{skill}/agents/fixer.md" if skill
-                                else None),
+                "role_prompt": role_prompt(skill, c["fixer"]),
                 "allowed_scripts": domain["scripts"],
                 "guidance": guidance,
                 "remediations": remediations,
@@ -422,6 +478,7 @@ def run(argv=None):
                    "info_only_violations": sum(c["count"]
                                                for c in info_clusters)},
         "orders": [{"id": o["id"], "fixer": o["fixer"],
+                    "role_prompt": o["role_prompt"],
                     "severity": o["cluster"]["severity"],
                     "file": o["cluster"]["file"], "kinds": o["cluster"]["kinds"],
                     "count": o["cluster"]["count"],

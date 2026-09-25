@@ -1,0 +1,2266 @@
+{
+ "version": 3,
+ "skill": "ade",
+ "block": "comparator",
+ "workspace": "blocks/comparator",
+ "created": "2026-09-24T21:44:33",
+ "updated": "2026-09-25T01:03:40",
+ "phase": "done",
+ "toolchain": null,
+ "gates": {
+  "spec_lint": {
+   "phase": "P1",
+   "status": "pass",
+   "attempts": 13,
+   "last": {
+    "ts": "2026-09-25T00:55:21",
+    "status": "pass",
+    "failing_count": 0,
+    "total": 0,
+    "inputs": {
+     "spec_yaml": "json_canonical:4688316620eef53f17f4b61ee99259a4242c78d03bc2eab06bca4e10d349d4c9"
+    },
+    "job": null
+   },
+   "history": [
+    {
+     "ts": "2026-09-24T21:45:50",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "spec_yaml": "json_canonical:d225453cf16ca7481a8507b7b0599015f8512c01f2ce2b1b777532ca92e9a280"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-24T21:46:10",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "spec_yaml": "json_canonical:d225453cf16ca7481a8507b7b0599015f8512c01f2ce2b1b777532ca92e9a280"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-24T21:47:13",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "spec_yaml": "json_canonical:d225453cf16ca7481a8507b7b0599015f8512c01f2ce2b1b777532ca92e9a280"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-24T21:47:38",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "spec_yaml": "json_canonical:d225453cf16ca7481a8507b7b0599015f8512c01f2ce2b1b777532ca92e9a280"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-24T21:48:54",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "spec_yaml": "json_canonical:d225453cf16ca7481a8507b7b0599015f8512c01f2ce2b1b777532ca92e9a280"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-24T21:49:41",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "spec_yaml": "json_canonical:d225453cf16ca7481a8507b7b0599015f8512c01f2ce2b1b777532ca92e9a280"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-24T21:50:14",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "spec_yaml": "json_canonical:d225453cf16ca7481a8507b7b0599015f8512c01f2ce2b1b777532ca92e9a280"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-24T23:49:32",
+     "status": "fail",
+     "failing_count": 1,
+     "total": 1,
+     "inputs": {
+      "spec_yaml": "json_canonical:bb392b1cd7635f160288fb8a89091cd141adf4a02a20c20f345625cd35663b77"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-24T23:51:38",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "spec_yaml": "json_canonical:bb392b1cd7635f160288fb8a89091cd141adf4a02a20c20f345625cd35663b77"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-24T23:53:44",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "spec_yaml": "json_canonical:bb392b1cd7635f160288fb8a89091cd141adf4a02a20c20f345625cd35663b77"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-25T00:51:01",
+     "status": "fail",
+     "failing_count": 1,
+     "total": 1,
+     "inputs": {
+      "spec_yaml": "json_canonical:4688316620eef53f17f4b61ee99259a4242c78d03bc2eab06bca4e10d349d4c9"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-25T00:52:07",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "spec_yaml": "json_canonical:4688316620eef53f17f4b61ee99259a4242c78d03bc2eab06bca4e10d349d4c9"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-25T00:55:21",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "spec_yaml": "json_canonical:4688316620eef53f17f4b61ee99259a4242c78d03bc2eab06bca4e10d349d4c9"
+     },
+     "job": null
+    }
+   ]
+  },
+  "netlist_lint": {
+   "phase": "P4",
+   "status": "pass",
+   "attempts": 4,
+   "last": {
+    "ts": "2026-09-25T00:55:23",
+    "status": "pass",
+    "failing_count": 0,
+    "total": 0,
+    "inputs": {
+     "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f"
+    },
+    "job": null
+   },
+   "history": [
+    {
+     "ts": "2026-09-24T21:51:08",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-24T21:54:15",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-24T23:53:45",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-25T00:55:23",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f"
+     },
+     "job": null
+    }
+   ]
+  },
+  "sim_tt": {
+   "phase": "P4",
+   "status": "pass",
+   "attempts": 9,
+   "last": {
+    "ts": "2026-09-25T00:55:24",
+    "status": "pass",
+    "failing_count": 0,
+    "total": 0,
+    "inputs": {
+     "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f",
+     "tb": "dir_text:862897de62811d9ebfc677ca8ef5b45fee770b556bcffcc7ed9932c40e129b13"
+    },
+    "job": null
+   },
+   "history": [
+    {
+     "ts": "2026-09-24T21:51:17",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f",
+      "tb": "dir_text:5c22ff533cf17ecdb4429862ae438bb54d86b02f373efe5c6f136c3410a61b27"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-24T21:54:20",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f",
+      "tb": "dir_text:5c22ff533cf17ecdb4429862ae438bb54d86b02f373efe5c6f136c3410a61b27"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-24T23:51:40",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f",
+      "tb": "dir_text:30a0d08f1d310028af7849653e78b64ce4ce2e5dba902e60567f998fd8838c56"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-24T23:53:46",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f",
+      "tb": "dir_text:30a0d08f1d310028af7849653e78b64ce4ce2e5dba902e60567f998fd8838c56"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-25T00:41:31",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f",
+      "tb": "dir_text:30a0d08f1d310028af7849653e78b64ce4ce2e5dba902e60567f998fd8838c56"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-25T00:44:37",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f",
+      "tb": "dir_text:30a0d08f1d310028af7849653e78b64ce4ce2e5dba902e60567f998fd8838c56"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-25T00:46:42",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f",
+      "tb": "dir_text:30a0d08f1d310028af7849653e78b64ce4ce2e5dba902e60567f998fd8838c56"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-25T00:52:09",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f",
+      "tb": "dir_text:862897de62811d9ebfc677ca8ef5b45fee770b556bcffcc7ed9932c40e129b13"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-25T00:55:24",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f",
+      "tb": "dir_text:862897de62811d9ebfc677ca8ef5b45fee770b556bcffcc7ed9932c40e129b13"
+     },
+     "job": null
+    }
+   ]
+  },
+  "sim_pvt": {
+   "phase": "P4",
+   "status": "pass",
+   "attempts": 10,
+   "last": {
+    "ts": "2026-09-25T00:55:35",
+    "status": "pass",
+    "failing_count": 0,
+    "total": 0,
+    "inputs": {
+     "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f",
+     "tb": "dir_text:862897de62811d9ebfc677ca8ef5b45fee770b556bcffcc7ed9932c40e129b13"
+    },
+    "job": null
+   },
+   "history": [
+    {
+     "ts": "2026-09-24T21:53:35",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f",
+      "tb": "dir_text:5c22ff533cf17ecdb4429862ae438bb54d86b02f373efe5c6f136c3410a61b27"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-24T21:54:35",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f",
+      "tb": "dir_text:5c22ff533cf17ecdb4429862ae438bb54d86b02f373efe5c6f136c3410a61b27"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-24T23:34:31",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f",
+      "tb": "dir_text:5c22ff533cf17ecdb4429862ae438bb54d86b02f373efe5c6f136c3410a61b27"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-24T23:54:06",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f",
+      "tb": "dir_text:30a0d08f1d310028af7849653e78b64ce4ce2e5dba902e60567f998fd8838c56"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-25T00:36:01",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f",
+      "tb": "dir_text:30a0d08f1d310028af7849653e78b64ce4ce2e5dba902e60567f998fd8838c56"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-25T00:41:41",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f",
+      "tb": "dir_text:30a0d08f1d310028af7849653e78b64ce4ce2e5dba902e60567f998fd8838c56"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-25T00:44:46",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f",
+      "tb": "dir_text:30a0d08f1d310028af7849653e78b64ce4ce2e5dba902e60567f998fd8838c56"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-25T00:46:49",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f",
+      "tb": "dir_text:30a0d08f1d310028af7849653e78b64ce4ce2e5dba902e60567f998fd8838c56"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-25T00:52:32",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f",
+      "tb": "dir_text:862897de62811d9ebfc677ca8ef5b45fee770b556bcffcc7ed9932c40e129b13"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-25T00:55:35",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f",
+      "tb": "dir_text:862897de62811d9ebfc677ca8ef5b45fee770b556bcffcc7ed9932c40e129b13"
+     },
+     "job": null
+    }
+   ]
+  },
+  "bench_strength": {
+   "phase": "P4",
+   "status": "pass",
+   "attempts": 12,
+   "last": {
+    "ts": "2026-09-25T00:56:24",
+    "status": "pass",
+    "failing_count": 0,
+    "total": 0,
+    "inputs": {
+     "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f",
+     "tb": "dir_text:862897de62811d9ebfc677ca8ef5b45fee770b556bcffcc7ed9932c40e129b13"
+    },
+    "job": null
+   },
+   "history": [
+    {
+     "ts": "2026-09-24T21:54:57",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f",
+      "tb": "dir_text:5c22ff533cf17ecdb4429862ae438bb54d86b02f373efe5c6f136c3410a61b27"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-24T22:26:38",
+     "status": "fail",
+     "failing_count": 2,
+     "total": 2,
+     "inputs": {
+      "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f",
+      "tb": "dir_text:5c22ff533cf17ecdb4429862ae438bb54d86b02f373efe5c6f136c3410a61b27"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-24T22:42:06",
+     "status": "fail",
+     "failing_count": 2,
+     "total": 2,
+     "inputs": {
+      "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f",
+      "tb": "dir_text:5c22ff533cf17ecdb4429862ae438bb54d86b02f373efe5c6f136c3410a61b27"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-24T22:47:14",
+     "status": "fail",
+     "failing_count": 2,
+     "total": 2,
+     "inputs": {
+      "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f",
+      "tb": "dir_text:5c22ff533cf17ecdb4429862ae438bb54d86b02f373efe5c6f136c3410a61b27"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-24T23:34:08",
+     "status": "fail",
+     "failing_count": 1,
+     "total": 1,
+     "inputs": {
+      "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f",
+      "tb": "dir_text:5c22ff533cf17ecdb4429862ae438bb54d86b02f373efe5c6f136c3410a61b27"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-24T23:40:32",
+     "status": "fail",
+     "failing_count": 1,
+     "total": 1,
+     "inputs": {
+      "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f",
+      "tb": "dir_text:5c22ff533cf17ecdb4429862ae438bb54d86b02f373efe5c6f136c3410a61b27"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-24T23:52:42",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f",
+      "tb": "dir_text:30a0d08f1d310028af7849653e78b64ce4ce2e5dba902e60567f998fd8838c56"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-24T23:55:01",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f",
+      "tb": "dir_text:30a0d08f1d310028af7849653e78b64ce4ce2e5dba902e60567f998fd8838c56"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-25T00:45:26",
+     "status": "fail",
+     "failing_count": 1,
+     "total": 1,
+     "inputs": {
+      "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f",
+      "tb": "dir_text:30a0d08f1d310028af7849653e78b64ce4ce2e5dba902e60567f998fd8838c56"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-25T00:47:52",
+     "status": "fail",
+     "failing_count": 1,
+     "total": 1,
+     "inputs": {
+      "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f",
+      "tb": "dir_text:30a0d08f1d310028af7849653e78b64ce4ce2e5dba902e60567f998fd8838c56"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-25T00:54:21",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f",
+      "tb": "dir_text:862897de62811d9ebfc677ca8ef5b45fee770b556bcffcc7ed9932c40e129b13"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-25T00:56:24",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f",
+      "tb": "dir_text:862897de62811d9ebfc677ca8ef5b45fee770b556bcffcc7ed9932c40e129b13"
+     },
+     "job": null
+    }
+   ]
+  },
+  "drc": {
+   "phase": "P5",
+   "status": "pass",
+   "attempts": 6,
+   "last": {
+    "ts": "2026-09-25T00:56:37",
+    "status": "pass",
+    "failing_count": 0,
+    "total": 0,
+    "inputs": {
+     "layout": "dir_text:4c0d053ea0ddcf37f3e6cc99e67863d61b7c6748df560edda69320521cf47c20"
+    },
+    "job": null
+   },
+   "history": [
+    {
+     "ts": "2026-09-25T00:10:20",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "layout": "dir_text:2cd2ec6fe054131dfe2edd0cadca5a832c3671ec6aa4e4f4743a1f1f41010614"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-25T00:18:53",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "layout": "dir_text:bdad5bf3877d32b9cfaaa083026a6c663565061f387c0ce9dc5dc0bfa39efd7c"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-25T00:22:03",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "layout": "dir_text:f136c51071ed66ebaa9b3ff7f7ef11a11a84413bf78c3443e75c1ec3070893cb"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-25T00:23:18",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "layout": "dir_text:f136c51071ed66ebaa9b3ff7f7ef11a11a84413bf78c3443e75c1ec3070893cb"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-25T00:52:49",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "layout": "dir_text:4c0d053ea0ddcf37f3e6cc99e67863d61b7c6748df560edda69320521cf47c20"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-25T00:56:37",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "layout": "dir_text:4c0d053ea0ddcf37f3e6cc99e67863d61b7c6748df560edda69320521cf47c20"
+     },
+     "job": null
+    }
+   ]
+  },
+  "lvs": {
+   "phase": "P5",
+   "status": "pass",
+   "attempts": 7,
+   "last": {
+    "ts": "2026-09-25T00:56:43",
+    "status": "pass",
+    "failing_count": 0,
+    "total": 0,
+    "inputs": {
+     "layout": "dir_text:4c0d053ea0ddcf37f3e6cc99e67863d61b7c6748df560edda69320521cf47c20",
+     "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f"
+    },
+    "job": null
+   },
+   "history": [
+    {
+     "ts": "2026-09-25T00:10:29",
+     "status": "fail",
+     "failing_count": 1,
+     "total": 1,
+     "inputs": {
+      "layout": "dir_text:2cd2ec6fe054131dfe2edd0cadca5a832c3671ec6aa4e4f4743a1f1f41010614",
+      "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-25T00:15:23",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "layout": "dir_text:2cd2ec6fe054131dfe2edd0cadca5a832c3671ec6aa4e4f4743a1f1f41010614",
+      "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-25T00:19:03",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "layout": "dir_text:bdad5bf3877d32b9cfaaa083026a6c663565061f387c0ce9dc5dc0bfa39efd7c",
+      "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-25T00:22:13",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "layout": "dir_text:f136c51071ed66ebaa9b3ff7f7ef11a11a84413bf78c3443e75c1ec3070893cb",
+      "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-25T00:23:25",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "layout": "dir_text:f136c51071ed66ebaa9b3ff7f7ef11a11a84413bf78c3443e75c1ec3070893cb",
+      "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-25T00:53:04",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "layout": "dir_text:4c0d053ea0ddcf37f3e6cc99e67863d61b7c6748df560edda69320521cf47c20",
+      "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-25T00:56:43",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "layout": "dir_text:4c0d053ea0ddcf37f3e6cc99e67863d61b7c6748df560edda69320521cf47c20",
+      "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f"
+     },
+     "job": null
+    }
+   ]
+  },
+  "pex_sim": {
+   "phase": "P5",
+   "status": "pass",
+   "attempts": 6,
+   "last": {
+    "ts": "2026-09-25T00:56:51",
+    "status": "pass",
+    "failing_count": 0,
+    "total": 0,
+    "inputs": {
+     "layout": "dir_text:4c0d053ea0ddcf37f3e6cc99e67863d61b7c6748df560edda69320521cf47c20",
+     "tb": "dir_text:862897de62811d9ebfc677ca8ef5b45fee770b556bcffcc7ed9932c40e129b13"
+    },
+    "job": null
+   },
+   "history": [
+    {
+     "ts": "2026-09-25T00:10:40",
+     "status": "fail",
+     "failing_count": 1,
+     "total": 1,
+     "inputs": {
+      "layout": "dir_text:2cd2ec6fe054131dfe2edd0cadca5a832c3671ec6aa4e4f4743a1f1f41010614",
+      "tb": "dir_text:30a0d08f1d310028af7849653e78b64ce4ce2e5dba902e60567f998fd8838c56"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-25T00:19:18",
+     "status": "fail",
+     "failing_count": 1,
+     "total": 1,
+     "inputs": {
+      "layout": "dir_text:bdad5bf3877d32b9cfaaa083026a6c663565061f387c0ce9dc5dc0bfa39efd7c",
+      "tb": "dir_text:30a0d08f1d310028af7849653e78b64ce4ce2e5dba902e60567f998fd8838c56"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-25T00:22:23",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "layout": "dir_text:f136c51071ed66ebaa9b3ff7f7ef11a11a84413bf78c3443e75c1ec3070893cb",
+      "tb": "dir_text:30a0d08f1d310028af7849653e78b64ce4ce2e5dba902e60567f998fd8838c56"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-25T00:23:35",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "layout": "dir_text:f136c51071ed66ebaa9b3ff7f7ef11a11a84413bf78c3443e75c1ec3070893cb",
+      "tb": "dir_text:30a0d08f1d310028af7849653e78b64ce4ce2e5dba902e60567f998fd8838c56"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-25T00:53:22",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "layout": "dir_text:4c0d053ea0ddcf37f3e6cc99e67863d61b7c6748df560edda69320521cf47c20",
+      "tb": "dir_text:862897de62811d9ebfc677ca8ef5b45fee770b556bcffcc7ed9932c40e129b13"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-25T00:56:51",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "layout": "dir_text:4c0d053ea0ddcf37f3e6cc99e67863d61b7c6748df560edda69320521cf47c20",
+      "tb": "dir_text:862897de62811d9ebfc677ca8ef5b45fee770b556bcffcc7ed9932c40e129b13"
+     },
+     "job": null
+    }
+   ]
+  },
+  "release": {
+   "phase": "P6",
+   "status": "pass",
+   "attempts": 2,
+   "last": {
+    "ts": "2026-09-25T01:03:02",
+    "status": "pass",
+    "failing_count": 0,
+    "total": 0,
+    "inputs": {
+     "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f",
+     "layout": "dir_text:4c0d053ea0ddcf37f3e6cc99e67863d61b7c6748df560edda69320521cf47c20"
+    },
+    "job": null
+   },
+   "history": [
+    {
+     "ts": "2026-09-25T01:01:21",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f",
+      "layout": "dir_text:4c0d053ea0ddcf37f3e6cc99e67863d61b7c6748df560edda69320521cf47c20"
+     },
+     "job": null
+    },
+    {
+     "ts": "2026-09-25T01:03:02",
+     "status": "pass",
+     "failing_count": 0,
+     "total": 0,
+     "inputs": {
+      "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f",
+      "layout": "dir_text:4c0d053ea0ddcf37f3e6cc99e67863d61b7c6748df560edda69320521cf47c20"
+     },
+     "job": null
+    }
+   ]
+  }
+ },
+ "jobs": {},
+ "holdout": null,
+ "optimise": null,
+ "human": {
+  "H1": {
+   "status": "approved",
+   "ts": "2026-09-25T00:00:49",
+   "note": "fresh reviewer approve (Resume 6): P4 evidence verified by re-sim (xmtail_size_doubled_w killed at 3.884 mA vs 3.2 max, decks carry sizing). spec_edit itail_peak summarized (human_hold 2; H1/H2 user pre-approved at P0). OPEN low: spec.md itail derivation/min claim loose, Reference tdelay stale, per-measure corners not honoured by sim_run; medium P5: 1 mV overdrive vs pex asymmetry."
+  },
+  "H2": {
+   "status": "approved",
+   "ts": "2026-09-25T01:00:16",
+   "note": "Resume 8: extracted tdelay tt 0.360 ss 0.488 sf 0.528 ns (<=0.6 constraint met); ireset spec_edit (human_hold 2) summarized, additive"
+  }
+ },
+ "artifacts": {
+  "spec_yaml": {
+   "path": "spec/spec.yaml",
+   "kind": "spec_yaml",
+   "sha256": "json_canonical:4688316620eef53f17f4b61ee99259a4242c78d03bc2eab06bca4e10d349d4c9",
+   "hashed": "2026-09-25T00:55:21"
+  },
+  "netlist": {
+   "path": "netlist",
+   "kind": "netlist",
+   "sha256": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f",
+   "hashed": "2026-09-25T01:03:02"
+  },
+  "tb": {
+   "path": "tb",
+   "kind": "tb",
+   "sha256": "dir_text:862897de62811d9ebfc677ca8ef5b45fee770b556bcffcc7ed9932c40e129b13",
+   "hashed": "2026-09-25T00:56:51"
+  },
+  "layout": {
+   "path": "layout",
+   "kind": "layout",
+   "sha256": "dir_text:4c0d053ea0ddcf37f3e6cc99e67863d61b7c6748df560edda69320521cf47c20",
+   "hashed": "2026-09-25T01:03:02"
+  }
+ },
+ "open_issues": [
+  {
+   "id": 1,
+   "status": "fixed",
+   "agent": "bench-writer",
+   "attempts": 1,
+   "opened": "2026-09-24T22:42:48",
+   "closed": "2026-09-24T23:55:21",
+   "gate": "bench_strength",
+   "phase": "P4",
+   "fixer": "testbench",
+   "kinds": [
+    "survivor_connection_removed",
+    "survivor_size_doubled"
+   ],
+   "severity": "error",
+   "count": 2,
+   "work_order": "blocks/comparator/log/workorders/wo-1.json"
+  },
+  {
+   "id": 2,
+   "status": "fixed",
+   "agent": "layout-fixer",
+   "attempts": 0,
+   "opened": "2026-09-25T00:16:00",
+   "closed": "2026-09-25T00:23:44",
+   "gate": "pex_sim",
+   "phase": "P5",
+   "fixer": "layout",
+   "kinds": [
+    "measure_out_of_bounds"
+   ],
+   "severity": "error",
+   "count": 1,
+   "work_order": "blocks/comparator/log/workorders/wo-2.json"
+  },
+  {
+   "id": 3,
+   "status": "fixed",
+   "agent": "bench-writer",
+   "attempts": 0,
+   "opened": "2026-09-25T00:48:03",
+   "closed": "2026-09-25T00:57:06",
+   "gate": "bench_strength",
+   "phase": "P4",
+   "fixer": "testbench",
+   "kinds": [
+    "survivor_type_flipped"
+   ],
+   "severity": "error",
+   "count": 1,
+   "work_order": "blocks/comparator/log/workorders/wo-3.json",
+   "note": "ireset added; flipped tail 424.8 uA killed"
+  }
+ ],
+ "next_issue_id": 4,
+ "next_job_id": 1,
+ "budgets": {
+  "fix_loops": {
+   "bench_strength": 1,
+   "pex_sim": 2
+  }
+ },
+ "decisions": [
+  {
+   "what": "H1/H2 pre-approved by the user",
+   "why": "task statement pre-approves all human holds H1/H2; record them as user pre-approval at each checkpoint",
+   "phase": "P0",
+   "ts": "2026-09-24T21:44:47"
+  },
+  {
+   "what": "bench input common mode = VDD/2 (1.65 V at nominal)",
+   "why": "brief says 'mid-supply (1.65 V)'; mid-supply tracks the +/-10% supply corners, equal to 1.65 V at nominal",
+   "phase": "P3",
+   "ts": "2026-09-24T21:50:15"
+  },
+  {
+   "what": "set-phase P5 --force past mc",
+   "why": "mc not applicable: spec.yaml has no mc.enabled",
+   "phase": "P4",
+   "ts": "2026-09-25T00:01:05"
+  },
+  {
+   "what": "H2 rejection stands; loop P5 with new constraint",
+   "why": "user: extracted comparator must decide within pre-layout tdelay bound (<=0.6 ns) at ss and sf too, not only tt; reviewer hand corner sims of extracted netlist gave ss 0.639 / sf 0.648 ns. No bound weakened.",
+   "phase": "P5",
+   "ts": "2026-09-25T00:34:21"
+  }
+ ],
+ "edits": [
+  {
+   "ts": "2026-09-24T23:50:21",
+   "class": "spec_edit",
+   "refs": [],
+   "note": "spec: add itail_peak (tt only, 1.0-3.2 mA) so the bench can see the tail's width (wo-1, xmtail_size_doubled_w)",
+   "human_hold": 2,
+   "gates": [
+    "spec_lint",
+    "netlist_lint",
+    "sim_tt",
+    "sim_pvt",
+    "bench_strength",
+    "mc",
+    "drc",
+    "lvs",
+    "pex_sim",
+    "release"
+   ],
+   "gates_marked": [
+    "spec_lint",
+    "netlist_lint",
+    "sim_tt",
+    "sim_pvt",
+    "bench_strength"
+   ],
+   "stale_artifacts": []
+  },
+  {
+   "ts": "2026-09-25T00:23:05",
+   "class": "layout_code_edit",
+   "refs": [
+    "layout/gen_comparator.py"
+   ],
+   "note": "wo-2 layout-fixer: mirror cross-coupling tracks, space outn/outp",
+   "human_hold": 1,
+   "gates": [
+    "drc",
+    "lvs",
+    "pex_sim",
+    "release"
+   ],
+   "gates_marked": [
+    "drc",
+    "lvs",
+    "pex_sim"
+   ],
+   "stale_artifacts": []
+  },
+  {
+   "ts": "2026-09-25T00:46:41",
+   "class": "sizing_edit",
+   "refs": [],
+   "note": "resize w_latch_p 6u->3u, w_reset 4u->2u for post-layout slow-corner tdelay (H2 constraint)",
+   "human_hold": 1,
+   "gates": [
+    "sim_tt",
+    "sim_pvt",
+    "bench_strength",
+    "mc",
+    "lvs",
+    "pex_sim",
+    "release"
+   ],
+   "gates_marked": [
+    "sim_tt",
+    "sim_pvt",
+    "bench_strength",
+    "lvs",
+    "pex_sim"
+   ],
+   "stale_artifacts": []
+  },
+  {
+   "ts": "2026-09-25T00:51:37",
+   "class": "spec_edit",
+   "refs": [],
+   "note": "spec: add ireset (reset-phase avg |i(vdd)| 12.5-14.5 ns, max 5 uA) to catch wrong-type tail; H2 loop",
+   "human_hold": 2,
+   "gates": [
+    "spec_lint",
+    "netlist_lint",
+    "sim_tt",
+    "sim_pvt",
+    "bench_strength",
+    "mc",
+    "drc",
+    "lvs",
+    "pex_sim",
+    "release"
+   ],
+   "gates_marked": [
+    "spec_lint",
+    "netlist_lint",
+    "sim_tt",
+    "sim_pvt",
+    "bench_strength",
+    "drc",
+    "lvs",
+    "pex_sim"
+   ],
+   "stale_artifacts": []
+  }
+ ],
+ "spawns": [
+  {
+   "ts": "2026-09-24T21:44:55",
+   "role": "spec-writer",
+   "model": "fable",
+   "effort": "high",
+   "phase": "P1"
+  },
+  {
+   "ts": "2026-09-24T21:46:23",
+   "role": "analog-designer",
+   "model": "fable",
+   "effort": "high",
+   "phase": "P2"
+  },
+  {
+   "ts": "2026-09-24T21:47:41",
+   "role": "bench-writer",
+   "model": "opus",
+   "effort": "high",
+   "phase": "P3"
+  },
+  {
+   "ts": "2026-09-24T21:50:16",
+   "role": "analog-designer",
+   "model": "opus",
+   "effort": "high",
+   "phase": "P4"
+  },
+  {
+   "ts": "2026-09-24T21:59:28",
+   "role": "reviewer",
+   "model": "fable",
+   "effort": "high",
+   "phase": "P4"
+  },
+  {
+   "ts": "2026-09-24T22:43:13",
+   "role": "bench-writer",
+   "model": "opus",
+   "effort": "high",
+   "phase": "P4"
+  },
+  {
+   "ts": "2026-09-24T23:15:26",
+   "role": "bench-writer",
+   "model": "opus",
+   "effort": "high",
+   "phase": "P4"
+  },
+  {
+   "ts": "2026-09-24T23:28:36",
+   "role": "bench-writer",
+   "model": "opus",
+   "effort": "high",
+   "phase": "P4"
+  },
+  {
+   "ts": "2026-09-24T23:45:43",
+   "role": "spec-writer",
+   "model": "fable",
+   "effort": "high",
+   "phase": "P4"
+  },
+  {
+   "ts": "2026-09-24T23:50:22",
+   "role": "bench-writer",
+   "model": "opus",
+   "effort": "high",
+   "phase": "P4"
+  },
+  {
+   "ts": "2026-09-24T23:55:53",
+   "role": "reviewer",
+   "model": "fable",
+   "effort": "high",
+   "phase": "P4"
+  },
+  {
+   "ts": "2026-09-25T00:01:28",
+   "role": "bench-writer",
+   "model": "opus",
+   "effort": "high",
+   "phase": "P5"
+  },
+  {
+   "ts": "2026-09-25T00:01:29",
+   "role": "layout-writer",
+   "model": "opus",
+   "effort": "high",
+   "phase": "P5"
+  },
+  {
+   "ts": "2026-09-25T00:16:17",
+   "role": "layout-fixer",
+   "model": "opus",
+   "effort": "high",
+   "phase": "P5",
+   "note": "wo-2 pex_sim vdiff_neg"
+  },
+  {
+   "ts": "2026-09-25T00:23:56",
+   "role": "reviewer",
+   "model": "fable",
+   "effort": "high",
+   "phase": "P5",
+   "note": "H2"
+  },
+  {
+   "ts": "2026-09-25T00:24:03",
+   "role": "reviewer",
+   "model": "fable",
+   "effort": "high",
+   "phase": "P5",
+   "note": "H2"
+  },
+  {
+   "ts": "2026-09-25T00:34:54",
+   "role": "analog-designer",
+   "model": "opus",
+   "effort": "high",
+   "phase": "P4"
+  },
+  {
+   "ts": "2026-09-25T00:48:29",
+   "role": "spec-writer",
+   "model": "fable",
+   "effort": "high",
+   "phase": "P5"
+  },
+  {
+   "ts": "2026-09-25T00:51:37",
+   "role": "bench-writer",
+   "model": "opus",
+   "effort": "high",
+   "phase": "P5"
+  },
+  {
+   "ts": "2026-09-25T00:51:37",
+   "role": "layout-fixer",
+   "model": "opus",
+   "effort": "high",
+   "phase": "P5"
+  },
+  {
+   "ts": "2026-09-25T00:57:07",
+   "role": "reviewer",
+   "model": "fable",
+   "effort": "high",
+   "phase": "P5"
+  }
+ ],
+ "history": [
+  {
+   "ts": "2026-09-24T21:44:33",
+   "event": "init",
+   "skill": "ade",
+   "block": "comparator",
+   "phase": "P0"
+  },
+  {
+   "ts": "2026-09-24T21:44:47",
+   "event": "decision",
+   "what": "H1/H2 pre-approved by the user"
+  },
+  {
+   "ts": "2026-09-24T21:44:47",
+   "event": "phase",
+   "phase": "P1",
+   "prev": "P0"
+  },
+  {
+   "ts": "2026-09-24T21:44:55",
+   "event": "spawn",
+   "role": "spec-writer",
+   "model": "fable"
+  },
+  {
+   "ts": "2026-09-24T21:45:50",
+   "event": "gate",
+   "gate": "spec_lint",
+   "status": "pass",
+   "attempt": 1,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-24T21:46:10",
+   "event": "gate",
+   "gate": "spec_lint",
+   "status": "pass",
+   "attempt": 2,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-24T21:46:22",
+   "event": "phase",
+   "phase": "P2",
+   "prev": "P1"
+  },
+  {
+   "ts": "2026-09-24T21:46:23",
+   "event": "spawn",
+   "role": "analog-designer",
+   "model": "fable"
+  },
+  {
+   "ts": "2026-09-24T21:47:13",
+   "event": "gate",
+   "gate": "spec_lint",
+   "status": "pass",
+   "attempt": 3,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-24T21:47:38",
+   "event": "gate",
+   "gate": "spec_lint",
+   "status": "pass",
+   "attempt": 4,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-24T21:47:40",
+   "event": "phase",
+   "phase": "P3",
+   "prev": "P2"
+  },
+  {
+   "ts": "2026-09-24T21:47:41",
+   "event": "spawn",
+   "role": "bench-writer",
+   "model": "opus"
+  },
+  {
+   "ts": "2026-09-24T21:48:54",
+   "event": "gate",
+   "gate": "spec_lint",
+   "status": "pass",
+   "attempt": 5,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-24T21:49:41",
+   "event": "gate",
+   "gate": "spec_lint",
+   "status": "pass",
+   "attempt": 6,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-24T21:50:14",
+   "event": "gate",
+   "gate": "spec_lint",
+   "status": "pass",
+   "attempt": 7,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-24T21:50:15",
+   "event": "decision",
+   "what": "bench input common mode = VDD/2 (1.65 V at nominal)"
+  },
+  {
+   "ts": "2026-09-24T21:50:16",
+   "event": "phase",
+   "phase": "P4",
+   "prev": "P3"
+  },
+  {
+   "ts": "2026-09-24T21:50:16",
+   "event": "spawn",
+   "role": "analog-designer",
+   "model": "opus"
+  },
+  {
+   "ts": "2026-09-24T21:51:08",
+   "event": "gate",
+   "gate": "netlist_lint",
+   "status": "pass",
+   "attempt": 1,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-24T21:51:17",
+   "event": "gate",
+   "gate": "sim_tt",
+   "status": "pass",
+   "attempt": 1,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-24T21:53:35",
+   "event": "gate",
+   "gate": "sim_pvt",
+   "status": "pass",
+   "attempt": 1,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-24T21:54:15",
+   "event": "gate",
+   "gate": "netlist_lint",
+   "status": "pass",
+   "attempt": 2,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-24T21:54:20",
+   "event": "gate",
+   "gate": "sim_tt",
+   "status": "pass",
+   "attempt": 2,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-24T21:54:35",
+   "event": "gate",
+   "gate": "sim_pvt",
+   "status": "pass",
+   "attempt": 2,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-24T21:54:57",
+   "event": "gate",
+   "gate": "bench_strength",
+   "status": "pass",
+   "attempt": 1,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-24T21:58:20",
+   "event": "resumed"
+  },
+  {
+   "ts": "2026-09-24T21:59:28",
+   "event": "spawn",
+   "role": "reviewer",
+   "model": "fable"
+  },
+  {
+   "ts": "2026-09-24T22:18:43",
+   "event": "human",
+   "checkpoint": "H1",
+   "status": "rejected"
+  },
+  {
+   "ts": "2026-09-24T22:26:38",
+   "event": "gate",
+   "gate": "bench_strength",
+   "status": "fail",
+   "attempt": 2,
+   "failing_count": 2
+  },
+  {
+   "ts": "2026-09-24T22:36:34",
+   "event": "resumed"
+  },
+  {
+   "ts": "2026-09-24T22:42:06",
+   "event": "gate",
+   "gate": "bench_strength",
+   "status": "fail",
+   "attempt": 3,
+   "failing_count": 2
+  },
+  {
+   "ts": "2026-09-24T22:42:47",
+   "event": "budget_defaulted",
+   "path": "fix_loops.bench_strength",
+   "value": 3
+  },
+  {
+   "ts": "2026-09-24T22:42:47",
+   "event": "budget",
+   "path": "fix_loops.bench_strength",
+   "remaining": 2
+  },
+  {
+   "ts": "2026-09-24T22:42:47",
+   "event": "snapshot",
+   "label": "pre-fix-bench_strength-a1",
+   "files": 4
+  },
+  {
+   "ts": "2026-09-24T22:42:48",
+   "event": "issue_open",
+   "id": 1,
+   "gate": "bench_strength",
+   "fixer": "testbench",
+   "kinds": [
+    "survivor_connection_removed",
+    "survivor_size_doubled"
+   ]
+  },
+  {
+   "ts": "2026-09-24T22:43:12",
+   "event": "issue",
+   "id": 1,
+   "status": "fixing",
+   "agent": "bench-writer",
+   "attempts": 1
+  },
+  {
+   "ts": "2026-09-24T22:43:13",
+   "event": "spawn",
+   "role": "bench-writer",
+   "model": "opus"
+  },
+  {
+   "ts": "2026-09-24T22:47:14",
+   "event": "gate",
+   "gate": "bench_strength",
+   "status": "fail",
+   "attempt": 4,
+   "failing_count": 2
+  },
+  {
+   "ts": "2026-09-24T23:15:07",
+   "event": "resumed"
+  },
+  {
+   "ts": "2026-09-24T23:15:26",
+   "event": "spawn",
+   "role": "bench-writer",
+   "model": "opus"
+  },
+  {
+   "ts": "2026-09-24T23:26:58",
+   "event": "resumed"
+  },
+  {
+   "ts": "2026-09-24T23:28:36",
+   "event": "spawn",
+   "role": "bench-writer",
+   "model": "opus"
+  },
+  {
+   "ts": "2026-09-24T23:34:08",
+   "event": "gate",
+   "gate": "bench_strength",
+   "status": "fail",
+   "attempt": 5,
+   "failing_count": 1
+  },
+  {
+   "ts": "2026-09-24T23:34:31",
+   "event": "gate",
+   "gate": "sim_pvt",
+   "status": "pass",
+   "attempt": 3,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-24T23:40:32",
+   "event": "gate",
+   "gate": "bench_strength",
+   "status": "fail",
+   "attempt": 6,
+   "failing_count": 1
+  },
+  {
+   "ts": "2026-09-24T23:44:26",
+   "event": "resumed"
+  },
+  {
+   "ts": "2026-09-24T23:45:43",
+   "event": "spawn",
+   "role": "spec-writer",
+   "model": "fable"
+  },
+  {
+   "ts": "2026-09-24T23:49:32",
+   "event": "gate",
+   "gate": "spec_lint",
+   "status": "fail",
+   "attempt": 8,
+   "failing_count": 1
+  },
+  {
+   "ts": "2026-09-24T23:50:21",
+   "event": "edit",
+   "edit_class": "spec_edit",
+   "refs": [],
+   "human_hold": 2
+  },
+  {
+   "ts": "2026-09-24T23:50:22",
+   "event": "spawn",
+   "role": "bench-writer",
+   "model": "opus"
+  },
+  {
+   "ts": "2026-09-24T23:51:38",
+   "event": "gate",
+   "gate": "spec_lint",
+   "status": "pass",
+   "attempt": 9,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-24T23:51:40",
+   "event": "gate",
+   "gate": "sim_tt",
+   "status": "pass",
+   "attempt": 3,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-24T23:52:42",
+   "event": "gate",
+   "gate": "bench_strength",
+   "status": "pass",
+   "attempt": 7,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-24T23:53:44",
+   "event": "gate",
+   "gate": "spec_lint",
+   "status": "pass",
+   "attempt": 10,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-24T23:53:45",
+   "event": "gate",
+   "gate": "netlist_lint",
+   "status": "pass",
+   "attempt": 3,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-24T23:53:46",
+   "event": "gate",
+   "gate": "sim_tt",
+   "status": "pass",
+   "attempt": 4,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-24T23:54:06",
+   "event": "gate",
+   "gate": "sim_pvt",
+   "status": "pass",
+   "attempt": 4,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-24T23:55:01",
+   "event": "gate",
+   "gate": "bench_strength",
+   "status": "pass",
+   "attempt": 8,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-24T23:55:21",
+   "event": "issue",
+   "id": 1,
+   "status": "fixed",
+   "agent": "bench-writer",
+   "attempts": 1
+  },
+  {
+   "ts": "2026-09-24T23:55:53",
+   "event": "spawn",
+   "role": "reviewer",
+   "model": "fable"
+  },
+  {
+   "ts": "2026-09-25T00:00:49",
+   "event": "human",
+   "checkpoint": "H1",
+   "status": "approved"
+  },
+  {
+   "ts": "2026-09-25T00:01:05",
+   "event": "decision",
+   "what": "set-phase P5 --force past mc"
+  },
+  {
+   "ts": "2026-09-25T00:01:06",
+   "event": "phase_forced",
+   "phase": "P5",
+   "prev": "P4",
+   "missing": [
+    "mc (P4)"
+   ]
+  },
+  {
+   "ts": "2026-09-25T00:01:06",
+   "event": "phase",
+   "phase": "P5",
+   "prev": "P4"
+  },
+  {
+   "ts": "2026-09-25T00:01:28",
+   "event": "spawn",
+   "role": "bench-writer",
+   "model": "opus"
+  },
+  {
+   "ts": "2026-09-25T00:01:29",
+   "event": "spawn",
+   "role": "layout-writer",
+   "model": "opus"
+  },
+  {
+   "ts": "2026-09-25T00:10:20",
+   "event": "gate",
+   "gate": "drc",
+   "status": "pass",
+   "attempt": 1,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-25T00:10:29",
+   "event": "gate",
+   "gate": "lvs",
+   "status": "fail",
+   "attempt": 1,
+   "failing_count": 1
+  },
+  {
+   "ts": "2026-09-25T00:10:40",
+   "event": "gate",
+   "gate": "pex_sim",
+   "status": "fail",
+   "attempt": 1,
+   "failing_count": 1
+  },
+  {
+   "ts": "2026-09-25T00:14:56",
+   "event": "resumed"
+  },
+  {
+   "ts": "2026-09-25T00:15:23",
+   "event": "gate",
+   "gate": "lvs",
+   "status": "pass",
+   "attempt": 2,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-25T00:15:59",
+   "event": "budget_defaulted",
+   "path": "fix_loops.pex_sim",
+   "value": 3
+  },
+  {
+   "ts": "2026-09-25T00:15:59",
+   "event": "budget",
+   "path": "fix_loops.pex_sim",
+   "remaining": 2
+  },
+  {
+   "ts": "2026-09-25T00:15:59",
+   "event": "snapshot",
+   "label": "pre-fix-pex_sim-a1",
+   "files": 7
+  },
+  {
+   "ts": "2026-09-25T00:16:00",
+   "event": "issue_open",
+   "id": 2,
+   "gate": "pex_sim",
+   "fixer": "layout",
+   "kinds": [
+    "measure_out_of_bounds"
+   ]
+  },
+  {
+   "ts": "2026-09-25T00:16:17",
+   "event": "issue",
+   "id": 2,
+   "status": "fixing",
+   "agent": "layout-fixer",
+   "attempts": 0
+  },
+  {
+   "ts": "2026-09-25T00:16:17",
+   "event": "spawn",
+   "role": "layout-fixer",
+   "model": "opus"
+  },
+  {
+   "ts": "2026-09-25T00:18:53",
+   "event": "gate",
+   "gate": "drc",
+   "status": "pass",
+   "attempt": 2,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-25T00:19:03",
+   "event": "gate",
+   "gate": "lvs",
+   "status": "pass",
+   "attempt": 3,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-25T00:19:18",
+   "event": "gate",
+   "gate": "pex_sim",
+   "status": "fail",
+   "attempt": 2,
+   "failing_count": 1
+  },
+  {
+   "ts": "2026-09-25T00:22:03",
+   "event": "gate",
+   "gate": "drc",
+   "status": "pass",
+   "attempt": 3,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-25T00:22:13",
+   "event": "gate",
+   "gate": "lvs",
+   "status": "pass",
+   "attempt": 4,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-25T00:22:23",
+   "event": "gate",
+   "gate": "pex_sim",
+   "status": "pass",
+   "attempt": 3,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-25T00:23:05",
+   "event": "edit",
+   "edit_class": "layout_code_edit",
+   "refs": [
+    "layout/gen_comparator.py"
+   ],
+   "human_hold": 1
+  },
+  {
+   "ts": "2026-09-25T00:23:18",
+   "event": "gate",
+   "gate": "drc",
+   "status": "pass",
+   "attempt": 4,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-25T00:23:25",
+   "event": "gate",
+   "gate": "lvs",
+   "status": "pass",
+   "attempt": 5,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-25T00:23:35",
+   "event": "gate",
+   "gate": "pex_sim",
+   "status": "pass",
+   "attempt": 4,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-25T00:23:44",
+   "event": "issue",
+   "id": 2,
+   "status": "fixed",
+   "agent": "layout-fixer",
+   "attempts": 0
+  },
+  {
+   "ts": "2026-09-25T00:23:56",
+   "event": "spawn",
+   "role": "reviewer",
+   "model": "fable"
+  },
+  {
+   "ts": "2026-09-25T00:24:03",
+   "event": "spawn",
+   "role": "reviewer",
+   "model": "fable"
+  },
+  {
+   "ts": "2026-09-25T00:30:11",
+   "event": "human",
+   "checkpoint": "H2",
+   "status": "rejected"
+  },
+  {
+   "ts": "2026-09-25T00:34:21",
+   "event": "resumed"
+  },
+  {
+   "ts": "2026-09-25T00:34:21",
+   "event": "decision",
+   "what": "H2 rejection stands; loop P5 with new constraint"
+  },
+  {
+   "ts": "2026-09-25T00:34:54",
+   "event": "snapshot",
+   "label": "pre-resize-r8",
+   "files": 7
+  },
+  {
+   "ts": "2026-09-25T00:34:54",
+   "event": "spawn",
+   "role": "analog-designer",
+   "model": "opus"
+  },
+  {
+   "ts": "2026-09-25T00:36:01",
+   "event": "gate",
+   "gate": "sim_pvt",
+   "status": "pass",
+   "attempt": 5,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-25T00:41:31",
+   "event": "gate",
+   "gate": "sim_tt",
+   "status": "pass",
+   "attempt": 5,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-25T00:41:41",
+   "event": "gate",
+   "gate": "sim_pvt",
+   "status": "pass",
+   "attempt": 6,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-25T00:44:37",
+   "event": "gate",
+   "gate": "sim_tt",
+   "status": "pass",
+   "attempt": 6,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-25T00:44:46",
+   "event": "gate",
+   "gate": "sim_pvt",
+   "status": "pass",
+   "attempt": 7,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-25T00:45:26",
+   "event": "gate",
+   "gate": "bench_strength",
+   "status": "fail",
+   "attempt": 9,
+   "failing_count": 1
+  },
+  {
+   "ts": "2026-09-25T00:46:41",
+   "event": "edit",
+   "edit_class": "sizing_edit",
+   "refs": [],
+   "human_hold": 1
+  },
+  {
+   "ts": "2026-09-25T00:46:42",
+   "event": "gate",
+   "gate": "sim_tt",
+   "status": "pass",
+   "attempt": 7,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-25T00:46:49",
+   "event": "gate",
+   "gate": "sim_pvt",
+   "status": "pass",
+   "attempt": 8,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-25T00:47:52",
+   "event": "gate",
+   "gate": "bench_strength",
+   "status": "fail",
+   "attempt": 10,
+   "failing_count": 1
+  },
+  {
+   "ts": "2026-09-25T00:48:02",
+   "event": "budget",
+   "path": "fix_loops.bench_strength",
+   "remaining": 1
+  },
+  {
+   "ts": "2026-09-25T00:48:02",
+   "event": "snapshot",
+   "label": "pre-fix-bench_strength-r8a1",
+   "files": 7
+  },
+  {
+   "ts": "2026-09-25T00:48:03",
+   "event": "issue_open",
+   "id": 3,
+   "gate": "bench_strength",
+   "fixer": "testbench",
+   "kinds": [
+    "survivor_type_flipped"
+   ]
+  },
+  {
+   "ts": "2026-09-25T00:48:29",
+   "event": "issue",
+   "id": 3,
+   "status": "fixing",
+   "agent": "bench-writer",
+   "attempts": 0
+  },
+  {
+   "ts": "2026-09-25T00:48:29",
+   "event": "spawn",
+   "role": "spec-writer",
+   "model": "fable"
+  },
+  {
+   "ts": "2026-09-25T00:51:01",
+   "event": "gate",
+   "gate": "spec_lint",
+   "status": "fail",
+   "attempt": 11,
+   "failing_count": 1
+  },
+  {
+   "ts": "2026-09-25T00:51:37",
+   "event": "edit",
+   "edit_class": "spec_edit",
+   "refs": [],
+   "human_hold": 2
+  },
+  {
+   "ts": "2026-09-25T00:51:37",
+   "event": "spawn",
+   "role": "bench-writer",
+   "model": "opus"
+  },
+  {
+   "ts": "2026-09-25T00:51:37",
+   "event": "spawn",
+   "role": "layout-fixer",
+   "model": "opus"
+  },
+  {
+   "ts": "2026-09-25T00:52:07",
+   "event": "gate",
+   "gate": "spec_lint",
+   "status": "pass",
+   "attempt": 12,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-25T00:52:09",
+   "event": "gate",
+   "gate": "sim_tt",
+   "status": "pass",
+   "attempt": 8,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-25T00:52:32",
+   "event": "gate",
+   "gate": "sim_pvt",
+   "status": "pass",
+   "attempt": 9,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-25T00:52:49",
+   "event": "gate",
+   "gate": "drc",
+   "status": "pass",
+   "attempt": 5,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-25T00:53:04",
+   "event": "gate",
+   "gate": "lvs",
+   "status": "pass",
+   "attempt": 6,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-25T00:53:22",
+   "event": "gate",
+   "gate": "pex_sim",
+   "status": "pass",
+   "attempt": 5,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-25T00:54:21",
+   "event": "gate",
+   "gate": "bench_strength",
+   "status": "pass",
+   "attempt": 11,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-25T00:55:21",
+   "event": "gate",
+   "gate": "spec_lint",
+   "status": "pass",
+   "attempt": 13,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-25T00:55:23",
+   "event": "gate",
+   "gate": "netlist_lint",
+   "status": "pass",
+   "attempt": 4,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-25T00:55:24",
+   "event": "gate",
+   "gate": "sim_tt",
+   "status": "pass",
+   "attempt": 9,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-25T00:55:35",
+   "event": "gate",
+   "gate": "sim_pvt",
+   "status": "pass",
+   "attempt": 10,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-25T00:56:24",
+   "event": "gate",
+   "gate": "bench_strength",
+   "status": "pass",
+   "attempt": 12,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-25T00:56:37",
+   "event": "gate",
+   "gate": "drc",
+   "status": "pass",
+   "attempt": 6,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-25T00:56:43",
+   "event": "gate",
+   "gate": "lvs",
+   "status": "pass",
+   "attempt": 7,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-25T00:56:51",
+   "event": "gate",
+   "gate": "pex_sim",
+   "status": "pass",
+   "attempt": 6,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-25T00:57:06",
+   "event": "issue",
+   "id": 3,
+   "status": "fixed",
+   "agent": "bench-writer",
+   "attempts": 0
+  },
+  {
+   "ts": "2026-09-25T00:57:07",
+   "event": "spawn",
+   "role": "reviewer",
+   "model": "fable"
+  },
+  {
+   "ts": "2026-09-25T01:00:16",
+   "event": "human",
+   "checkpoint": "H2",
+   "status": "approved"
+  },
+  {
+   "ts": "2026-09-25T01:01:21",
+   "event": "gate",
+   "gate": "release",
+   "status": "pass",
+   "attempt": 1,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-25T01:03:02",
+   "event": "phase",
+   "phase": "P6",
+   "prev": "P5"
+  },
+  {
+   "ts": "2026-09-25T01:03:02",
+   "event": "gate",
+   "gate": "release",
+   "status": "pass",
+   "attempt": 2,
+   "failing_count": 0
+  },
+  {
+   "ts": "2026-09-25T01:03:40",
+   "event": "phase",
+   "phase": "done",
+   "prev": "P6"
+  }
+ ]
+}

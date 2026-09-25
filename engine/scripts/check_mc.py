@@ -98,6 +98,22 @@ def inject_mc_params(template_text: str, seed: int, do_global: bool) -> str:
     return new_text
 
 
+def mc_applicable(spec: dict) -> bool:
+    """Does this spec ask for Monte Carlo? The ONE predicate for that
+    question - this gate's own not-applicable branch below and attest.py's
+    release-time declaration (attest.not_applicable_reason) both call it,
+    so the two can never disagree about what "not applicable" means. A
+    non-mapping `mc` is refused (exit 2), never read as "no MC"."""
+    mc_cfg = spec.get("mc")
+    if mc_cfg is None:
+        return False
+    if not isinstance(mc_cfg, dict):
+        raise CheckError(
+            f"spec.yaml's mc must be a mapping (enabled/runs/yield_min/...), "
+            f"got {type(mc_cfg).__name__} - write 'mc: {{enabled: true}}'")
+    return bool(mc_cfg.get("enabled"))
+
+
 def run(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--workspace", required=True, help="block workspace")
@@ -107,15 +123,22 @@ def run(argv=None):
 
     ws = Path(args.workspace)
     spec = speclib.load_spec(ws / "spec" / "spec.yaml")
-    mc_cfg = spec.get("mc") or {}
     top = spec.get("top")
 
-    if not mc_cfg.get("enabled"):
+    # Not applicable: a real answer, but NOT a recordable pass in a
+    # workspace. It is stamped with spec.yaml, while invalidation.yaml keys
+    # mc on [netlist, tb], so state.record_gate refuses it (input_digest
+    # mismatch) - deliberately: a recorded "pass" keyed on netlist/tb would
+    # stay fresh after spec.yaml later turned MC on, and release would
+    # accept a Monte Carlo that never ran. Release instead re-asks the
+    # current spec.yaml every time (attest.not_applicable_reason).
+    if not mc_applicable(spec):
         payload = checklib.report(SCRIPT, ws / "spec" / "spec.yaml", [],
                                   top=top, applicable=False,
                                   reason="spec.yaml has no 'mc.enabled: true'")
         return payload, args.out
 
+    mc_cfg = spec["mc"]
     if "runs" in mc_cfg:
         runs_val = mc_cfg["runs"]
         if isinstance(runs_val, bool) or not isinstance(runs_val, int) \

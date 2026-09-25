@@ -34,7 +34,7 @@ SEV_RANK = {"error": 2, "warning": 1, "info": 0}
 # free slugs FIXER_HINTS cannot enumerate.
 FIXER_DOMAINS = frozenset({
     "rtl", "testbench", "formal", "synth", "harden", "layout", "sizing",
-    "review"})
+    "netlist", "review"})
 
 # kind -> the fixer domain best suited to resolve it. Empty at M1 (every
 # gate is a stub, so no real finding kind exists yet); each milestone that
@@ -164,7 +164,81 @@ FIXER_HINTS: dict[str, str] = {
     # precheck (check_precheck.py) - glsim's own kinds (test_failed/
     # test_skipped) are shared with sim/holdout above.
     "precheck_failed": "harden",
+
+    # ---- /ade (M8/M9; skills/ade/SKILL.md's fix loop). The judgment calls:
+    #   - netlist_lint findings are the netlist's own text (a model the PDK
+    #     lacks, a declared device missing, a floating node) - "netlist".
+    #   - a sim_tt/sim_pvt/mc bound miss reads as the DESIGN being wrong
+    #     against a bench written first from the spec (the same call sim's
+    #     test_failed makes for vde) - "sizing", whose guidance lets the
+    #     fixer move to the netlist when sizing alone cannot close it.
+    #   - bench_strength scores the BENCH, never the design - every survivor
+    #     class routes to "testbench" (the bench-writer), exactly as mutate's
+    #     survivors do.
+    #   - drc/lvs/pex_sim are judgments on the generated layout - "layout"
+    #     (the layout-fixer edits layout/gen_<block>.py, never the GDS). DRC
+    #     kinds are klayout rule names (M1.2a, DF.14_LV, metal1_OFFGRID, ...)
+    #     no table can enumerate; CHECK_HINTS below routes them by gate.
+    #   - spec_lint kinds stay unmapped ("review") on purpose: the spec-writer
+    #     fixes those inside the spec/full-run recipes, same as vde's
+    #     requirement_no_check.
+
+    # netlist_lint (check_netlist_lint.py); its dry run's sim_engine_error_*
+    # kinds route through KIND_PREFIX_HINTS below.
+    "model_not_in_pdk": "netlist",
+    "declared_device_missing": "netlist",
+    "floating_node": "netlist",
+
+    # sim_tt / sim_pvt (simlib.compare_bounds) and mc (check_mc.py)
+    "sim_bound_fail": "sizing",
+    "sim_measure_missing": "testbench",
+    "yield_below_spec": "sizing",
+    "yield_all_failed": "sizing",
+
+    # bench_strength (check_bench_strength.py, netlistlib.device_mutants)
+    "survivor_size_doubled": "testbench",
+    "survivor_connection_removed": "testbench",
+    "survivor_type_flipped": "testbench",
+    "survivor_bias_halved": "testbench",
+
+    # lvs (check_analog_lvs.py) and pex_sim (check_pex_sim.py) - a pex
+    # bench that never printed a value is the bench-writer's, not the layout's
+    "lvs_mismatch": "layout",
+    "measure_out_of_bounds": "layout",
+    "measure_missing": "testbench",
 }
+
+# Kinds built at run time from a prefix (simlib.engine_error_violations:
+# `sim_engine_error_<pattern>`, one per ngspice failure signature) - a
+# convergence failure, an unknown subckt or node is the netlist's (or the
+# bench's instantiation of it) to fix, never a bound to widen.
+KIND_PREFIX_HINTS: tuple[tuple[str, str], ...] = (
+    ("sim_engine_error_", "netlist"),
+)
+
+# Last resort before 'review', keyed by the finding's own `check` (the gate's
+# tool name): a gate whose kinds are an open set (klayout DRC rule names)
+# still routes to the one domain that can fix anything it reports.
+CHECK_HINTS: dict[str, str] = {
+    "analog_drc": "layout",
+    "analog_lvs": "layout",
+    "pex_sim": "layout",
+}
+
+
+def fixer_for(kind: str | None, checks=()) -> str:
+    """The fixer domain for one kind: FIXER_HINTS, then a KIND_PREFIX_HINTS
+    prefix, then CHECK_HINTS when every finding shares one check, else
+    'review'."""
+    if kind in FIXER_HINTS:
+        return FIXER_HINTS[kind]
+    for prefix, domain in KIND_PREFIX_HINTS:
+        if kind and kind.startswith(prefix):
+            return domain
+    checks = {c for c in checks if c}
+    if len(checks) == 1:
+        return CHECK_HINTS.get(checks.pop(), "review")
+    return "review"
 
 
 def _uf_find(parent, i):
@@ -197,7 +271,8 @@ def cluster(violations: list[dict], *_ignored) -> list[dict]:
         # explicit per-finding domain wins when the group agrees on exactly
         # one valid name; else the kind-keyed hint table
         doms = {d for g in group if (d := g.get("domain")) in FIXER_DOMAINS}
-        fixer = doms.pop() if len(doms) == 1 else FIXER_HINTS.get(kind, "review")
+        fixer = doms.pop() if len(doms) == 1 else fixer_for(
+            kind, (g.get("check") for g in group))
         clusters.append({
             "file": file, "module": module, "kinds": kinds, "checks": checks,
             "severity": sev, "count": len(group), "fixer": fixer,

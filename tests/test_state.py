@@ -238,6 +238,35 @@ def test_set_phase_passes_once_every_owed_gate_is_recorded(tmp_path):
     assert st.data["phase"] == "P4"
 
 
+@pytest.mark.parametrize("mc_on", [False, True])
+def test_set_phase_skips_mc_only_when_the_spec_declares_it_not_applicable(
+        tmp_path, mc_on):
+    # /ade: every gate before P5 passed except mc, which gate.py cannot
+    # record when the spec asks for no Monte Carlo.
+    ws = ws_empty(tmp_path)
+    state_mod.State.init(ws, "ade", "mirror", phase="P4")
+    spec = (REPO / "corpus" / "ade" / "mirror" / "spec.yaml").read_text(
+        encoding="utf-8")
+    assert "\nmc:" not in spec
+    if mc_on:
+        spec += "\nmc:\n  enabled: true\n"
+    (ws / "spec").mkdir(exist_ok=True)
+    (ws / "spec" / "spec.yaml").write_text(spec, encoding="utf-8")
+    st = state_mod.State.load(ws / "state.json")
+    for ph, g in state_mod.applicable_gate_order("ade"):
+        if g != "mc" and state_mod.PHASES.index(ph) < state_mod.PHASES.index("P5"):
+            st.record_gate(g, {"status": "pass"})
+    if mc_on:   # MC asked for and not run: still owed, still refused
+        with pytest.raises(CheckError, match=r"mc \(P4\)"):
+            st.set_phase("P5")
+        assert st.data["phase"] == "P4"
+    else:       # declared not applicable: advances with no --force
+        st.set_phase("P5")
+        assert st.data["phase"] == "P5"
+        assert not any(h["event"] == "phase_forced"
+                       for h in st.data["history"])
+
+
 # ------------------------------------------------------------------- jobs
 
 def test_job_lifecycle(tmp_path):

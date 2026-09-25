@@ -128,6 +128,32 @@ def test_sized_reference_applies_sizing_to_subckt_defaults_only():
     assert "r_length={r2_length}" in sized
 
 
+
+def test_sized_reference_replaces_global_params():
+    text = (".param w_tail=6e-6 w_in=4e-6\n"
+            ".subckt cmp a b\n"
+            "xm a b a a nfet w={w_tail} l=2.8e-7\n.ends\n")
+    sized, applied = check_analog_lvs.sized_reference(
+        text, "cmp", {"w_tail": {"value": 1e-5}})
+    assert applied == {"w_tail": 1e-5}
+    assert sized.splitlines()[0] == ".param w_tail=1e-05 w_in=4e-6"
+    assert sized.count(".param") == 1
+
+
+def test_sized_reference_defines_bench_supplied_params():
+    # A library whose bench supplies the .param lines: netgen has no bench,
+    # so every sizing name the subckt uses must be defined for it.
+    text = ("* lib\n.subckt cmp a b\n"
+            "xm a b a a nfet w={w_tail} l={l_tail}\n.ends\n")
+    sized, applied = check_analog_lvs.sized_reference(
+        text, "cmp", {"w_tail": {"value": 1e-5}, "l_tail": 2.8e-7,
+                      "vbias": 1.0})
+    assert applied == {"w_tail": 1e-5, "l_tail": 2.8e-7}
+    lines = sized.splitlines()
+    assert lines[1] == ".param w_tail=1e-05 l_tail=2.8e-07"
+    assert lines[2].startswith(".subckt cmp")
+    assert "vbias" not in sized
+
 def test_unlaunchable_magic_is_a_refusal_not_a_stale_pass(unlaunchable_eda, tmp_path, capsys):
     ws = unlaunchable_eda
     code, out = run_err(["--workspace", str(ws)], capsys)

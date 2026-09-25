@@ -142,6 +142,42 @@ def test_netlist_with_no_parasitics_is_a_refusal(unlaunchable_eda, tmp_path,
     assert "no R and no C" in out["remediation"]
 
 
+def test_measure_never_met_is_a_finding_not_a_refusal(unlaunchable_eda,
+                                                      tmp_path, monkeypatch):
+    # the comparator's pex bench on a layout that decided the wrong way: the
+    # sim ran to the end, but outn never fell, so ngspice's `meas` for the
+    # decision delay reported "out of interval ... failed!". That is the
+    # design failing its bench (exit 1), not a gate that did not run.
+    import layoutlib
+    ws = unlaunchable_eda
+    (ws / "layout_ref" / "blk_pex_tb.bounds.json").write_text(
+        '{"measures": {"x": {"min": 0, "max": 1}, '
+        '"tdelay": {"min": 1e-10, "max": 5e-10}}}', encoding="utf-8")
+
+    def extracted(work_dir, gds, cell, parasitics):
+        p = work_dir / f"{cell}.pex.spice"
+        p.write_text(".subckt blk a b\nR0 a a.t0 12.5\nC0 a b 0.1f\n"
+                     "r1 a.t0 b 1k\n.ends\n", encoding="utf-8")
+        return p, ""
+
+    class Proc:
+        returncode = 0
+        stderr = ""
+        stdout = ("x = 5.0e-01\n"
+                  "Error: measure  tdelay  trig(TARG) : out of interval\n"
+                  " meas tran tdelay trig v(clk) val=1.4 rise=1 targ v(outn)"
+                  " val=1.4 fall=1 failed!\n")
+
+    monkeypatch.setattr(layoutlib, "run_magic_extract", extracted)
+    monkeypatch.setattr(layoutlib, "run_eda", lambda *a, **k: Proc())
+    code, out = run_json(["--workspace", str(ws)], tmp_path)
+    assert code == 1, out
+    assert [(v["kind"], v["refs"][0]) for v in out["violations"]] == [
+        ("measure_missing", "tdelay")]
+    assert "never met" in out["violations"][0]["msg"]
+    assert out["measured"] == {"x": 0.5}
+
+
 @pytest.mark.slow
 def test_clean_mirror_pex_sim_passes(tmp_path):
     ws = make_ws(tmp_path, "mirror")

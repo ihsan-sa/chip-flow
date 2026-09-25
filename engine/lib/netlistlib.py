@@ -203,7 +203,13 @@ def _size_mutant(ref: str, dev: dict, key: str) -> dict:
         try:
             params[key] = repr(float(params[key]) * 2.0)
         except ValueError:
-            params[key] = params[key] + "*2"
+            # a brace expression or an SI-suffixed value ("4u"): ngspice
+            # reads a bare `{w_out}*2` or `4u*2` as the value alone and drops
+            # the `*2`, so the doubling must sit inside one expression
+            inner = params[key].strip()
+            if inner.startswith("{") and inner.endswith("}"):
+                inner = inner[1:-1]
+            params[key] = "{(" + inner + ")*2}"
         new_line = _rebuild_device_line(dev, dev["model"], dev["nodes"], params)
         return _replace_line(text, dev["line"], new_line)
     return {"id": f"{ref}_size_doubled_{key}", "ref": ref, "kind": "size_doubled",

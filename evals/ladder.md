@@ -6,10 +6,10 @@ edited the run by hand (docs/design.md section 3). Harder rungs are higher up.
 
 | level | vde | ade | msde |
 |---|---|---|---|
-| 4 | small RISC-V core: not run | bandgap: not in corpus | SAR ADC: not in corpus |
-| 3 | SPI peripheral with a FIFO: not run | comparator: not in corpus | DAC with an SPI register: not in corpus |
+| 4 | small RISC-V core: not run | bandgap: not run | SAR ADC: not run |
+| 3 | SPI peripheral with a FIFO: not run | comparator: not run | DAC with an SPI register: not run |
 | 2 | UART: red | R2R DAC: not run | ring oscillator with a divider: not run |
-| 1 | 8-bit counter: counts | current mirror: not run | a sensor counted: not run |
+| 1 | 8-bit counter: counts | current mirror: not run | a sensor counted: red |
 
 ## /vde
 
@@ -26,7 +26,12 @@ No /ade run scored yet. `ladder.py --skill ade --rung <rung> --run <ws>` fills t
 
 ## /msde
 
-No /msde run scored yet. `ladder.py --skill msde --rung <rung> --run <ws>` fills this table.
+| rung | counts | why not | held-out | kill rate | area | worst slack ns | fix attempts | tokens | cost USD | wall s | scored | note |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| sensor_counted | no | 5 gate(s) not green | n/a | - | - | - | 0 | - | 39.00 | 8999 | 2026-09-25 | stopped at the $30 cap per run ($39 over two runs): top P2, digital P4, analog P5 with 12 DRC violations |
+| ring_osc_div | not run | | | | | | | | | | | |
+| dac_spi | not run | | | | | | | | | | | |
+| sar_adc | not run | | | | | | | | | | | |
 
 ## Reference baselines
 
@@ -45,9 +50,9 @@ Frozen fixtures under `evals/fixtures/<stage>/<name>/`; `bench.py --compare` fai
 
 | stage | fixture | baseline composite | gates | written |
 |---|---|---|---|---|
-| P3 | counter8_tb | 1.0 | sim pass, mutate pass, cover pass | 2026-09-24 |
-| P4 | counter8_rtl | 1.0 | lint pass, sim pass, holdout pass, mutate pass, formal pass, cover pass | 2026-09-24 |
-| P4 | uart_rtl | 0.9701 | lint pass, sim pass, holdout pass, mutate fail, formal pass, cover pass | 2026-09-24 |
+| P3 | counter8_tb | 1.0 | sim pass, mutate pass, cover pass | 2026-09-25 |
+| P4 | counter8_rtl | 1.0 | lint pass, sim pass, holdout pass, mutate pass, formal pass, cover pass | 2026-09-25 |
+| P4 | uart_rtl | 0.8127 | lint pass, sim pass, holdout pass, mutate fail, formal fail, cover pass | 2026-09-25 |
 
 ## CVDP
 

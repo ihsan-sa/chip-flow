@@ -1,0 +1,33 @@
+# digital_spec.yaml - the digital side's own declared copy of the crossing
+# signals interface.yaml names (docs/design.md section 5: "two specs
+# carrying the same entries"). Stands in for a real nested /vde block's own
+# spec.yaml `interface:` section until M4 merges (engine/scripts/
+# check_split.py's own docstring). No reference design exists yet for this
+# rung (spec.md: "a spec with faults only") - this file is the digital
+# side's declared interface, nothing more.
+top: sar_adc_digital
+interface:
+  - name: dac_code
+    direction: d2a
+    level: cmos_3v3
+    domain: clk_sys
+    width: 8
+    load: "internal DAC trial-voltage code"
+  - name: sample
+    direction: d2a
+    level: cmos_3v3
+    domain: clk_sys
+    width: 1
+    load: "sample-and-hold close/track control"
+  - name: cmp_out
+    direction: a2d
+    level: cmos_3v3
+    domain: clk_sys
+    width: 1
+    load: "SAR bit-decision input"
+  - name: comp_clk
+    direction: d2a
+    level: cmos_3v3
+    domain: clk_sys
+    width: 1
+    load: "comparator strobe clock"

@@ -266,9 +266,15 @@ gates:
       fault: "an output routed on a long minimum-width metal1 line"
       description: "Every measure inside post_layout_bounds."
     release:
+      # Real now, the same tool as vde's row (check_release.py ->
+      # attest.build()): every ade gate above needs a fresh recorded pass or
+      # a durable waiver. `mc` is the one declared exception: when the
+      # block's current spec.yaml asks for no Monte Carlo, attest records it
+      # in checks.json as ok, not run, with the reason and spec.yaml's hash
+      # (attest._mc_not_applicable) - never silently dropped, and never an
+      # old recorded "not applicable" pass that could outlive the spec.
       phase: P6
-      tool: stub
-      future_tool: "attest, strict"
+      tool: release
       strict: true
       fail_severities: [error]
       max_count: 0
@@ -285,9 +291,11 @@ gates:
     # design.md section 5 asks for: build on the first working fallback,
     # cocotbext-ams, which turns out to itself cover the second fallback
     # too (a lock-step driver of ngspice's shared library), so there was
-    # only one fallback to pick. top_drc/top_lvs/release stay `stub` -
-    # they need the assembled top GDS and both nested vde/ade runs, which
-    # arrive after M4 and M9 merge.
+    # only one fallback to pick. The rest landed with M10's second half:
+    # top_harden assembles the chip top from the nested digital/ and
+    # analog/ workspaces and hardens it with M4's harden job, the analog
+    # GDS as a LibreLane macro; top_drc and top_lvs read that GDS; release
+    # also needs both nested runs released.
     split:
       phase: P1
       tool: split
@@ -304,26 +312,34 @@ gates:
       max_count: 0
       fault: "control word polarity inverted"
       description: "Every top-level measure inside its bound."
+    top_harden:
+      phase: P3
+      tool: top_harden
+      job: true
+      fail_severities: [error]
+      max_count: 0
+      fault: "an analog macro too large for the tile"
+      description: >-
+        The digital side hardens in the TT tile with the analog GDS as a
+        macro: the flow finishes with no failing step and produces GDS,
+        LEF, netlist, SDF, metrics.
     top_drc:
       phase: P3
-      tool: stub
-      future_tool: "magic and klayout on the assembled GDS"
+      tool: top_drc
       fail_severities: [error]
       max_count: 0
       fault: "a planted spacing violation"
       description: "0."
     top_lvs:
       phase: P3
-      tool: stub
-      future_tool: "netgen on the assembled GDS, the analog block as a subcircuit"
+      tool: top_lvs
       fail_severities: [error]
       max_count: 0
       fault: "a macro pin left unconnected"
       description: "Match."
     release:
       phase: P4
-      tool: stub
-      future_tool: "attest, strict"
+      tool: release
       strict: true
       fail_severities: [error]
       max_count: 0

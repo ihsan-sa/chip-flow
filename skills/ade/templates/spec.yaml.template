@@ -1,0 +1,37 @@
+# Copy into spec/spec.yaml and edit - see skills/ade/agents/spec-writer.md
+# for how to pick measures and bounds, and engine/lib/speclib.py's
+# lint_spec_ade for the full schema. Based on corpus/ade/mirror/spec.yaml.
+# One measure shown; delete it and add as many as the spec actually needs.
+
+top: <subckt_name>            # the analog-designer sets/confirms this at P2
+
+supply:
+  vdd: 3.3                    # the nominal rail sim_run.py resolves every
+                               # corner's VDD from
+
+devices: []                   # refdes list - left to the analog-designer
+                               # (TOPOLOGY MODE) unless the brief already
+                               # names them; must be non-empty before P4
+
+corners: default              # "default" (corners.py's own default_corners:
+                               # typical + the four PVT extremes), "all", or
+                               # an explicit [name, ...] list
+
+measures:
+  - name: <measure_name>       # unique; the bench-writer's .bounds.json
+                                # sidecar and every sim gate key off this
+    bounds: {min: 0, max: 0}   # at least one of min/max, required
+    # corners: default          # optional override, per-measure
+    # severity: error           # optional: error | warning
+
+# mc:                          # optional - only when the brief asks for a
+#   enabled: true               # yield number; check_mc.py reads this
+#   runs: 200
+#   yield_min: 0.95
+
+# post_layout_bounds:          # convention only (SKILL.md, Known limits) -
+#   <measure_name>: {min: 0, max: 0}   # nothing cross-checks this against
+#                                # layout_ref/<block>_pex_tb.bounds.json;
+#                                # the reviewer compares the two by hand at
+#                                # H2. Carry it when the brief gives a
+#                                # post-layout tolerance.

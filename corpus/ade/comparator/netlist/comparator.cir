@@ -1,0 +1,34 @@
+* comparator.cir - the strongarm_comparator subcircuit (docs/design.md
+* section 5's strongarm_comparator.sp topology, this rung's own sizing). A
+* subckt LIBRARY, never directly runnable - tb/comparator_tb.cir
+* instantiates and clocks it.
+*
+* Orientation differs from the template on purpose: here inp > inn drives
+* outp HIGH. xmip (gate inp) pulls dp down first, and dp is the source of
+* xmln1, whose drain is outn, so outn falls and the latch lifts outp.
+*
+* Sizing. Every W/L is a GLOBAL .param named in sizing/sizing.yaml, with the
+* defaults below equal to that file's values. The bench's {{SIZING}} line
+* comes after this file's .include, and ngspice keeps the last .param of a
+* name, so the sizing file wins in sim_tt/sim_pvt, and a run that passes
+* no sizing (bench_strength) still gets the same numbers from here.
+* Device lines reference the params unbraced (w=w_in, not w={w_in}):
+* bench_strength's size mutant appends "*2" to a non-numeric W, and
+* ngspice silently ignores the "*2" after a brace expression but honours
+* it on a bare name (checked: {w_in}*2 left the current unchanged, w_in*2
+* doubled it).
+.param w_tail=6e-6 w_in=4e-6 w_latch_n=2e-6 w_latch_p=4e-6 w_reset=2e-6
+.param l_min=2.8e-7
+.subckt strongarm_comparator inp inn clk outp outn vdd vss
+xmtail tail clk  vss  vss nfet_03v3 w=w_tail    l=l_min
+xmip   dp   inp  tail vss nfet_03v3 w=w_in      l=l_min
+xmin   dn   inn  tail vss nfet_03v3 w=w_in      l=l_min
+xmln1  outn outp dp   vss nfet_03v3 w=w_latch_n l=l_min
+xmln2  outp outn dn   vss nfet_03v3 w=w_latch_n l=l_min
+xmlp1  outn outp vdd  vdd pfet_03v3 w=w_latch_p l=l_min
+xmlp2  outp outn vdd  vdd pfet_03v3 w=w_latch_p l=l_min
+xmrp   dp   clk  vdd  vdd pfet_03v3 w=w_reset   l=l_min
+xmrn   dn   clk  vdd  vdd pfet_03v3 w=w_reset   l=l_min
+xmrop  outp clk  vdd  vdd pfet_03v3 w=w_reset   l=l_min
+xmron  outn clk  vdd  vdd pfet_03v3 w=w_reset   l=l_min
+.ends strongarm_comparator

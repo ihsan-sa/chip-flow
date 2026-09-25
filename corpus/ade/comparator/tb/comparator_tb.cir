@@ -1,0 +1,33 @@
+* comparator_tb.cir - the strongarm_comparator bench (spec.md, Requirement). {{PDK}},
+* {{CORNER}}, {{TEMP_C}}, {{VDD}}, {{NETLIST}}, {{SIZING}} are sim_run.py's own
+* placeholders (engine/lib/simlib.py:materialize), filled in per corner.
+.include '{{PDK}}/libs.tech/ngspice/design.spice'
+.lib '{{PDK}}/libs.tech/ngspice/sm141064.spice' {{CORNER}}
+.temp {{TEMP_C}}
+.include '{{NETLIST}}'
+{{SIZING}}
+
+vdd_src vdd 0 {{VDD}}
+vclk clk 0 PULSE(0 {{VDD}} 5n 50p 50p 4.95n 10n)
+vinp inp 0 PWL(0 1.6505 11n 1.6505 11.1n 1.6495 30n 1.6495)
+vinn inn 0 PWL(0 1.6495 11n 1.6495 11.1n 1.6505 30n 1.6505)
+* vsns: a 0V ammeter on the comparator's vss pin. Only xmtail's source (and
+* the bulks, whose leakage is negligible) returns to vss, so i(vsns) is the
+* tail current itself - itail_peak bounds what xmtail's W sets.
+xcmp inp inn clk outp outn vdd gcmp strongarm_comparator
+vsns gcmp 0 0
+cloadp outp 0 10f
+cloadn outn 0 10f
+ediff vd 0 outp outn 1
+
+.tran 10p 20n
+.measure tran vdiff_pos FIND v(vd) AT=9.5n
+.measure tran vdiff_neg FIND v(vd) AT=19.5n
+.measure tran tdelay TRIG v(clk) VAL=1.4 RISE=1 TARG v(outn) VAL=1.4 FALL=1
+.measure tran itail_peak MAX i(vsns) FROM=5n TO=7n
+.measure tran vreset FIND v(outn) AT=14.5n
+
+.control
+run
+.endc
+.end

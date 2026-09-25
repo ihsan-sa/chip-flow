@@ -181,6 +181,21 @@ def test_harden_config_merges_override_last_and_refuses_owned_keys(tmp_path):
             ttlib.harden_config(spec, rtl, wrapper, tmp_path, override={key: 1})
 
 
+def test_harden_override_may_not_replace_the_specs_macros(tmp_path):
+    # spec.yaml `macros` owns macro_config()'s keys; an override merged last
+    # would otherwise swap the hard macro out from under LVS.
+    spec = {**COUNTER8_SPEC, "clock": {"period_ns": 20}}
+    rtl = [tmp_path / "counter8.v"]
+    wrapper = tmp_path / "tt_um_counter8.v"
+    for key in ("MACROS", "PDN_MACRO_CONNECTIONS", "PDN_CFG",
+                "MAGIC_EXT_USE_GDS", "EXTRA_SPICE_MODELS"):
+        with pytest.raises(ttlib.TTError, match=key):
+            ttlib.harden_config(spec, rtl, wrapper, tmp_path, override={key: 1})
+    config = ttlib.harden_config(spec, rtl, wrapper, tmp_path,
+                                 override={"PL_TARGET_DENSITY_PCT": 50})
+    assert config["PL_TARGET_DENSITY_PCT"] == 50
+
+
 def test_load_harden_override_absent_is_empty_and_bad_json_is_refused(tmp_path):
     assert ttlib.load_harden_override(tmp_path / "config.override.json") == {}
     bad = tmp_path / "config.override.json"

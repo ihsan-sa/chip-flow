@@ -1,0 +1,27 @@
+top: bandgap
+supply:
+  vdd: 3.3
+# xms1-3 (the startup network) are deliberately left off this list: at
+# typical corner (this rung's tt/pvt sim, the only sim bench_strength ever
+# runs) xq2's own m=8 mismatch against xq1 already biases the self-biased
+# core away from its degenerate zero-current point on its own - confirmed
+# empirically even under a forced `.ic`+`uic` transient that starts every
+# node, including xms1-3's own gate/drain nodes, at a literal 0V/degenerate
+# guess. None of bench_strength's non-destructive
+# mutants (W doubled, last terminal - always the body, tied to source on
+# all three - floated) measurably move vref/vref_line_pp/vref_tc_pp at any
+# point in the trace; only physically REMOVING a device (not a mutant this
+# gate ever plants) does. Real silicon still needs xms1-3 for the process/
+# mismatch corners where m=8 alone might not be enough - that is `mc`'s
+# job, not bench_strength's, and this rung declares no `mc` block (same
+# "not applicable by default" carve-out gates.yaml's ade.mc row already
+# documents for a spec with no mc block).
+devices: [xm1, xm2, xm3, xm4, xm5, xr1, xr2, xq1, xq2, xq3]
+corners: default
+measures:
+  - name: vref
+    bounds: {min: 1.16, max: 1.21}
+  - name: vref_line_pp
+    bounds: {max: 15e-3}
+  - name: vref_tc_pp
+    bounds: {max: 6e-3}

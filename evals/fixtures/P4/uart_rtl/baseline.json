@@ -1,0 +1,70 @@
+{
+ "composite": 0.8127,
+ "gates": {
+  "lint": {
+   "status": "pass",
+   "score": 1.0,
+   "failing": 0,
+   "kinds": [],
+   "metrics": {},
+   "wall_s": 0.54
+  },
+  "sim": {
+   "status": "pass",
+   "score": 1.0,
+   "failing": 0,
+   "kinds": [],
+   "metrics": {
+    "tests_passed": 6
+   },
+   "wall_s": 5.2
+  },
+  "holdout": {
+   "status": "pass",
+   "score": 1.0,
+   "failing": 0,
+   "kinds": [],
+   "metrics": {
+    "tests_passed": 5
+   },
+   "wall_s": 7.81
+  },
+  "mutate": {
+   "status": "fail",
+   "score": 0.8763,
+   "failing": 2,
+   "kinds": [
+    "kill_rate_below_threshold",
+    "survivor_condition_inverted"
+   ],
+   "metrics": {
+    "kill_rate": 0.7895,
+    "killed": 15,
+    "survived": 4
+   },
+   "wall_s": 104.69
+  },
+  "formal": {
+   "status": "fail",
+   "score": 0.0,
+   "failing": 1,
+   "kinds": [
+    "property_failed"
+   ],
+   "metrics": {},
+   "wall_s": 6.3
+  },
+  "cover": {
+   "status": "pass",
+   "score": 1.0,
+   "failing": 0,
+   "kinds": [],
+   "metrics": {
+    "line_pct": 100.0,
+    "toggle_pct": 98.2759
+   },
+   "wall_s": 9.64
+  }
+ },
+ "written": "2026-09-25"
+}

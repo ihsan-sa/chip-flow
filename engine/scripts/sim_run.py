@@ -124,7 +124,9 @@ def build_subs(t_root: Path, netlist_path: Path, corner: dict,
               nominal_vdd: float, sizing: dict) -> dict:
     return {
         "PDK": str(pdk_root(t_root)),
-        "NETLIST": str(netlist_path),
+        # absolute: ngspice runs with cwd=log/sim, so a netlist path taken
+        # from a relative --workspace would not resolve there
+        "NETLIST": str(Path(netlist_path).resolve()),
         "CORNER": corner["process"],
         "RES_CORNER": RES_LIB_SECTION.get(corner["process"], "res_typical"),
         "TEMP_C": corner["temp_c"],

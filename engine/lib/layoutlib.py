@@ -164,6 +164,47 @@ def psub_tap(size: float = 1.0):
     return c
 
 
+def nwell_tap(size: float = 1.0):
+    """An N+ well tap: psub_tap()'s own shapes with NPLUS for PPLUS. It
+    ties an nwell to its supply (DF.13: one within 20um of every PCOMP in
+    that well). No NWELL of its own: the caller draws the well around it
+    and the PFETs it biases, since a lone tap's well would be one more
+    shape to space against theirs."""
+    import gdsfactory as gf
+
+    c = gf.Component()
+    c.add_polygon([(0, 0), (size, 0), (size, size), (0, size)],
+                 layer=GF180_LAYER["comp"])
+    m = 0.2
+    c.add_polygon([(-m, -m), (size + m, -m), (size + m, size + m),
+                  (-m, size + m)], layer=GF180_LAYER["nplus"])
+    cw = 0.22
+    co = (size - cw) / 2
+    c.add_polygon([(co, co), (co + cw, co), (co + cw, co + cw),
+                  (co, co + cw)], layer=GF180_LAYER["contact"])
+    mm = 0.6
+    mo = (size - mm) / 2
+    c.add_polygon([(mo, mo), (mo + mm, mo), (mo + mm, mo + mm),
+                  (mo, mo + mm)], layer=GF180_LAYER["metal1"])
+    return c
+
+
+VIA1_SIZE = 0.26  # the PDK's own via1 cut (draw_fet.py's via_size)
+VIA1_ENC = 0.07   # metal1 and metal2 enclosure of it (draw_fet.py's via_enc)
+
+
+def via1(top, cx: float, cy: float) -> None:
+    """One metal1-to-metal2 via centered on (cx, cy): the cut plus a
+    0.40um square of metal1 and of metal2 around it. 0.40 squared is
+    0.16um2, over both metals' minimum area. Give it a centre on the 5nm
+    grid, since finalize() snaps but a half-grid cut would move."""
+    h = VIA1_SIZE / 2
+    rect(top, cx - h, cy - h, cx + h, cy + h, GF180_LAYER["via1"])
+    e = h + VIA1_ENC
+    for layer in (GF180_LAYER["metal1"], GF180_LAYER["metal2"]):
+        rect(top, cx - e, cy - e, cx + e, cy + e, layer)
+
+
 def pad_center(size: float = 1.0) -> tuple[float, float]:
     """psub_tap()'s own metal1 pad center, local frame."""
     return (size / 2, size / 2)
@@ -482,16 +523,52 @@ _MEASURE_RE = re.compile(
     r"^\s*([A-Za-z_][\w.\[\]()]*)\s*=\s*([-+0-9.eE]+)\s*$")
 
 
-def run_ngspice(cir_path, cwd=None, timeout: float = 120.0) -> str:
+# A .control `meas` whose trigger or target never happened. This box's
+# ngspice prints both lines, and the first one trips simlib's "^error"
+# engine pattern:
+#   Error: measure  tdelay  trig(TARG) : out of interval
+#    meas tran tdelay trig v(clk) val=1.4 rise=1 targ v(outn) ... failed!
+_MEAS_FAILED_RE = re.compile(
+    r"^\s*\.?meas(?:ure)?\s+\S+\s+(\S+)\s.*failed!\s*$", re.I)
+_MEAS_ERROR_RE = re.compile(r"^\s*error:\s*measure\s+(\S+)\s", re.I)
+
+
+def split_failed_measures(out: str) -> tuple[str, set[str]]:
+    """(out without its failed-measure lines, the failed measures' names,
+    lowercased). An "Error: measure NAME" line goes only when NAME also has
+    its own "... failed!" line, so any other error text stays in."""
+    lines = out.splitlines()
+    failed = {m.group(1).lower() for ln in lines
+              for m in [_MEAS_FAILED_RE.match(ln)] if m}
+
+    def is_failure(ln: str) -> bool:
+        m = _MEAS_FAILED_RE.match(ln) or _MEAS_ERROR_RE.match(ln)
+        return bool(m) and m.group(1).lower() in failed
+
+    return "\n".join(ln for ln in lines if not is_failure(ln)), failed
+
+
+def run_ngspice(cir_path, cwd=None, timeout: float = 120.0,
+                failed_measures: set[str] | None = None) -> str:
     """ngspice -b on a bench. A non-zero exit is a refusal, and so is a
     zero exit whose text shows an engine failure (simlib's own list: a
     singular matrix, failed stepping, an unknown subckt ...), because batch
-    ngspice exits 0 after some of those (engine/lib/simlib.py)."""
+    ngspice exits 0 after some of those (engine/lib/simlib.py).
+
+    A `meas` whose trigger or target never happened is the circuit's
+    behaviour, not the engine's: pass a set as `failed_measures` and those
+    names are added to it instead of refusing, and the caller scores them
+    as findings (sim_run does the same through simlib.compare_bounds). Any
+    other error text still refuses. Without the set, it refuses as before."""
     import simlib
 
     proc = run_eda(["ngspice", "-b", str(cir_path)], cwd=cwd, timeout=timeout)
     out = require_ok(proc, "ngspice")
-    kinds = simlib.detect_engine_errors(out)
+    checked = out
+    if failed_measures is not None:
+        checked, failed = split_failed_measures(out)
+        failed_measures.update(failed)
+    kinds = simlib.detect_engine_errors(checked)
     if kinds:
         raise LayoutError(
             f"ngspice reported {', '.join(kinds)}: {out[-2000:]}")

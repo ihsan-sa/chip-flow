@@ -161,12 +161,18 @@ def test_evaluate_no_facts_key_when_report_has_no_extras():
 # ------------------------------------------------------------------ stub
 
 def test_stub_gate_is_always_exit_2(tmp_path, capsys):
-    # Every /vde gate is a real, built check now (M1-M4), and M9 built
-    # `ade`'s drc. `msde`'s top_drc is still a stub until M10's second half,
-    # so it is what now proves this row's own point: a gate whose tool is
-    # not built is exit 2, never a pass.
+    # Every shipped gate is a real, built check now (M10 built msde's
+    # last), so a gates.yaml of its own carries the stub row that proves
+    # this one's point: a gate whose tool is not built is exit 2, never a
+    # pass.
     ws = make_ws(tmp_path, skill="msde", block="sensor_counted")
-    code = gate.main(["--gate", "top_drc", "--workspace", str(ws)])
+    gates_yaml = tmp_path / "stub_gates.yaml"
+    gates_yaml.write_text(
+        "version: 1\ngates:\n  msde:\n    top_drc:\n      phase: P3\n"
+        "      tool: stub\n      fail_severities: [error]\n"
+        "      max_count: 0\n", encoding="utf-8")
+    code = gate.main(["--gate", "top_drc", "--workspace", str(ws),
+                      "--gates", str(gates_yaml)])
     assert code == 2
     out = json.loads(capsys.readouterr().out)
     assert out["status"] == "error"
@@ -338,3 +344,20 @@ def test_record_gate_result_concurrent_writers_do_not_race(tmp_path, monkeypatch
     data = json.loads((ws / "state.json").read_text(encoding="utf-8"))
     assert data["gates"]["lint"]["attempts"] == 2
     assert data["gates"]["lint"]["status"] == "pass"
+
+
+def test_relative_workspace_reaches_the_check_absolute(tmp_path, capsys,
+                                                       monkeypatch):
+    # The analog checks run klayout/magic/netgen with cwd=log/, so a
+    # relative --workspace (the form SKILL.md shows) must reach the check
+    # already absolute or the tool looks for log/blocks/<b>/... .
+    ws = make_ws(tmp_path)
+    gates_yaml = make_gates_yaml(tmp_path)
+    checks_dir = make_checks_dir(tmp_path, FAKE_CHECK.replace(
+        'marker = Path(args.workspace) / "FAIL"',
+        'assert Path(args.workspace).is_absolute(), args.workspace\n'
+        '    marker = Path(args.workspace) / "FAIL"'))
+    monkeypatch.chdir(tmp_path)
+    code = gate.main(["--gate", "lint", "--workspace", "ws",
+                      "--gates", str(gates_yaml), "--checks-dir", str(checks_dir)])
+    assert code == 0, capsys.readouterr().out

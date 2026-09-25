@@ -295,3 +295,261 @@ def test_checks_json_validates_against_the_schema(tmp_path, capsys):
     checks_doc = json.loads(
         (ws / "reports" / "checks.json").read_text())
     jsonschema.validate(checks_doc, schema)
+
+
+# --- /ade release ---------------------------------------------------------
+# The same gate, run for an /ade workspace: every ade gate (gates.yaml's
+# ade block, bar release) owes a fresh recorded pass, and `mc` is owed only
+# when the block's own spec.yaml asks for Monte Carlo - otherwise attest
+# records it as declared not applicable (ok, not run, with the reason).
+
+import pytest  # noqa: E402
+
+import gate as gate_mod  # noqa: E402
+
+ADE_SPEC = ("top: current_mirror\nsupply: {vdd: 3.3}\n"
+            "devices: [xmref, xmout]\ncorners: default\nmeasures:\n"
+            "  - name: iout_raw\n    bounds: {min: 18e-6, max: 32e-6}\n")
+ADE_MC_ON = "mc: {enabled: true, runs: 4, yield_min: 0.75}\n"
+ADE_GATES = sorted(g for g in statelib.load_map()["gate_inputs"]["ade"]
+                  if g != "release")
+ADE_OWED = [g for g in ADE_GATES if g != "mc"]
+
+
+def make_ade_ws(tmp_path: Path, spec_extra: str = "") -> Path:
+    ws = tmp_path / "ws"
+    state_mod.State.init(ws, "ade", "mirror")
+    (ws / "spec" / "spec.yaml").write_text(ADE_SPEC + spec_extra,
+                                           encoding="utf-8")
+    for sub, name, text in (
+            ("netlist", "mirror.cir", ".subckt current_mirror a b\n.ends\n"),
+            ("tb", "mirror_tb.cir", "* bench\n.end\n"),
+            ("layout", "gen_mirror.py", "# layout generator\n")):
+        (ws / sub).mkdir(parents=True, exist_ok=True)
+        (ws / sub / name).write_text(text, encoding="utf-8")
+    return ws
+
+
+def record_ade(ws: Path, gates, *, fail: str | None = None) -> None:
+    st = state_mod.State.load(ws / "state.json")
+    for g in gates:
+        st.record_gate(g, {"status": "fail" if g == fail else "pass"})
+    st.save()
+
+
+def release(ws: Path, capsys) -> tuple[int, dict]:
+    code = check_release.main(["--workspace", str(ws)])
+    return code, json.loads(capsys.readouterr().out)
+
+
+def not_ready_gates(out: dict) -> set[str]:
+    return {v["msg"].split(":", 1)[0] for v in out["violations"]
+            if v["kind"] == "gate_not_ready"}
+
+
+def test_ade_release_row_is_real():
+    row = gate_mod.load_gates(gate_mod.DEFAULT_GATES)["ade"]["release"]
+    assert row["tool"] == "release"
+    assert "future_tool" not in row
+    assert row["strict"] is True
+
+
+def test_ade_release_passes_when_every_gate_is_fresh(tmp_path, capsys):
+    import jsonschema
+    ws = make_ade_ws(tmp_path)
+    record_ade(ws, ADE_OWED)          # mc never recorded: spec asks no MC
+    code, out = release(ws, capsys)
+    assert code == 0, out
+    assert out["waived"] == []
+    checks_doc = json.loads((ws / "reports" / "checks.json").read_text())
+    by_gate = {c["gate"]: c for c in checks_doc["checks"]}
+    assert set(by_gate) == set(ADE_GATES)       # mc listed, not dropped
+    mc = by_gate["mc"]
+    assert mc["ok"] is True and mc["ran"] is False
+    assert "not applicable" in mc["reason"]
+    assert mc["inputs"]["spec_yaml"]
+    assert all(by_gate[g]["ran"] and by_gate[g]["ok"] for g in ADE_OWED)
+    jsonschema.validate(checks_doc, json.loads(
+        (ENGINE / "reference" / "checks.schema.json").read_text()))
+
+
+def test_ade_release_refuses_a_fresh_workspace(tmp_path, capsys):
+    ws = make_ade_ws(tmp_path)
+    code, out = release(ws, capsys)
+    assert code == 1, out
+    assert not_ready_gates(out) == set(ADE_OWED)
+    assert not (ws / "reports" / "checks.json").exists()
+
+
+@pytest.mark.parametrize("gate", ADE_OWED)
+def test_ade_release_refuses_one_unrun_gate(tmp_path, capsys, gate):
+    ws = make_ade_ws(tmp_path)
+    record_ade(ws, [g for g in ADE_OWED if g != gate])
+    code, out = release(ws, capsys)
+    assert code == 1, out
+    assert not_ready_gates(out) == {gate}, out
+
+
+@pytest.mark.parametrize("gate", ADE_OWED)
+def test_ade_release_refuses_one_failed_gate(tmp_path, capsys, gate):
+    ws = make_ade_ws(tmp_path)
+    record_ade(ws, ADE_OWED, fail=gate)
+    code, out = release(ws, capsys)
+    assert code == 1, out
+    assert not_ready_gates(out) == {gate}, out
+    assert any("FAIL" in v["msg"] for v in out["violations"]), out
+
+
+def test_ade_release_refuses_a_stale_gate_then_passes_once_regated(
+        tmp_path, capsys):
+    ws = make_ade_ws(tmp_path)
+    record_ade(ws, ADE_OWED)
+    assert release(ws, capsys)[0] == 0
+    # spec_lint is the only ade gate keyed on spec.yaml alone; the edit
+    # leaves MC off, so mc stays declared not applicable.
+    spec = ws / "spec" / "spec.yaml"
+    spec.write_text(spec.read_text() + "notes: edited after spec_lint\n",
+                    encoding="utf-8")
+    code, out = release(ws, capsys)
+    assert code == 1, out
+    assert not_ready_gates(out) == {"spec_lint"}, out
+    assert any("stale" in v["msg"] for v in out["violations"]), out
+    record_ade(ws, ["spec_lint"])
+    assert release(ws, capsys)[0] == 0
+
+
+def test_ade_release_refuses_after_netlist_edit(tmp_path, capsys):
+    ws = make_ade_ws(tmp_path)
+    record_ade(ws, ADE_OWED)
+    (ws / "netlist" / "mirror.cir").write_text(
+        ".subckt current_mirror a b c\n.ends\n", encoding="utf-8")
+    code, out = release(ws, capsys)
+    assert code == 1, out
+    assert not_ready_gates(out) == {"netlist_lint", "sim_tt", "sim_pvt",
+                                    "bench_strength", "lvs"}, out
+
+
+def test_ade_release_owes_mc_when_the_spec_asks_for_it(tmp_path, capsys):
+    ws = make_ade_ws(tmp_path, ADE_MC_ON)
+    record_ade(ws, ADE_OWED)
+    code, out = release(ws, capsys)
+    assert code == 1, out
+    assert not_ready_gates(out) == {"mc"}, out
+    record_ade(ws, ["mc"], fail="mc")
+    code, out = release(ws, capsys)
+    assert code == 1 and not_ready_gates(out) == {"mc"}, out
+    record_ade(ws, ["mc"])
+    code, out = release(ws, capsys)
+    assert code == 0, out
+    checks_doc = json.loads((ws / "reports" / "checks.json").read_text())
+    mc = {c["gate"]: c for c in checks_doc["checks"]}["mc"]
+    assert mc["ran"] is True and mc["status"] == "pass"
+
+
+def test_ade_attestation_goes_invalid_when_the_spec_turns_mc_on(
+        tmp_path, capsys):
+    ws = make_ade_ws(tmp_path)
+    record_ade(ws, ADE_OWED)
+    assert release(ws, capsys)[0] == 0
+    assert attest_mod.verify(ws)["valid"] is True
+    spec = ws / "spec" / "spec.yaml"
+    spec.write_text(spec.read_text() + ADE_MC_ON, encoding="utf-8")
+    v = attest_mod.verify(ws)
+    assert v["valid"] is False
+    assert "mc" in v["reason"]
+
+
+def test_ade_mc_is_owed_when_the_spec_cannot_be_read(tmp_path, capsys):
+    ws = make_ade_ws(tmp_path)
+    record_ade(ws, ADE_OWED)
+    (ws / "spec" / "spec.yaml").write_text("mc: [not, a, mapping]\n",
+                                           encoding="utf-8")
+    code, out = release(ws, capsys)
+    assert code == 1, out
+    assert "mc" in not_ready_gates(out), out
+
+
+def test_ade_release_result_records_against_the_netlist(tmp_path, capsys):
+    # check_release stamps the skill's own release kinds[0] (netlist for
+    # ade), so gate.py can record the release pass in state.json.
+    ws = make_ade_ws(tmp_path)
+    record_ade(ws, ADE_OWED)
+    payload, _ = check_release.run(["--workspace", str(ws)])
+    row = gate_mod.load_gates(gate_mod.DEFAULT_GATES)["ade"]["release"]
+    result = gate_mod.evaluate("release", row, payload)
+    assert result["status"] == "pass", result
+    rec = gate_mod.record_gate_result("ade", "release", row, result, ws)
+    assert rec["recorded"] is True, rec
+
+
+# --- msde (M10): "both nested runs released, top gates fresh" -------------
+
+def make_msde_ws(tmp_path: Path) -> Path:
+    """An msde block whose top gates and both nested sides have all passed
+    and whose nested sides each hold a written, verifying checks.json."""
+    ws = tmp_path / "msde"
+    state_mod.State.init(ws, "msde", "sensor_counted")
+    (ws / "interface.yaml").write_text("version: 1\nsignals: []\n",
+                                      encoding="utf-8")
+    for side, skill, kind in (("digital", "vde", "rtl"),
+                              ("analog", "ade", "netlist")):
+        sub = ws / side
+        state_mod.State.init(sub, skill, f"sensor_counted_{side}")
+        (sub / kind / "x.txt").write_text("a\n", encoding="utf-8")
+        (sub / "layout" / "x.txt").write_text("a\n", encoding="utf-8")
+        st = state_mod.State.load(sub / "state.json")
+        for g in statelib.load_map()["gate_inputs"][skill]:
+            st.record_gate(g, {"status": "pass"})
+        st.save()
+        att, problems = attest_mod.build(sub)
+        assert att is not None, problems
+        attest_mod.write_attestation(sub, att)
+    st = state_mod.State.load(ws / "state.json")
+    for g in statelib.load_map()["gate_inputs"]["msde"]:
+        st.record_gate(g, {"status": "pass"})
+    st.save()
+    return ws
+
+
+def test_msde_release_passes_with_both_nested_sides_released(tmp_path, capsys):
+    ws = make_msde_ws(tmp_path)
+    code = check_release.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0, out
+    assert (ws / "reports" / "checks.json").is_file()
+
+
+def test_msde_release_refuses_a_stale_nested_release(tmp_path, capsys):
+    ws = make_msde_ws(tmp_path)
+    (ws / "digital" / "rtl" / "x.txt").write_text("b\n", encoding="utf-8")
+    code = check_release.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 1, out
+    kinds = {(v["module"], v["kind"]) for v in out["violations"]}
+    assert ("nested_digital", "nested_not_released") in kinds
+    assert not any(m == "nested_analog" for m, _ in kinds)
+    assert not (ws / "reports" / "checks.json").exists()
+
+
+def test_msde_release_refuses_a_missing_nested_side(tmp_path, capsys):
+    ws = make_msde_ws(tmp_path)
+    import shutil
+    shutil.rmtree(ws / "analog")
+    code = check_release.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 1, out
+    # the top gates read analog/layout too, so they go stale with it; the
+    # nested finding names only the missing side
+    assert [v["module"] for v in out["violations"]
+            if v["kind"] == "nested_not_released"] == ["nested_analog"]
+
+
+def test_msde_release_refuses_a_nested_side_of_the_wrong_skill(tmp_path, capsys):
+    ws = make_msde_ws(tmp_path)
+    data = json.loads((ws / "analog" / "state.json").read_text())
+    data["skill"] = "vde"
+    (ws / "analog" / "state.json").write_text(json.dumps(data))
+    code = check_release.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 1, out
+    assert any("expected 'ade'" in v["msg"] for v in out["violations"])

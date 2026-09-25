@@ -184,3 +184,14 @@ def test_cli_reports_pass_as_json(tmp_path, capsys, monkeypatch):
     out = json.loads(capsys.readouterr().out)
     assert code == 0
     assert out["status"] == "pass"
+
+
+def test_netlist_path_is_absolute_for_a_relative_workspace(tmp_path, monkeypatch):
+    # ngspice runs with cwd=log/sim, so a relative --workspace (the form
+    # SKILL.md shows) once rendered an .include no deck could find
+    monkeypatch.chdir(tmp_path)
+    corner = {"process": "typical", "temp_c": 27, "supply_pct": 0}
+    rel = sim_run.build_subs(tmp_path, Path("blocks/b/netlist/b.cir"), corner, 3.3, {})
+    assert rel["NETLIST"] == str(tmp_path / "blocks/b/netlist/b.cir")
+    absolute = tmp_path / "x.cir"
+    assert sim_run.build_subs(tmp_path, absolute, corner, 3.3, {})["NETLIST"] == str(absolute)
