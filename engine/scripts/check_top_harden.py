@@ -26,8 +26,9 @@ write`, the PDN's Metal3-Metal4 connect, extraction from GDS - is
 docs/spikes/macro_harden.md's.
 
 Refuses (exit 2) when either nested workspace or a piece the assembly needs
-is missing. An analog macro larger than the tile is a `macro_too_large`
-finding (no harden runs); LibreLane failures are check_harden's findings,
+is missing. An analog macro larger than the tile - by its LEF SIZE or by
+what its GDS draws, whichever is larger - is a `macro_too_large` finding
+(no harden runs); LibreLane failures are check_harden's findings,
 passed on.
 """
 from __future__ import annotations
@@ -183,6 +184,23 @@ def lef_size(lef: Path) -> tuple[float, float]:
     return float(m.group(1)), float(m.group(2))
 
 
+def gds_extent(gds: Path, cell: str) -> tuple[float, float]:
+    """Width and height of everything drawn in the cell. magic's LEF SIZE
+    follows the cell's declared boundary, so metal drawn past it would not
+    show in lef_size; the tile has to hold the drawn extent."""
+    import klayout.db as db
+    layout = db.Layout()
+    layout.read(str(gds))
+    box = layout.cell(cell).dbbox()
+    return round(box.width(), 3), round(box.height(), 3)
+
+
+def macro_size(lef: Path, gds: Path, cell: str) -> tuple[float, float]:
+    """The larger of the LEF SIZE and the drawn extent, per axis."""
+    return tuple(max(a, b) for a, b in zip(lef_size(lef),
+                                           gds_extent(gds, cell)))
+
+
 def centre(die_area: str, w: float, h: float) -> list[float] | None:
     """Lower-left that centres a w x h macro in the die, on the gf180
     7-track site grid (0.56 um) and row pitch (3.92 um); None when the
@@ -221,7 +239,8 @@ def assemble(ws: Path) -> tuple[Path, dict]:
 
     macro = analog_macro(analog, signals, top / "macros")
     macro["pins"] = {pin: ports[pin] for pin in macro["pins"]}
-    size = lef_size(Path(macro["files"]["lef"]))
+    size = macro_size(Path(macro["files"]["lef"]),
+                      Path(macro["files"]["gds"]), macro["cell"])
     macro["location"] = centre(ttlib.tile_die_area(), *size)
     macro["size_um"] = list(size)
     tspec = dict(dspec)
