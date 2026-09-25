@@ -680,6 +680,25 @@ def load_harden_override(path: Path) -> dict:
     return data
 
 
+# Repair settings that let the physical flow meet the limits the `timing`
+# gate signs off (MAX_CAPACITANCE_CONSTRAINT 0.2 pF, MAX_TRANSITION_CONSTRAINT
+# 3 ns, at every STA corner). Both gaps showed up on a 37-flop block whose
+# setup/hold slack was large:
+# - TritonCTS builds every H-tree buffer from CTS_ROOT_BUFFER, and the PDK
+#   default clkbuf_16 has a 0.022 pF input, so 8 trunk buffers plus wire put
+#   0.205 pF on the root's output. repair_design never touches clock nets,
+#   and under a 0.2 pF limit a clkbuf_16 can drive no more than a clkbuf_8
+#   can, so it only doubles the load it puts on its own driver.
+# - RUN_POST_GRT_DESIGN_REPAIR is off by default, so slew was only repaired on
+#   placement-estimated parasitics; after routing, a fanout buffer on a
+#   10-load net went over 3 ns at the ss corner. The post-GRT pass repairs
+#   the same limits against routed parasitics.
+SIGNOFF_REPAIR_CONFIG = {
+    "CTS_ROOT_BUFFER": "gf180mcu_fd_sc_mcu7t5v0__clkbuf_8",
+    "RUN_POST_GRT_DESIGN_REPAIR": True,
+}
+
+
 def harden_config(spec: dict, rtl_files: list[Path], wrapper_path: Path,
                   pdk_root: Path, tiles: str | None = None,
                   override: dict | None = None) -> dict:
@@ -733,6 +752,7 @@ def harden_config(spec: dict, rtl_files: list[Path], wrapper_path: Path,
     if isinstance(period, (int, float)):
         config["CLOCK_PERIOD"] = float(period)
     config.update(tech.librelane_config)
+    config.update(SIGNOFF_REPAIR_CONFIG)
     macros = spec.get("macros") or []
     if macros:
         config.update(macro_config(macros))

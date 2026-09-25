@@ -183,7 +183,11 @@ On gate fail (exit 1, `failing` findings with `kind`/`file`/`module`):
 - **`bench_strength` never blames the design.** A survivor means the
   bench cannot tell this design from a broken one. It goes to the
   bench-writer; the analog-designer and the fixer never resize to make a
-  mutant fail (docs/design.md section 2).
+  mutant fail (docs/design.md section 2). The only other way past a
+  survivor is the owner's ruling on that one mutant in
+  `spec/mutant_rulings.yaml` (`equivalent`, or a `below_spread` entry the
+  gate checks against its own run); no agent writes one for itself. Each
+  survivor's `deltas` in the gate's facts are what such an entry needs.
 - **A bound miss is never fixed by moving the bound.** `sim_bound_fail`
   goes to `sizing`; widening a `tb/*.bounds.json` or a spec bound is a
   spec change with `human_hold` 2, for the person at a checkpoint.

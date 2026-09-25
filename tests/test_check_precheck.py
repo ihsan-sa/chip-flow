@@ -122,3 +122,50 @@ def test_all_checks_pass(tmp_path, monkeypatch, capsys):
     assert code == 0, out
     assert out["status"] == "pass"
     assert out["checks_run"] == 2
+
+
+def _passing_run(cmd, **kwargs):
+    reports = Path(cmd[2]).parent / "reports"
+    reports.mkdir(parents=True, exist_ok=True)
+    (reports / "results.xml").write_text(
+        '<?xml version="1.0"?><testsuites><testsuite>'
+        '<testcase name="Layer check"/></testsuite></testsuites>',
+        encoding="utf-8")
+    return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+
+def _stamped_matches_first_input(tmp_path, monkeypatch, capsys, skill):
+    """The report's input_digest is what state.py record_gate compares with
+    the gate's first input in invalidation.yaml; a mismatch refuses to
+    record a real pass."""
+    import statelib
+    block = make_ws(tmp_path)
+    ws = block
+    if skill == "msde":
+        ws = tmp_path / "msde"
+        ws.mkdir()
+        block.rename(ws / "top")
+    (ws / "state.json").write_text(json.dumps({"skill": skill}),
+                                   encoding="utf-8")
+    _patch_common(monkeypatch, tmp_path)
+    monkeypatch.setattr(check_precheck.subprocess, "run", _passing_run)
+
+    code = check_precheck.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0, out
+    imap = statelib.load_map()
+    first = imap["gate_inputs"][skill]["precheck"][0]
+    rel, cur = statelib.hash_kind(ws, first, imap)
+    assert cur is not None
+    assert out["input_digest"] == cur, (skill, first, rel, out["input"])
+
+
+def test_msde_stamps_top_gds_the_state_rehashes(tmp_path, monkeypatch, capsys):
+    # regression: msde precheck stamped top/harden, record_gate re-hashed
+    # top_gds, and a real pass was refused as a stale artifact
+    _stamped_matches_first_input(tmp_path, monkeypatch, capsys, "msde")
+
+
+def test_vde_stamps_harden_dir_the_state_rehashes(tmp_path, monkeypatch, capsys):
+    _stamped_matches_first_input(tmp_path, monkeypatch, capsys, "vde")
+

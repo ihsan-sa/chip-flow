@@ -205,7 +205,8 @@ What differs:
   side's own `fix-finding` through its router and its own gates to a
   fresh release, then re-run the msde gate that found it - after a
   layout fix, `top_harden` first.
-  `cosim` does not hash either nested workspace, so re-run it by hand.
+  `cosim` hashes `digital/rtl`, `analog/netlist` and the analog sizing,
+  so a fix to any of them marks it stale.
 - **`release`'s findings are re-entry, not fixes.** `nested_not_released`
   names the side; `gate_not_ready` names the msde gate.
 

@@ -270,3 +270,16 @@ def test_non_mapping_mc_block_is_an_error(tmp_path, monkeypatch, capsys):
     out = json.loads(capsys.readouterr().out)
     assert code == 2, out
     assert "mapping" in out.get("remediation", "") + out.get("error", "")
+
+
+def test_design_ngspice_include_is_injected_too():
+    from checklib import CheckError
+    # The PDK's design.ngspice is the same file as design.spice; a bench
+    # that includes it must get the mismatch switch and seed, not a refusal.
+    bench = (".include '{{PDK}}/libs.tech/ngspice/design.ngspice'\n"
+             ".lib '{{PDK}}/libs.tech/ngspice/sm141064.spice' {{CORNER}}\n")
+    out = check_mc.inject_mc_params(bench, 7, False)
+    assert out.splitlines()[1:3] == [".param sw_stat_mismatch=1",
+                                     ".option seed=7"]
+    with pytest.raises(CheckError, match="design.ngspice"):
+        check_mc.inject_mc_params(".lib 'x/sm141064.spice' typical\n", 7, False)

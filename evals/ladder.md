@@ -28,7 +28,7 @@ No /ade run scored yet. `ladder.py --skill ade --rung <rung> --run <ws>` fills t
 
 | rung | counts | why not | held-out | kill rate | area | worst slack ns | fix attempts | tokens | cost USD | wall s | scored | note |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| sensor_counted | no | 5 gate(s) not green | n/a | - | - | - | 0 | - | 39.00 | 8999 | 2026-09-25 | stopped at the $30 cap per run ($39 over two runs): top P2, digital P4, analog P5 with 12 DRC violations |
+| sensor_counted | no | hand edits | n/a | - | - | - | 4 | - | 69.50 | 28795 | 2026-09-25 | all gates green on the merged engine; 2 hand edits are the mutant_rulings files carrying planning-seat per-mutant rulings; wall includes waits on rulings |
 | ring_osc_div | not run | | | | | | | | | | | |
 | dac_spi | not run | | | | | | | | | | | |
 | sar_adc | not run | | | | | | | | | | | |

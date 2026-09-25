@@ -141,8 +141,9 @@ def run(argv=None):
 
     ws = Path(args.workspace).resolve()
     state = ws / "state.json"
-    if state.is_file() and checklib.load_json(
-            state, "state.json").get("skill") == "msde":
+    msde = state.is_file() and checklib.load_json(
+        state, "state.json").get("skill") == "msde"
+    if msde:
         ws = ws / check_top_harden.TOP_DIR
     spec = speclib.load_spec(ws / "spec" / "spec.yaml")
     top = ttlib.wrapper_name(spec)
@@ -199,7 +200,11 @@ def run(argv=None):
                 f"{name}: {err.attrib.get('message') or (err.text or '').strip()}",
                 "tt-precheck"))
 
-    payload = checklib.report(SCRIPT, ws / "harden", violations, top=top,
+    # the stamped input is the gate's first input in invalidation.yaml, which
+    # state.py record_gate re-hashes: vde's `harden` (the harden dir), msde's
+    # `top_gds` (the top's final GDS dir)
+    stamped = final_dir / "gds" if msde else ws / "harden"
+    payload = checklib.report(SCRIPT, stamped, violations, top=top,
                               checks_run=sum(1 for _ in tree.iter("testcase")))
     return payload, args.out
 

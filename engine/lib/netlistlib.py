@@ -248,15 +248,32 @@ def _size_mutant(ref: str, dev: dict, key: str) -> dict:
            "apply": apply}
 
 
+def _disconnect_target(dev: dict) -> tuple[int, str]:
+    """(index, name) of the terminal a connection_removed mutant floats.
+    Normally the last one (a MOSFET's bulk in d g s b order). When a
+    4-terminal device's bulk is the same node as its own source (compared
+    case-insensitively, as spice does), floating the bulk changes nothing a
+    simulation can see, so the drain (first terminal) is floated instead - a
+    stronger mutant, not an exclusion (owner ruling, 2026-09-25)."""
+    nodes = dev["nodes"]
+    if len(nodes) == 4 and nodes[3].lower() == nodes[2].lower():
+        return 0, "drain (bulk tied to its own source)"
+    if len(nodes) == 4:
+        return 3, "bulk"
+    return len(nodes) - 1, "last terminal"
+
+
 def _disconnect_mutant(ref: str, dev: dict) -> dict:
+    idx, name = _disconnect_target(dev)
+
     def apply(text: str) -> str:
         nodes = list(dev["nodes"])
-        nodes[-1] = f"__floating_{ref}__"
+        nodes[idx] = f"__floating_{ref}__"
         new_line = _rebuild_device_line(dev, dev["model"], nodes, dev["params"])
         return _replace_line(text, dev["line"], new_line)
     return {"id": f"{ref}_connection_removed", "ref": ref,
            "kind": "connection_removed", "target": "netlist",
-           "describe": f"{ref}: last terminal disconnected", "apply": apply}
+           "describe": f"{ref}: {name} disconnected", "apply": apply}
 
 
 def _retype_mutant(ref: str, dev: dict, flip_model: str) -> dict:

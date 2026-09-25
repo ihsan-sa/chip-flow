@@ -249,8 +249,9 @@ On gate fail (exit 1, result JSON has `failing` with a `kind`/`file`/
   elaborates into extra flops - e.g. a Verilog `function`'s own locals -
   can leave a handful of survivors no test, however thorough, can ever
   observe at an output) is a legitimate ESCALATION, not a stuck loop.
-  `check_mutate.py` has no equivalent-mutant filter today, and the fix
-  loop's own hard "mutate always -> testbench" routing (a deliberate
+  `check_mutate.py` leaves a survivor it cannot prove counted, unless the
+  owner accepts that one mutant in `spec/mutant_rulings.yaml` - a ruling
+  no agent writes for itself - and the fix loop's own hard "mutate always -> testbench" routing (a deliberate
   anti-gaming rule, never relaxed for a normal survivor) has no escape
   valve for a mutant that is provably unobservable rather than merely
   untested. A tb-writer that reproduces this (a differential run across

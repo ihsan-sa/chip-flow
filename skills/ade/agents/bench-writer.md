@@ -27,10 +27,13 @@ not `netlist/` (it does not exist yet).
    `name` exactly (case-insensitive - `check_sim_tt.py`/`check_sim_pvt.py`
    lower-case both sides).
 2. Write `tb/<block>_tb.bounds.json`: a LIST of `{"measure": <name>,
-   "min"?, "max"?, "severity"?, "msg"?}` (`simlib.load_bounds()`'s own
-   shape - see `corpus/ade/mirror/tb/mirror_tb.bounds.json`), copied from
+   "min"?, "max"?, "severity"?, "msg"?, "corners"?}` (`simlib.load_bounds()`'s
+   own shape - see `corpus/ade/mirror/tb/mirror_tb.bounds.json`), copied from
    `spec.yaml`'s own bounds - the sidecar is what `sim_tt`/`sim_pvt`
-   actually check against. Note this is a different shape from the PEX
+   actually check against. Copy a measure's `corners` too when the spec
+   scores it at a list (say `[tt]`): the bound is then skipped at every
+   other corner, and spec_lint fails a scope that differs from the spec's.
+   Never print a placeholder value to pass a corner the spec does not score. Note this is a different shape from the PEX
    sidecar below (a dict, not a list) - the two bench kinds use different
    loaders.
 3. Use `{{PDK}}`/`{{CORNER}}`/`{{TEMP_C}}`/`{{VDD}}`/`{{NETLIST}}`/

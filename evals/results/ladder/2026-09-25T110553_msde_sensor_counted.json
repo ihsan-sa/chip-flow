@@ -1,0 +1,35 @@
+{
+ "skill": "msde",
+ "rung": "sensor_counted",
+ "block": "sensor_counted",
+ "run": "sensor_counted",
+ "phase": "P4",
+ "scored_at": "2026-09-25T15:05:53+00:00",
+ "counts": false,
+ "gates_green": true,
+ "gate_problems": [],
+ "gates_passed": [
+  "cosim",
+  "precheck",
+  "release",
+  "split",
+  "top_drc",
+  "top_harden",
+  "top_lvs"
+ ],
+ "hand_edits": 2,
+ "held_out": {
+  "status": "n/a",
+  "why": "msde has no holdout gate"
+ },
+ "kill_rate": null,
+ "line_pct": null,
+ "area": null,
+ "worst_slack_ns": null,
+ "fix_attempts": 1,
+ "tokens": null,
+ "cost_usd": 67.0,
+ "wall_s": 27499,
+ "note": "all gates green; 2 hand edits are the mutant_rulings files carrying planning-seat per-mutant rulings; wall includes waits on rulings",
+ "kind": "skill"
+}

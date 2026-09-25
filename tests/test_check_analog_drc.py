@@ -160,6 +160,9 @@ def test_report_names_the_skipped_decks_and_why(tmp_path, monkeypatch):
         Path(rdb).write_text(RDB_EMPTY, encoding="utf-8")
 
     monkeypatch.setattr(layoutlib, "run_klayout_drc", fake_drc)
+    # no GDS is written, so the footprint check measures a stand-in bbox
+    monkeypatch.setattr(layoutlib, "gds_bbox_um", lambda p, c: {
+        "x0": 0, "y0": 0, "x1": 1, "y1": 1, "width": 1, "height": 1})
     payload, _out = check_analog_drc.run(["--workspace", str(ws)])
     assert payload["status"] == "pass"
     assert payload["decks_skipped"] == layoutlib.DRC_SKIPPED
@@ -217,3 +220,72 @@ def test_offgrid_shape_fails_drc(tmp_path):
     assert code == 1, out
     kinds = {v["kind"] for v in out["violations"]}
     assert any("OFFGRID" in k for k in kinds)
+
+
+# ------------------------------------------------------------ footprint
+# Fast: the generator build and klayout DRC run are stubbed (a clean DRC),
+# and the GDS is one box drawn with klayout.db, so only the bbox check runs.
+
+def _footprint_ws(tmp_path, monkeypatch, width, height, footprint):
+    import klayout.db as kdb
+    import layoutlib
+    import layout_gen
+
+    ws = tmp_path / "ws"
+    (ws / "spec").mkdir(parents=True)
+    spec = {"top": "blk", "supply": {"vdd": 3.3}, "devices": ["xm1"],
+            "measures": [{"name": "m", "bounds": {"min": 0}}]}
+    if footprint is not None:
+        spec["footprint_um"] = footprint
+    (ws / "spec" / "spec.yaml").write_text(_yaml.safe_dump(spec),
+                                           encoding="utf-8")
+    layout = kdb.Layout()
+    layout.dbu = 0.001
+    cell = layout.create_cell("blk")
+    cell.shapes(layout.layer(34, 0)).insert(
+        kdb.Box(0, 0, int(width * 1000), int(height * 1000)))
+    gds = ws / "layout" / "blk.gds"
+    gds.parent.mkdir()
+    layout.write(str(gds))
+    monkeypatch.setattr(layout_gen, "build",
+                        lambda _ws, _block=None: (gds, "blk", None, None))
+    monkeypatch.setattr(layoutlib, "run_klayout_drc", lambda *a, **k: "")
+    monkeypatch.setattr(layoutlib, "parse_drc_rdb", lambda _p: [])
+    return ws
+
+
+def test_layout_over_the_spec_footprint_fails(tmp_path, monkeypatch):
+    ws = _footprint_ws(tmp_path, monkeypatch, 88, 40,
+                       {"width": 60, "height": 60})
+    code, out = run_json(["--workspace", str(ws)], tmp_path)
+    assert code == 1, out
+    assert [v["kind"] for v in out["violations"]] == ["footprint_exceeded"]
+    assert out["violations"][0]["refs"] == ["width"]
+    assert out["bbox_um"]["width"] == 88 and out["bbox_um"]["height"] == 40
+    assert out["footprint"] == {"width": 60.0, "height": 60.0}
+    assert gate.evaluate("drc", _drc_gate_row(), out)["status"] == "fail"
+
+
+def test_layout_within_the_spec_footprint_passes(tmp_path, monkeypatch):
+    ws = _footprint_ws(tmp_path, monkeypatch, 50, 60,
+                       {"width": 60, "height": 60})
+    code, out = run_json(["--workspace", str(ws)], tmp_path)
+    assert code == 0, out
+    assert out["violations"] == []
+    assert out["bbox_um"]["width"] == 50
+    assert out["footprint"] == {"width": 60.0, "height": 60.0}
+
+
+def test_no_footprint_key_reports_null_and_passes(tmp_path, monkeypatch):
+    ws = _footprint_ws(tmp_path, monkeypatch, 88, 88, None)
+    code, out = run_json(["--workspace", str(ws)], tmp_path)
+    assert code == 0, out
+    assert out["footprint"] is None
+    assert out["bbox_um"]["height"] == 88
+
+
+def test_malformed_footprint_refuses_the_gate(tmp_path, monkeypatch, capsys):
+    ws = _footprint_ws(tmp_path, monkeypatch, 10, 10, {"width": 60})
+    code, out = run_err(["--workspace", str(ws)], capsys)
+    assert code == 2, out
+    assert "footprint_um" in out["remediation"]

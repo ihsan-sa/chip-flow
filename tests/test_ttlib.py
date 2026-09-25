@@ -284,3 +284,19 @@ def test_info_yaml_claims_exactly_the_used_ua_pins(tmp_path):
     digital = yaml.safe_load((tmp_path / "d.yaml").read_text())
     assert "analog_pins" not in digital["project"]
     assert digital["project"]["tiles"] == ttlib.DEFAULT_TILES
+
+
+def test_harden_config_repairs_to_the_limits_timing_signs_off(tmp_path):
+    # Regression: a 37-flop block hardened with the PDK defaults failed the
+    # timing gate on max cap at the CTS root (8 clkbuf_16 trunk inputs) and
+    # on ss max slew after routing (post-GRT repair off). The generated
+    # config must keep both repairs on; they come after the tech layer so a
+    # template or tech default cannot turn them back off.
+    config = ttlib.harden_config(COUNTER8_SPEC, [tmp_path / "counter8.v"],
+                                 tmp_path / "tt_um_counter8.v", tmp_path)
+    assert config["CTS_ROOT_BUFFER"] == "gf180mcu_fd_sc_mcu7t5v0__clkbuf_8"
+    assert config["RUN_POST_GRT_DESIGN_REPAIR"] is True
+    # the timing limits themselves stay the PDK's: nothing here loosens them
+    for key in ("MAX_CAPACITANCE_CONSTRAINT", "MAX_TRANSITION_CONSTRAINT",
+                "MAX_FANOUT_CONSTRAINT"):
+        assert key not in config

@@ -205,6 +205,81 @@ def test_m4_gate_hash_covers_a_spec_yaml_period_edit(tmp_path, gate):
     assert "spec_yaml" in fresh_after["gates"][gate]["changed_inputs"]
 
 
+def _ade_ws_with_passes(tmp_path, gates):
+    """An /ade workspace with every input kind present and a recorded pass
+    on each of `gates`."""
+    ws = ws_empty(tmp_path)
+    state_mod.run(["init", "--workspace", str(ws), "--skill", "ade",
+                  "--block", "mirror"])
+    files = {"spec/spec.yaml": "top: mirror\nfootprint_um: {width: 60, height: 60}\n",
+             "netlist/mirror.cir": ".subckt mirror a b\n.ends\n",
+             "tb/mirror_tb.cir": "* tb\n",
+             "sizing/sizing.yaml": "w: {value: 1.0}\n",
+             "layout/gen_mirror.py": "# gen\n",
+             "layout_ref/mirror_pex_tb.cir": "* pex tb\n",
+             "layout_ref/mirror_pex_tb.bounds.json": "{}\n"}
+    for rel, text in files.items():
+        (ws / rel).parent.mkdir(parents=True, exist_ok=True)
+        (ws / rel).write_text(text, encoding="utf-8")
+    result_path = ws / "result.json"
+    result_path.write_text(json.dumps({"status": "pass", "failing_count": 0,
+                                       "counts": {"total": 0}}),
+                           encoding="utf-8")
+    for g in gates:
+        state_mod.run(["record-gate", "--workspace", str(ws), "--gate", g,
+                      "--result", str(result_path)])
+    fresh, _ = state_mod.run(["freshness", "--workspace", str(ws)])
+    assert all(fresh["gates"][g]["fresh"] for g in gates), fresh["gates"]
+    return ws
+
+
+def _stale_by_hash(ws, kind):
+    fresh, _ = state_mod.run(["freshness", "--workspace", str(ws)])
+    return {g for g, v in fresh["gates"].items()
+            if v.get("hash_valid") is False
+            and kind in (v.get("changed_inputs") or [])}
+
+
+ADE_GATES = ["netlist_lint", "sim_tt", "sim_pvt", "bench_strength", "mc",
+             "drc", "lvs", "pex_sim", "release"]
+
+
+def test_ade_sizing_edit_stales_every_gate_that_loads_sizing(tmp_path):
+    """sim_run.load_sizing() feeds sim_tt, sim_pvt, bench_strength, mc and
+    lvs; a sizing-only edit must stale their recorded passes by hash.
+    pex_sim reads no sizing.yaml (the generator bakes sizes into the GDS),
+    so the sizing_edit class's mark is what re-runs it."""
+    ws = _ade_ws_with_passes(tmp_path, ADE_GATES)
+    (ws / "sizing" / "sizing.yaml").write_text("w: {value: 2.0}\n",
+                                               encoding="utf-8")
+    assert _stale_by_hash(ws, "sizing") == {
+        "sim_tt", "sim_pvt", "bench_strength", "mc", "lvs", "release"}
+    state_mod.run(["edit", "--workspace", str(ws), "--class", "sizing_edit"])
+    fresh, _ = state_mod.run(["freshness", "--workspace", str(ws)])
+    assert fresh["gates"]["pex_sim"]["fresh"] is False
+
+
+def test_ade_layout_ref_edit_stales_pex_sim(tmp_path):
+    ws = _ade_ws_with_passes(tmp_path, ADE_GATES)
+    (ws / "layout_ref" / "mirror_pex_tb.bounds.json").write_text(
+        '{"measures": {}}\n', encoding="utf-8")
+    assert _stale_by_hash(ws, "layout_ref") == {"pex_sim"}
+
+
+def test_ade_spec_yaml_footprint_edit_stales_drc(tmp_path):
+    ws = _ade_ws_with_passes(tmp_path, ["drc"])
+    (ws / "spec" / "spec.yaml").write_text(
+        "top: mirror\nfootprint_um: {width: 40, height: 60}\n",
+        encoding="utf-8")
+    assert "drc" in _stale_by_hash(ws, "spec_yaml")
+
+
+def test_ade_layout_code_edit_covers_layout_ref():
+    imap = statelib.load_map()
+    cls = imap["edit_classes"]["ade"]["layout_code_edit"]
+    assert "layout_ref" in cls["mutates"] and "pex_sim" in cls["gates"]
+
+
 # --------------------------------------------------------- gate recording
 
 def test_record_gate_requires_pass_or_fail(tmp_path):
