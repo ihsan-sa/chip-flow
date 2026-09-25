@@ -1,0 +1,343 @@
+{
+ "script": "cvdp_run",
+ "status": "pass",
+ "counts": {
+  "total": 0,
+  "by_severity": {},
+  "by_source": {}
+ },
+ "violations": [],
+ "dataset": {
+  "source": "huggingface:nvidia/cvdp-benchmark-dataset@5b807d945f6a99aa645f7e43a64a2115e281b4bf",
+  "file": "cvdp_v1.1.0_nonagentic_code_generation_no_commercial.jsonl",
+  "sha256": "cbcd81295561ebb16e4d857e096f4d9908d042c33aff3b58abf236e868411857",
+  "pinned": true
+ },
+ "mode": "null",
+ "mode_note": "no solutions: each problem's own input files, unchanged. The public v1.1 set ships no reference solutions, so this is a floor plus a harness-reach check (tests_ran), not a model score",
+ "dataset_size": 302,
+ "subset_size": 261,
+ "excluded_by_reason": {
+  "command": 1,
+  "verilator": 24,
+  "yosys": 16
+ },
+ "selected": 20,
+ "limit": 20,
+ "categories": null,
+ "caveat": "Not the official CVDP harness: each problem's docker-compose services run natively under bin/eda (Icarus, cocotb) instead of in their containers, with container paths rewritten into a scratch directory, on a subset of the non-agentic non-commercial set. Tool versions differ from the dataset's pinned images. A leaderboard submission needs the docker harness and is out of scope.",
+ "overall": {
+  "pass": 0,
+  "fail": 20,
+  "error": 0,
+  "total": 20,
+  "tests_ran": 5,
+  "pass_rate": 0.0
+ },
+ "by_category": {
+  "cid002": {
+   "name": "code completion",
+   "pass": 0,
+   "fail": 8,
+   "error": 0,
+   "total": 8,
+   "tests_ran": 0,
+   "pass_rate": 0.0
+  },
+  "cid003": {
+   "name": "spec to RTL",
+   "pass": 0,
+   "fail": 6,
+   "error": 0,
+   "total": 6,
+   "tests_ran": 0,
+   "pass_rate": 0.0
+  },
+  "cid004": {
+   "name": "code modification",
+   "pass": 0,
+   "fail": 3,
+   "error": 0,
+   "total": 3,
+   "tests_ran": 2,
+   "pass_rate": 0.0
+  },
+  "cid016": {
+   "name": "bug fixing",
+   "pass": 0,
+   "fail": 3,
+   "error": 0,
+   "total": 3,
+   "tests_ran": 3,
+   "pass_rate": 0.0
+  }
+ },
+ "wall_s": 162.3,
+ "jobs": 4,
+ "timeout_s": 300.0,
+ "problems": [
+  {
+   "id": "cvdp_copilot_16qam_mapper_0001",
+   "category": "cid003",
+   "difficulty": "medium",
+   "status": "fail",
+   "reason": "direct exit 1",
+   "tests_ran": false,
+   "services": {
+    "direct": 1
+   },
+   "log_tail": "../src/test_runner.py::test_data[1-4] - RuntimeError: Command faile...\nFAILED ../../src/test_runner.py::test_data[1-14] - RuntimeError: Command fail...\nFAILED ../../src/test_runner.py::test_data[1-8] - RuntimeError: Command faile...\nFAILED ../../src/test_runner.py::test_data[1-6] - RuntimeError: Command faile...\nFAILED ../../src/test_runner.py::test_data[2-2] - RuntimeError: Command faile...\nFAILED ../../src/test_runner.py::test_data[2-4] - RuntimeError: Command faile...\nFAILED ../../src/test_runner.py::test_data[2-14] - RuntimeError: Command fail...\nFAILED ../../src/test_runner.py::test_data[2-8] - RuntimeError: Command faile...\nFAILED ../../src/test_runner.py::test_data[2-6] - RuntimeError: Command faile...\n======================== 15 failed, 1 warning in 4.41s =========================\n",
+   "wall_s": 13.9
+  },
+  {
+   "id": "cvdp_copilot_16qam_mapper_0006",
+   "category": "cid003",
+   "difficulty": "medium",
+   "status": "fail",
+   "reason": "direct exit 1",
+   "tests_ran": false,
+   "services": {
+    "direct": 1
+   },
+   "log_tail": "../src/test_runner.py::test_data[4-16_1] - RuntimeError: Command fa...\nFAILED ../../src/test_runner.py::test_data[4-14_0] - RuntimeError: Command fa...\nFAILED ../../src/test_runner.py::test_data[4-8_0] - RuntimeError: Command fai...\nFAILED ../../src/test_runner.py::test_data[4-14_1] - RuntimeError: Command fa...\nFAILED ../../src/test_runner.py::test_data[4-14_2] - RuntimeError: Command fa...\nFAILED ../../src/test_runner.py::test_data[4-8_1] - RuntimeError: Command fai...\nFAILED ../../src/test_runner.py::test_data[4-14_3] - RuntimeError: Command fa...\nFAILED ../../src/test_runner.py::test_data[4-6] - RuntimeError: Command faile...\nFAILED ../../src/test_runner.py::test_data[4-14_4] - RuntimeError: Command fa...\n======================== 60 failed, 1 warning in 13.46s ========================\n",
+   "wall_s": 24.3
+  },
+  {
+   "id": "cvdp_copilot_32_bit_Brent_Kung_PP_adder_0001",
+   "category": "cid016",
+   "difficulty": "medium",
+   "status": "fail",
+   "reason": "cocotb tests failed in direct",
+   "tests_ran": true,
+   "services": {
+    "direct": 1
+   },
+   "log_tail": "RROR    Icarus:runner.py:674 ERROR: Failed 1 of 1 tests.\n=============================== warnings summary ===============================\n../../../../toolchains/iic-osic-tools-2026.09/usr/local/lib/python3.12/dist-packages/_pytest/config/__init__.py:1464\n  /home/ihsan/.cc/toolchains/iic-osic-tools-2026.09/usr/local/lib/python3.12/dist-packages/_pytest/config/__init__.py:1464: PytestConfigWarning: Unknown config option: cache_dir\n  \n    self._warn_or_fail_if_strict(f\"Unknown config option: {key}\\n\")\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n=========================== short test summary info ============================\nFAILED ../../src/test_runner.py::test_runner - SystemExit: 1\n======================== 1 failed, 1 warning in 26.55s =========================\n",
+   "wall_s": 36.2
+  },
+  {
+   "id": "cvdp_copilot_64b66b_decoder_0001",
+   "category": "cid002",
+   "difficulty": "easy",
+   "status": "fail",
+   "reason": "direct exit 1",
+   "tests_ran": false,
+   "services": {
+    "direct": 1
+   },
+   "log_tail": "_0001-csruy0my/code/rundir/sim_build\n=============================== warnings summary ===============================\n../../../../toolchains/iic-osic-tools-2026.09/usr/local/lib/python3.12/dist-packages/_pytest/config/__init__.py:1464\n  /home/ihsan/.cc/toolchains/iic-osic-tools-2026.09/usr/local/lib/python3.12/dist-packages/_pytest/config/__init__.py:1464: PytestConfigWarning: Unknown config option: cache_dir\n  \n    self._warn_or_fail_if_strict(f\"Unknown config option: {key}\\n\")\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n=========================== short test summary info ============================\nFAILED ../../src/test_runner.py::test_runner - RuntimeError: Command failed w...\n========================= 1 failed, 1 warning in 1.71s =========================\n",
+   "wall_s": 12.6
+  },
+  {
+   "id": "cvdp_copilot_64b66b_decoder_0011",
+   "category": "cid002",
+   "difficulty": "medium",
+   "status": "fail",
+   "reason": "direct exit 1",
+   "tests_ran": false,
+   "services": {
+    "direct": 1
+   },
+   "log_tail": "_0011-nk13t3rj/code/rundir/sim_build\n=============================== warnings summary ===============================\n../../../../toolchains/iic-osic-tools-2026.09/usr/local/lib/python3.12/dist-packages/_pytest/config/__init__.py:1464\n  /home/ihsan/.cc/toolchains/iic-osic-tools-2026.09/usr/local/lib/python3.12/dist-packages/_pytest/config/__init__.py:1464: PytestConfigWarning: Unknown config option: cache_dir\n  \n    self._warn_or_fail_if_strict(f\"Unknown config option: {key}\\n\")\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n=========================== short test summary info ============================\nFAILED ../../src/test_runner.py::test_runner - RuntimeError: Command failed w...\n========================= 1 failed, 1 warning in 1.59s =========================\n",
+   "wall_s": 15.4
+  },
+  {
+   "id": "cvdp_copilot_64b66b_encoder_0001",
+   "category": "cid003",
+   "difficulty": "easy",
+   "status": "fail",
+   "reason": "direct exit 1",
+   "tests_ran": false,
+   "services": {
+    "direct": 1
+   },
+   "log_tail": "_0001-7pi_n3om/code/rundir/sim_build\n=============================== warnings summary ===============================\n../../../../toolchains/iic-osic-tools-2026.09/usr/local/lib/python3.12/dist-packages/_pytest/config/__init__.py:1464\n  /home/ihsan/.cc/toolchains/iic-osic-tools-2026.09/usr/local/lib/python3.12/dist-packages/_pytest/config/__init__.py:1464: PytestConfigWarning: Unknown config option: cache_dir\n  \n    self._warn_or_fail_if_strict(f\"Unknown config option: {key}\\n\")\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n=========================== short test summary info ============================\nFAILED ../../src/test_runner.py::test_runner - RuntimeError: Command failed w...\n========================= 1 failed, 1 warning in 1.58s =========================\n",
+   "wall_s": 12.0
+  },
+  {
+   "id": "cvdp_copilot_64b66b_encoder_0005",
+   "category": "cid016",
+   "difficulty": "easy",
+   "status": "fail",
+   "reason": "cocotb tests failed in direct",
+   "tests_ran": true,
+   "services": {
+    "direct": 1
+   },
+   "log_tail": "ROR    Icarus:runner.py:674 ERROR: Failed 9 of 10 tests.\n=============================== warnings summary ===============================\n../../../../toolchains/iic-osic-tools-2026.09/usr/local/lib/python3.12/dist-packages/_pytest/config/__init__.py:1464\n  /home/ihsan/.cc/toolchains/iic-osic-tools-2026.09/usr/local/lib/python3.12/dist-packages/_pytest/config/__init__.py:1464: PytestConfigWarning: Unknown config option: cache_dir\n  \n    self._warn_or_fail_if_strict(f\"Unknown config option: {key}\\n\")\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n=========================== short test summary info ============================\nFAILED ../../src/test_runner.py::test_runner - SystemExit: 1\n======================== 1 failed, 1 warning in 42.41s =========================\n",
+   "wall_s": 57.2
+  },
+  {
+   "id": "cvdp_copilot_64b66b_encoder_0009",
+   "category": "cid004",
+   "difficulty": "medium",
+   "status": "fail",
+   "reason": "cocotb tests failed in direct",
+   "tests_ran": true,
+   "services": {
+    "direct": 1
+   },
+   "log_tail": "ROR    Icarus:runner.py:674 ERROR: Failed 3 of 13 tests.\n=============================== warnings summary ===============================\n../../../../toolchains/iic-osic-tools-2026.09/usr/local/lib/python3.12/dist-packages/_pytest/config/__init__.py:1464\n  /home/ihsan/.cc/toolchains/iic-osic-tools-2026.09/usr/local/lib/python3.12/dist-packages/_pytest/config/__init__.py:1464: PytestConfigWarning: Unknown config option: cache_dir\n  \n    self._warn_or_fail_if_strict(f\"Unknown config option: {key}\\n\")\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n=========================== short test summary info ============================\nFAILED ../../src/test_runner.py::test_runner - SystemExit: 1\n======================== 1 failed, 1 warning in 34.56s =========================\n",
+   "wall_s": 46.0
+  },
+  {
+   "id": "cvdp_copilot_8x3_priority_encoder_0001",
+   "category": "cid003",
+   "difficulty": "easy",
+   "status": "fail",
+   "reason": "pytest exit 1",
+   "tests_ran": false,
+   "services": {
+    "pytest": 1
+   },
+   "log_tail": "../src/test_runner.py::test_moving_run[1] - RuntimeError: Command f...\nFAILED ../../src/test_runner.py::test_moving_run[2] - RuntimeError: Command f...\nFAILED ../../src/test_runner.py::test_moving_run[3] - RuntimeError: Command f...\nFAILED ../../src/test_runner.py::test_moving_run[4] - RuntimeError: Command f...\nFAILED ../../src/test_runner.py::test_moving_run[5] - RuntimeError: Command f...\nFAILED ../../src/test_runner.py::test_moving_run[6] - RuntimeError: Command f...\nFAILED ../../src/test_runner.py::test_moving_run[7] - RuntimeError: Command f...\nFAILED ../../src/test_runner.py::test_moving_run[8] - RuntimeError: Command f...\nFAILED ../../src/test_runner.py::test_moving_run[9] - RuntimeError: Command f...\n======================== 10 failed, 1 warning in 3.07s =========================\n",
+   "wall_s": 12.4
+  },
+  {
+   "id": "cvdp_copilot_8x3_priority_encoder_0013",
+   "category": "cid004",
+   "difficulty": "easy",
+   "status": "fail",
+   "reason": "3- exit 1",
+   "tests_ran": false,
+   "services": {
+    "3-": 1
+   },
+   "log_tail": "che_dir\n  \n    self._warn_or_fail_if_strict(f\"Unknown config option: {key}\\n\")\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n=========================== short test summary info ============================\nFAILED ../../src/test_runner.py::test_apb[4] - RuntimeError: Command failed w...\nFAILED ../../src/test_runner.py::test_apb[8] - RuntimeError: Command failed w...\nFAILED ../../src/test_runner.py::test_apb[16] - RuntimeError: Command failed ...\nFAILED ../../src/test_runner.py::test_apb[32] - RuntimeError: Command failed ...\nFAILED ../../src/test_runner.py::test_apb[64] - RuntimeError: Command failed ...\nFAILED ../../src/test_runner.py::test_apb[128] - RuntimeError: Command failed...\n========================= 6 failed, 1 warning in 2.93s =========================\n",
+   "wall_s": 16.1
+  },
+  {
+   "id": "cvdp_copilot_Attenuator_0001",
+   "category": "cid002",
+   "difficulty": "easy",
+   "status": "fail",
+   "reason": "direct exit 1",
+   "tests_ran": false,
+   "services": {
+    "direct": 1
+   },
+   "log_tail": "_0001-6__h96c5/code/rundir/sim_build\n=============================== warnings summary ===============================\n../../../../toolchains/iic-osic-tools-2026.09/usr/local/lib/python3.12/dist-packages/_pytest/config/__init__.py:1464\n  /home/ihsan/.cc/toolchains/iic-osic-tools-2026.09/usr/local/lib/python3.12/dist-packages/_pytest/config/__init__.py:1464: PytestConfigWarning: Unknown config option: cache_dir\n  \n    self._warn_or_fail_if_strict(f\"Unknown config option: {key}\\n\")\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n=========================== short test summary info ============================\nFAILED ../../src/test_runner.py::test_runner - RuntimeError: Command failed w...\n========================= 1 failed, 1 warning in 1.35s =========================\n",
+   "wall_s": 20.1
+  },
+  {
+   "id": "cvdp_copilot_Carry_Lookahead_Adder_0001",
+   "category": "cid003",
+   "difficulty": "easy",
+   "status": "fail",
+   "reason": "07-new-tb exit 1",
+   "tests_ran": false,
+   "services": {
+    "07-new-tb": 1
+   },
+   "log_tail": "_0001-0zz4lsfq/code/rundir/sim_build\n=============================== warnings summary ===============================\n../../../../toolchains/iic-osic-tools-2026.09/usr/local/lib/python3.12/dist-packages/_pytest/config/__init__.py:1464\n  /home/ihsan/.cc/toolchains/iic-osic-tools-2026.09/usr/local/lib/python3.12/dist-packages/_pytest/config/__init__.py:1464: PytestConfigWarning: Unknown config option: cache_dir\n  \n    self._warn_or_fail_if_strict(f\"Unknown config option: {key}\\n\")\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n=========================== short test summary info ============================\nFAILED ../../src/test_runner.py::test_gp_test - RuntimeError: Command failed ...\n========================= 1 failed, 1 warning in 2.15s =========================\n",
+   "wall_s": 22.8
+  },
+  {
+   "id": "cvdp_copilot_Carry_Lookahead_Adder_0005",
+   "category": "cid016",
+   "difficulty": "easy",
+   "status": "fail",
+   "reason": "cocotb tests failed in 01-new-tb",
+   "tests_ran": true,
+   "services": {
+    "01-new-tb": 1
+   },
+   "log_tail": "ld\nERROR    Icarus:runner.py:674 ERROR: Failed 1 of 1 tests.\n=============================== warnings summary ===============================\n../../../../toolchains/iic-osic-tools-2026.09/usr/local/lib/python3.12/dist-packages/_pytest/config/__init__.py:1464\n  /home/ihsan/.cc/toolchains/iic-osic-tools-2026.09/usr/local/lib/python3.12/dist-packages/_pytest/config/__init__.py:1464: PytestConfigWarning: Unknown config option: cache_dir\n  \n    self._warn_or_fail_if_strict(f\"Unknown config option: {key}\\n\")\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n=========================== short test summary info ============================\nFAILED ../../src/test_runner.py::test[0] - SystemExit: 1\n======================== 1 failed, 1 warning in 47.24s =========================\n",
+   "wall_s": 63.4
+  },
+  {
+   "id": "cvdp_copilot_FIR_0001",
+   "category": "cid002",
+   "difficulty": "easy",
+   "status": "fail",
+   "reason": "direct exit 1",
+   "tests_ran": false,
+   "services": {
+    "direct": 1
+   },
+   "log_tail": "_0001-e1fco_w5/code/rundir/sim_build\n=============================== warnings summary ===============================\n../../../../toolchains/iic-osic-tools-2026.09/usr/local/lib/python3.12/dist-packages/_pytest/config/__init__.py:1464\n  /home/ihsan/.cc/toolchains/iic-osic-tools-2026.09/usr/local/lib/python3.12/dist-packages/_pytest/config/__init__.py:1464: PytestConfigWarning: Unknown config option: cache_dir\n  \n    self._warn_or_fail_if_strict(f\"Unknown config option: {key}\\n\")\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n=========================== short test summary info ============================\nFAILED ../../src/test_runner.py::test_runner - RuntimeError: Command failed w...\n========================= 1 failed, 1 warning in 2.23s =========================\n",
+   "wall_s": 21.9
+  },
+  {
+   "id": "cvdp_copilot_FIR_0003",
+   "category": "cid002",
+   "difficulty": "easy",
+   "status": "fail",
+   "reason": "direct exit 1",
+   "tests_ran": false,
+   "services": {
+    "direct": 1
+   },
+   "log_tail": "../src/test_runner.py::test_moving_run[1] - RuntimeError: Command f...\nFAILED ../../src/test_runner.py::test_moving_run[2] - RuntimeError: Command f...\nFAILED ../../src/test_runner.py::test_moving_run[3] - RuntimeError: Command f...\nFAILED ../../src/test_runner.py::test_moving_run[4] - RuntimeError: Command f...\nFAILED ../../src/test_runner.py::test_moving_run[5] - RuntimeError: Command f...\nFAILED ../../src/test_runner.py::test_moving_run[6] - RuntimeError: Command f...\nFAILED ../../src/test_runner.py::test_moving_run[7] - RuntimeError: Command f...\nFAILED ../../src/test_runner.py::test_moving_run[8] - RuntimeError: Command f...\nFAILED ../../src/test_runner.py::test_moving_run[9] - RuntimeError: Command f...\n======================== 10 failed, 1 warning in 4.46s =========================\n",
+   "wall_s": 21.9
+  },
+  {
+   "id": "cvdp_copilot_GFCM_0001",
+   "category": "cid003",
+   "difficulty": "easy",
+   "status": "fail",
+   "reason": "01-new-tb exit 1",
+   "tests_ran": false,
+   "services": {
+    "01-new-tb": 1
+   },
+   "log_tail": "_0001-706up110/code/rundir/sim_build\n=============================== warnings summary ===============================\n../../../../toolchains/iic-osic-tools-2026.09/usr/local/lib/python3.12/dist-packages/_pytest/config/__init__.py:1464\n  /home/ihsan/.cc/toolchains/iic-osic-tools-2026.09/usr/local/lib/python3.12/dist-packages/_pytest/config/__init__.py:1464: PytestConfigWarning: Unknown config option: cache_dir\n  \n    self._warn_or_fail_if_strict(f\"Unknown config option: {key}\\n\")\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n=========================== short test summary info ============================\nFAILED ../../src/test_runner.py::test_gfcm - RuntimeError: Command failed wit...\n========================= 1 failed, 1 warning in 2.06s =========================\n",
+   "wall_s": 20.6
+  },
+  {
+   "id": "cvdp_copilot_GFCM_0003",
+   "category": "cid004",
+   "difficulty": "easy",
+   "status": "fail",
+   "reason": "cocotb tests failed in 01-new-tb",
+   "tests_ran": true,
+   "services": {
+    "01-new-tb": 1
+   },
+   "log_tail": "_build\nERROR    Icarus:runner.py:674 ERROR: Failed 1 of 1 tests.\n=============================== warnings summary ===============================\n../../../toolchains/iic-osic-tools-2026.09/usr/local/lib/python3.12/dist-packages/_pytest/config/__init__.py:1464\n  /home/ihsan/.cc/toolchains/iic-osic-tools-2026.09/usr/local/lib/python3.12/dist-packages/_pytest/config/__init__.py:1464: PytestConfigWarning: Unknown config option: cache_dir\n  \n    self._warn_or_fail_if_strict(f\"Unknown config option: {key}\\n\")\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n=========================== short test summary info ============================\nFAILED ../src/test_runner.py::test_gfcm - SystemExit: 1\n======================== 1 failed, 1 warning in 51.50s =========================\n",
+   "wall_s": 68.4
+  },
+  {
+   "id": "cvdp_copilot_MSHR_0001",
+   "category": "cid002",
+   "difficulty": "medium",
+   "status": "fail",
+   "reason": "01-new-tb exit 1",
+   "tests_ran": false,
+   "services": {
+    "01-new-tb": 1
+   },
+   "log_tail": "../src/test_runner.py::test_allocator[8_0] - RuntimeError: Command ...\nFAILED ../../src/test_runner.py::test_allocator[12] - RuntimeError: Command f...\nFAILED ../../src/test_runner.py::test_allocator[8_1] - RuntimeError: Command ...\nFAILED ../../src/test_runner.py::test_allocator[8_2] - RuntimeError: Command ...\nFAILED ../../src/test_runner.py::test_allocator[32] - RuntimeError: Command f...\nFAILED ../../src/test_runner.py::test_allocator[8_3] - RuntimeError: Command ...\nFAILED ../../src/test_runner.py::test_allocator[28] - RuntimeError: Command f...\nFAILED ../../src/test_runner.py::test_allocator[4] - RuntimeError: Command fa...\nFAILED ../../src/test_runner.py::test_allocator[16] - RuntimeError: Command f...\n======================== 10 failed, 1 warning in 4.45s =========================\n",
+   "wall_s": 17.5
+  },
+  {
+   "id": "cvdp_copilot_MSHR_0008",
+   "category": "cid002",
+   "difficulty": "medium",
+   "status": "fail",
+   "reason": "01-new-tb exit 1",
+   "tests_ran": false,
+   "services": {
+    "01-new-tb": 1
+   },
+   "log_tail": "../src/test_runner.py::test_allocator[12] - RuntimeError: Command f...\nFAILED ../../src/test_runner.py::test_allocator[4_1] - RuntimeError: Command ...\nFAILED ../../src/test_runner.py::test_allocator[24] - RuntimeError: Command f...\nFAILED ../../src/test_runner.py::test_allocator[20] - RuntimeError: Command f...\nFAILED ../../src/test_runner.py::test_allocator[16] - RuntimeError: Command f...\nFAILED ../../src/test_runner.py::test_allocator[32] - RuntimeError: Command f...\nFAILED ../../src/test_runner.py::test_allocator[28] - RuntimeError: Command f...\nFAILED ../../src/test_runner.py::test_allocator[4_2] - RuntimeError: Command ...\nFAILED ../../src/test_runner.py::test_allocator[8] - RuntimeError: Command fa...\n======================== 10 failed, 1 warning in 6.74s =========================\n",
+   "wall_s": 30.2
+  },
+  {
+   "id": "cvdp_copilot_Serial_Line_Converter_0001",
+   "category": "cid002",
+   "difficulty": "easy",
+   "status": "fail",
+   "reason": "01-new-tb exit 1",
+   "tests_ran": false,
+   "services": {
+    "01-new-tb": 1
+   },
+   "log_tail": "s/_pytest/config/__init__.py:1464: PytestConfigWarning: Unknown config option: cache_dir\n  \n    self._warn_or_fail_if_strict(f\"Unknown config option: {key}\\n\")\n\n-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html\n=========================== short test summary info ============================\nFAILED ../../src/test_runner.py::test_serial_line_converter[4-0] - RuntimeErr...\nFAILED ../../src/test_runner.py::test_serial_line_converter[8-0] - RuntimeErr...\nFAILED ../../src/test_runner.py::test_serial_line_converter[16-0] - RuntimeEr...\nFAILED ../../src/test_runner.py::test_serial_line_converter[10-0] - RuntimeEr...\nFAILED ../../src/test_runner.py::test_serial_line_converter[6-0] - RuntimeErr...\n========================= 5 failed, 1 warning in 2.95s =========================\n",
+   "wall_s": 25.7
+  }
+ ],
+ "report_schema": 1,
+ "checker_version": 1,
+ "generated_at": "2026-09-25T00:12:39+00:00"
+}

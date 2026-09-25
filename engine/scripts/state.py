@@ -21,7 +21,7 @@ Schema (version 3):
       "gates": {gate_name: {phase, status: pass|fail, attempts: int,
                             last: {ts, status, failing_count, total,
                                    inputs: {kind: "<norm>:<sha>"|null},
-                                   job: id|null},
+                                   job: id|null, facts?: {name: number}},
                             history: [same shape as last, oldest first],
                             stale: [mark]?}},
       "jobs": {id: {gate, pid, started, finished?, status: running|done|dead,
@@ -390,6 +390,14 @@ class State:
                  "total": (result.get("counts") or {}).get("total", 0),
                  "inputs": self._hash_gate_inputs(gate),
                  "job": result.get("job")}
+        # M6: keep the scalar facts a check reported (kill_rate, area,
+        # line_pct ...) and timing's per-corner slack, so evals/ladder.py can
+        # score a finished run from state.json without re-running its gates.
+        facts = {k: v for k, v in (result.get("facts") or {}).items()
+                 if (isinstance(v, (int, float)) and not isinstance(v, bool))
+                 or k == "corners"}
+        if facts:
+            entry["facts"] = facts
         g = self.data["gates"].setdefault(
             gate, {"phase": phase or result.get("phase"), "status": None,
                    "attempts": 0, "last": None, "history": []})
