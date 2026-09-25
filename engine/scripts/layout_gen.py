@@ -107,7 +107,7 @@ def write_abstract(gds_path: Path, topcell: str, out_path: Path) -> dict:
         if li is None:
             continue
         # generate()'s own layoutlib.finalize() already flattens the whole
-        # design (pcell_utilities.snap_to_grid), so the topcell holds every
+        # design, so the topcell holds every
         # shape directly - a plain top-level shape iterator is enough, no
         # instance-transform composition needed.
         it = cell.shapes(li).each()

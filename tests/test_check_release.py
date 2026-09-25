@@ -494,7 +494,7 @@ def make_msde_ws(tmp_path: Path) -> Path:
     for side, skill, kind in (("digital", "vde", "rtl"),
                               ("analog", "ade", "netlist")):
         sub = ws / side
-        state_mod.State.init(sub, skill, f"sensor_counted_{side}")
+        state_mod.State.init(sub, skill, statelib.split_block_name(sub))
         (sub / kind / "x.txt").write_text("a\n", encoding="utf-8")
         (sub / "layout" / "x.txt").write_text("a\n", encoding="utf-8")
         st = state_mod.State.load(sub / "state.json")

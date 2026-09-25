@@ -16,6 +16,8 @@ commits on failure and never pushes.
 
 JSON to stdout (or --out): {script, gate, skill, status:pass|fail, counts,
 criteria, failing:[findings that triggered], record_result, commit_result?}.
+An error goes to --out as well, as {script, gate, status:error, error,
+remediation}, so a caller reading --out never finds an earlier run there.
 Exit 0 = pass, 1 = fail, 2 = error (bad gate name, missing tool, unreadable
 workspace, or a requested record/commit that did not happen).
 
@@ -422,9 +424,21 @@ def main(argv: list[str] | None = None) -> int:
                 raise RuntimeError("--commit requires --workspace")
             result["commit_result"] = git_commit_on_pass(
                 args.commit, Path(args.workspace))
-    except Exception:
-        print(json.dumps({"script": "gate", "status": "error",
-                          "error": traceback.format_exc()}))
+    except Exception as exc:  # noqa: BLE001 - the exit-2 contract
+        # The error goes where the result would have: a caller reading
+        # --out must not find the last run's pass there instead.
+        text = json.dumps({"script": "gate", "gate": args.gate,
+                           "status": "error",
+                           "error": traceback.format_exc(),
+                           "remediation": f"{type(exc).__name__}: {exc}"},
+                          indent=2)
+        if args.out:
+            Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+            Path(args.out).write_text(text, encoding="utf-8")
+            print(f"gate {args.gate}: ERROR ({exc}) - see {args.out}",
+                  file=sys.stderr)
+        else:
+            print(text)
         return 2
 
     text = json.dumps(result, indent=2)

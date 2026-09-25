@@ -1,0 +1,5 @@
+* stdbuf.cir - the reference for layout/gen_stdbuf.py: one buf_1 driver,
+* called as the PDK standard cell and never defined here.
+.subckt stdbuf I Z VDD VSS
+x1 I Z VDD VDD VSS VSS gf180mcu_fd_sc_mcu7t5v0__buf_1
+.ends

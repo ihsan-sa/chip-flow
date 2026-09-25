@@ -44,8 +44,9 @@ rtl-writer (SKILL.md's fixer-domain table is the full list, and
 
 Spawn `reviewer` fresh (never the rtl-writer's or any fixer's own
 conversation) once P4's gates are all green. Present its digest with the
-gate table (numbers first) to the person; record `state.py human
---checkpoint H1`.
+gate table (numbers first) and the challenge `state.py present
+--checkpoint H1` prints to the person; record their reply quoting it with
+`state.py human --checkpoint H1 --answer '<reply>'`.
 
 ## P5-P6
 

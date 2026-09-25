@@ -11,7 +11,9 @@ with M4's own harden (check_harden.run, the same LibreLane job):
   top/spec/spec.yaml  the digital spec, minus tt_pins for every signal
                       interface.yaml names, plus a `macros:` entry binding
                       each of those signals to the analog cell's pin of the
-                      same name (engine/lib/ttlib.py's macros schema)
+                      same name, or a width-N signal to its N pins
+                      <name>[N-1]..<name>[0] (engine/lib/ttlib.py's macros
+                      schema)
   top/rtl/            a copy of digital/rtl
   top/macros/         the analog cell as LibreLane takes a macro: its GDS
                       (layout_gen, rebuilt from analog/layout/gen_<block>.py
@@ -103,12 +105,53 @@ def clean_gds(src: Path, dst: Path) -> None:
     layout.write(str(dst), opts)
 
 
+def signal_pins(signals: dict[str, str],
+                widths: dict[str, int]) -> dict[str, str]:
+    """{analog .subckt pin: signal} - a width-N interface signal is the N
+    pins `<name>[N-1]`..`<name>[0]`, the names a bus bit takes in a SPICE
+    netlist, a GDS label and the LEF magic writes; width 1 is the bare name."""
+    out: dict[str, str] = {}
+    for sig in signals:
+        w = int(widths.get(sig, 1))
+        for pin in ([f"{sig}[{i}]" for i in range(w)] if w > 1 else [sig]):
+            out[pin] = sig
+    return out
+
+
+def tcl_tok(name: str) -> str:
+    """Brace a magic Tcl token. Magic reads its script as Tcl, so an unbraced
+    bus-bit pin name like dac_code[0] runs [0] as a nested command and the
+    port command silently sees a bare, mangled name - braces make it a
+    literal token instead (engine/scripts/check_drc.py:91 escapes brackets
+    the same way, for the same reason)."""
+    return "{" + name + "}"
+
+
+def port_lines(sig_pins: dict[str, str], signals: dict[str, str],
+              ua: dict[str, int]) -> list[str]:
+    """The `port ... use ...` / `port ... class ...` magic Tcl lines for
+    every interface signal pin (a2d pins are macro outputs, d2a are inputs)
+    and every ua pad pin (inout), each pin name braced per tcl_tok."""
+    lines = []
+    for pin, sig in sorted(sig_pins.items()):
+        cls = "output" if signals[sig] == "a2d" else "input"
+        lines += [f"port {tcl_tok(pin)} use signal",
+                 f"port {tcl_tok(pin)} class {cls}"]
+    for pin in sorted(ua):
+        lines += [f"port {tcl_tok(pin)} use signal",
+                 f"port {tcl_tok(pin)} class inout"]
+    return lines
+
+
 def analog_macro(analog: Path, signals: dict[str, str], out_dir: Path,
-                 ua: dict[str, int] | None = None) -> dict:
+                 ua: dict[str, int] | None = None,
+                 widths: dict[str, int] | None = None) -> dict:
     """Write the analog cell's GDS, LEF, stub and .subckt under out_dir;
     return its ttlib `macros` entry (without location). `ua` maps analog
     pins to the ua pads they go out on."""
     ua = ua or {}
+    widths = widths or {}
+    sig_pins = signal_pins(signals, widths)
     import check_analog_lvs
     import layout_gen
     import sim_run
@@ -128,7 +171,7 @@ def analog_macro(analog: Path, signals: dict[str, str], out_dir: Path,
     pins = [p for p in netlistlib.subckt_pins(ref_text)[ref_cell.lower()]
             if "=" not in p]  # drop .subckt parameter defaults
 
-    missing = sorted((set(signals) | set(ua)) - {p.lower() for p in pins})
+    missing = sorted((set(sig_pins) | set(ua)) - {p.lower() for p in pins})
     if missing:
         raise CheckError(f"interface.yaml names {missing}, which the analog "
                          f".subckt {ref_cell} ({pins}) does not have")
@@ -138,7 +181,7 @@ def analog_macro(analog: Path, signals: dict[str, str], out_dir: Path,
                          "in ua_pins; a pin crosses to the digital side or "
                          "goes out on a pad, not both")
     supplies = [p for p in pins
-                if p.lower() not in signals and p.lower() not in ua]
+                if p.lower() not in sig_pins and p.lower() not in ua]
     vdd = [p for p in supplies if VDD_RE.match(p)]
     vss = [p for p in supplies if VSS_RE.match(p)]
     if len(vdd) != 1 or len(vss) != 1 or len(supplies) != 2:
@@ -153,19 +196,15 @@ def analog_macro(analog: Path, signals: dict[str, str], out_dir: Path,
     spice_out = out_dir / f"{cell}.spice"
     spice_out.write_text(ref_text, encoding="utf-8")
 
-    # a2d: the analog side drives it, so it is the macro's output.
-    port_lines = []
-    for sig, direction in sorted(signals.items()):
-        cls = "output" if direction == "a2d" else "input"
-        port_lines += [f"port {sig} use signal", f"port {sig} class {cls}"]
-    for pin in sorted(ua):
-        port_lines += [f"port {pin} use signal", f"port {pin} class inout"]
     lef_out = write_lef(gds_out, cell, [
-        *port_lines,
-        f"port {vdd} use power", f"port {vdd} class inout",
-        f"port {vss} use ground", f"port {vss} class inout"])
+        *port_lines(sig_pins, signals, ua),
+        f"port {tcl_tok(vdd)} use power", f"port {tcl_tok(vdd)} class inout",
+        f"port {tcl_tok(vss)} use ground", f"port {tcl_tok(vss)} class inout"])
 
-    sig_decls = [f"    {'output' if d == 'a2d' else 'input '} wire {s}"
+    def rng(s: str) -> str:
+        w = int(widths.get(s, 1))
+        return f"[{w - 1}:0] " if w > 1 else ""
+    sig_decls = [f"    {'output' if d == 'a2d' else 'input '} wire {rng(s)}{s}"
                  for s, d in sorted(signals.items())]
     sig_decls += [f"    inout  wire {pin}" for pin in sorted(ua)]
     stub = out_dir / f"{cell}.v"
@@ -191,10 +230,11 @@ def analog_macro(analog: Path, signals: dict[str, str], out_dir: Path,
                       "spice": str(spice_out.resolve())}}
 
 
-def write_lef(gds_out: Path, cell: str, port_lines: list[str]) -> Path:
+def write_lef(gds_out: Path, cell: str, ports: list[str]) -> Path:
     """magic's LEF abstract of `cell` in gds_out, written beside it;
-    port_lines set each pin's use and class. The abstract covers what the
-    cell draws: refuses when it comes out more than 1 um short of that."""
+    ports are the magic lines that set each pin's use and class. The
+    abstract covers what the cell draws: refuses when it comes out more
+    than 1 um short of that."""
     lef_out = gds_out.with_suffix(".lef")
     layoutlib.fresh(lef_out)
     script = "\n".join([
@@ -207,7 +247,7 @@ def write_lef(gds_out: Path, cell: str, port_lines: list[str]) -> Path:
         # tile's standard-cell rows (PDN-0179, "Unable to repair all
         # channels"). Cleared, the abstract is everything magic reads.
         "property FIXED_BBOX {}",
-        "port makeall", *port_lines,
+        "port makeall", *ports,
         "property LEFclass BLOCK", f"lef write {lef_out.name}",
         "quit -noprompt", ""])
     proc = layoutlib.run_eda(["magic", "-noconsole", "-dnull"],
@@ -292,6 +332,8 @@ def assemble(ws: Path) -> tuple[Path, dict]:
                for s in iface.get("signals") or []}
     if not signals:
         raise CheckError("interface.yaml names no signals")
+    widths = {s["name"].lower(): int(s.get("width", 1))
+              for s in iface.get("signals") or []}
     ua = {str(p).lower(): k for p, k in (iface.get("ua_pins") or {}).items()}
 
     dspec = _yaml(digital / "spec" / "spec.yaml", "digital spec.yaml")
@@ -300,6 +342,19 @@ def assemble(ws: Path) -> tuple[Path, dict]:
     if missing:
         raise CheckError(f"interface.yaml names {missing}, which the digital "
                          "spec.yaml's ports do not have")
+    bad_width = sorted(
+        s for s in signals
+        if widths[s] != int(dspec["ports"][ports[s]].get("width", 1)))
+    if bad_width:
+        details = ", ".join(
+            f"{s}: interface.yaml says {widths[s]}, spec.yaml's "
+            f"{ports[s]} says {int(dspec['ports'][ports[s]].get('width', 1))}"
+            for s in bad_width)
+        raise CheckError(
+            "interface.yaml's width does not match the digital spec.yaml "
+            f"port's own width for {bad_width} ({details}); fix one of the "
+            "two - a silent mismatch would pad or truncate the signal in "
+            "the assembled top Verilog")
 
     top = ws / TOP_DIR
     if top.exists():
@@ -307,7 +362,7 @@ def assemble(ws: Path) -> tuple[Path, dict]:
     (top / "spec").mkdir(parents=True)
     shutil.copytree(digital / "rtl", top / "rtl")
 
-    macro = analog_macro(analog, signals, top / "macros", ua)
+    macro = analog_macro(analog, signals, top / "macros", ua, widths)
     macro["pins"] = {pin: ports[pin] for pin in macro["pins"]}
     size = macro_size(Path(macro["files"]["lef"]),
                       Path(macro["files"]["gds"]), macro["cell"])

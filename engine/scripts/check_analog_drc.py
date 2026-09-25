@@ -11,7 +11,9 @@ literally from `tool:`.
 
 Regenerates the GDS fresh from `layout/gen_<block>.py` via layout_gen.build()
 (never trusts a GDS already on disk - "layout is code", docs/design.md 5),
-then runs ONLY klayout's real GF180 signoff deck. magic DRC is not run here
+then runs ONLY klayout's real GF180 signoff deck, less the chip-level
+density, antenna and dummy-fill decks (layoutlib.DRC_SKIPPED, whose
+reasons the report carries as `decks_skipped`). magic DRC is not run here
 at all: the spike (docs/spikes/glayout.md) found magic silently re-snaps a
 GDS to the manufacturing grid on load, hiding an off-grid shape that
 klayout's own deck reports (424/1004 *_OFFGRID findings on the very same
@@ -74,7 +76,8 @@ def run(argv=None):
 
     payload = checklib.report(SCRIPT, ws / "layout", violations,
                               topcell=topcell, gds=str(gds_path.relative_to(ws)),
-                              report=str(rdb_path.relative_to(ws)))
+                              report=str(rdb_path.relative_to(ws)),
+                              decks_skipped=layoutlib.DRC_SKIPPED)
     return payload, args.out
 
 

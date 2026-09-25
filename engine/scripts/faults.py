@@ -114,17 +114,21 @@ def make_scratch_workspace(tmp_root: Path, rung_dir: Path, skill: str,
                 shutil.copy2(f, ws / sub / f.name)
     # M10: an msde rung carries its two sides as rung-shaped trees at
     # digital/ and analog/; each becomes a nested workspace of its own skill
-    # (check_release.NESTED), its block named by its spec.yaml's `top` - the
-    # name its layout generator and netlist carry.
+    # (check_release.NESTED), its block the name the msde split gives it
+    # (statelib.split_block_name), which state.py init now insists on;
+    # spec.yaml's `top` only when the parent has no block to split.
     if skill == "msde":
         import yaml
+        import statelib
         for side, side_skill in (("digital", "vde"), ("analog", "ade")):
             src = rung_dir / side
             if (src / "spec.yaml").is_file():
                 spec = yaml.safe_load((src / "spec.yaml").read_text(
                     encoding="utf-8")) or {}
+                block = (statelib.split_block_name(ws / side)
+                         or spec.get("top") or side)
                 make_scratch_workspace(ws, src, side_skill, side,
-                                       block=spec.get("top") or side)
+                                       block=block)
     return ws
 
 

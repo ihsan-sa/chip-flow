@@ -434,3 +434,83 @@ def test_run_ngspice_measure_never_met_does_not_hide_an_engine_error(
         MEAS_NEVER_MET + "Error: unknown subckt: x1 a b foo\n"))
     with pytest.raises(layoutlib.LayoutError, match="unknown_subckt"):
         layoutlib.run_ngspice(tmp_path / "tb.cir", failed_measures=set())
+
+
+def test_finalize_keeps_holes():
+    # shakedown breakage 18: the PDK's snap_to_grid rebuilt each polygon
+    # from its outline, so a ring came back as a solid block.
+    pytest.importorskip("gdsfactory")
+    import gdsfactory as gf
+    import klayout.db as kdb
+
+    layoutlib.gf180_cells()
+    L = layoutlib.GF180_LAYER
+    ring = gf.Component()
+    outer = kdb.DBox(0, 0, 4, 4)
+    hole = kdb.DBox(1, 1, 3, 3)
+    poly = kdb.DPolygon(outer)
+    poly.insert_hole(list(kdb.DPolygon(hole).each_point_hull()))
+    li = ring.kcl.layer(*L["nplus"])
+    ring.kdb_cell.shapes(li).insert(poly)
+    fin = layoutlib.finalize(ring, "ring_fin", [])
+    got = kdb.Region(fin.kdb_cell.begin_shapes_rec(fin.kcl.layer(*L["nplus"])))
+    want = kdb.Region(ring.kdb_cell.begin_shapes_rec(li))
+    assert got.area() == want.area() == 12 / fin.kcl.dbu ** 2
+    assert (got ^ want).is_empty()
+    # and the snap still moves an off-grid vertex onto the 5nm grid
+    off = gf.Component()
+    off.add_polygon([(0, 0), (1.002, 0), (1.002, 1), (0, 1)], layer=L["metal1"])
+    fin = layoutlib.finalize(off, "off_fin", [])
+    box = fin.kdb_cell.dbbox()
+    assert (box.right, box.top) == (pytest.approx(1.0), pytest.approx(1.0))
+
+
+def test_std_cell_subckts_adds_only_undefined_pdk_cells(tmp_path, monkeypatch):
+    pdk = tmp_path / "pdk"
+    import netlistlib
+    lib = pdk / netlistlib.PDK_STDCELL_FILES[0]
+    lib.parent.mkdir(parents=True)
+    lib.write_text(
+        ".SUBCKT lib__buf_1 I Z VDD VNW VPW VSS\n"
+        "X_i0 Z I VSS VPW nfet_05v0 W=8.2e-07 L=6e-07\n.ENDS\n"
+        ".SUBCKT lib__inv_1 I ZN VDD VNW VPW VSS\n.ENDS\n", encoding="utf-8")
+    monkeypatch.setattr(layoutlib, "pdk_root", lambda: pdk)
+    text, cells = layoutlib.std_cell_subckts(
+        ".subckt top a y vdd vss\n"
+        "x1 a y vdd vdd vss vss lib__buf_1\n"
+        "x2 a m vss ppolyf_u r_width=2u r_length=10u\n.ends\n")
+    assert cells == ["lib__buf_1"]
+    assert text.startswith(".SUBCKT lib__buf_1") and "inv_1" not in text
+    # a netlist that defines the cell itself keeps its own definition
+    _text, cells = layoutlib.std_cell_subckts(
+        ".subckt lib__buf_1 I Z VDD VNW VPW VSS\n.ends\n"
+        ".subckt top a y vdd vss\nx1 a y vdd vdd vss vss lib__buf_1\n.ends\n")
+    assert cells == []
+
+
+def test_run_netgen_lvs_refuses_a_black_box_it_cannot_size(tmp_path, monkeypatch):
+    # shakedown breakage 21: a std cell the reference never defines was
+    # compared as an empty box. A PDK device class netgen does compare the
+    # properties of (lappend devices ...) is fine as a placeholder.
+    pdk = fake_pdk(tmp_path, monkeypatch)
+    (pdk / "libs.tech" / "netgen" / "gf180mcuD_setup.tcl").write_text(
+        "set devices {}\nlappend devices ppolyf_u\n", encoding="utf-8")
+    log = "Final result: Circuits match uniquely.\n"
+
+    def netgen_saying(stdout):
+        def fake(*a, **k):
+            (tmp_path / "out.log").write_text(log, encoding="utf-8")
+            return FakeProc(stdout)
+        return fake
+
+    monkeypatch.setattr(layoutlib, "run_eda", netgen_saying(
+        "Call to undefined subcircuit ppolyf_u\n"))
+    matched, _text = layoutlib.run_netgen_lvs(
+        tmp_path, "a.spice", "a", "b.spice", "b", "out.log")
+    assert matched is True
+    monkeypatch.setattr(layoutlib, "run_eda", netgen_saying(
+        "Call to undefined subcircuit ppolyf_u\n"
+        "Call to undefined subcircuit gf180mcu_fd_sc_mcu7t5v0__buf_20\n"))
+    with pytest.raises(layoutlib.LayoutError, match="buf_20 as black boxes"):
+        layoutlib.run_netgen_lvs(
+            tmp_path, "a.spice", "a", "b.spice", "b", "out.log")

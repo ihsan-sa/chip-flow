@@ -78,9 +78,16 @@ def _resolve_scripts(cmd: str) -> str:
     still checks unresolved) to the real, resolved engine/scripts directory
     - applied once, here, to every rendered step's own command text, so a
     session never has to reconstruct that path itself relative to a repo
-    root it may not be sitting in."""
-    real = (chip_flow_home() / "engine" / "scripts").as_posix()
-    return _SCRIPTS_PREFIX_RE.sub(real + "/", cmd)
+    root it may not be sitting in. A command that starts with a script also
+    gets `bin/eda python` in front: run bare, the script's shebang finds the
+    host's python, which lacks the toolchain's modules (klayout, gdsfactory)
+    that the gates building layout import."""
+    home = chip_flow_home()
+    real = (home / "engine" / "scripts").as_posix()
+    out = _SCRIPTS_PREFIX_RE.sub(real + "/", cmd)
+    if cmd.startswith("scripts/"):
+        out = f"{(home / 'bin' / 'eda').as_posix()} python {out}"
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -407,8 +414,10 @@ def workspace_context(ws: Path | None, imap: dict, skill: str | None = None) -> 
         ctx["block"] = data.get("block")
         registry = data.get("artifacts") or {}
         ctx["state"] = data
+    # A nested msde side is named by the split, never after its directory.
+    ctx["split_block"] = statelib.split_block_name(ws)
     if not ctx["block"]:
-        ctx["block"] = ws.name
+        ctx["block"] = ctx["split_block"] or ws.name
     slots = {"ws": ctx["workspace"], "block": ctx["block"], "skill": skill,
              "state": f"{ctx['workspace']}/state.json"}
     for kind in imap["artifact_kinds"]:
@@ -727,6 +736,14 @@ def run(argv: list[str] | None = None) -> tuple[dict, str | None]:
                       gate_order, needs)
     view = resume_view(ctx)
     pres = check_preconditions(spec, ctx, view)
+    block = argvals.get("block") or ctx["block"]
+    split_block = ctx.get("split_block")
+    if split_block and block != split_block:
+        pres.append({"name": "msde_split_name", "ok": False, "detail": (
+            f"this is the msde split's {Path(ctx['workspace']).name} side, so "
+            f"its block is {split_block!r}, not {block!r} - layout, LVS, "
+            "pex_sim and top_harden name files after it (skills/msde/"
+            "SKILL.md, Run start)")})
     plan["remediations"] = _remediations(argvals.get("findings"))
 
     if spec["workspace"] == "required" and not ctx["exists"]:
@@ -764,7 +781,7 @@ def run(argv: list[str] | None = None) -> tuple[dict, str | None]:
                   "matched": next((c["matched"] for c in candidates
                                    if c["verb"] == verb), [])},
         "candidates": candidates,
-        "workspace": ctx["workspace"], "block": ctx["block"],
+        "workspace": ctx["workspace"], "block": block,
         "workspace_exists": ctx["exists"],
         "args": argvals, "needs": need_list,
         "preconditions": pres, "recipe": plan, "state": view,

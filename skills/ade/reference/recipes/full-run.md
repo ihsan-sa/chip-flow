@@ -49,8 +49,9 @@ decision` that quotes the gate's own `applicable: false`.
 ## H1
 
 Spawn a fresh reviewer once P4 is green. Present its digest with the gate
-table, worst margin per measure first, and record `state.py human
---checkpoint H1`.
+table, worst margin per measure first, with the challenge `state.py
+present --checkpoint H1` prints, and record the person's reply quoting it
+with `state.py human --checkpoint H1 --answer '<reply>'`.
 
 ## P5: layout
 
