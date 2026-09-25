@@ -102,7 +102,7 @@ def run(argv=None):
     ap.add_argument("--out", help="write result JSON here instead of stdout")
     args = ap.parse_args(argv)
 
-    ws = Path(args.workspace)
+    ws = Path(args.workspace).resolve()  # tools run with cwd=log/
     block = layout_gen.block_of(ws, args.block)
     ref_path = find_reference_netlist(ws, block)
     ref_text = ref_path.read_text(encoding="utf-8", errors="replace")

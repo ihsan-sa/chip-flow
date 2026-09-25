@@ -56,7 +56,7 @@ def run(argv=None):
     ap.add_argument("--out", help="write result JSON here instead of stdout")
     args = ap.parse_args(argv)
 
-    ws = Path(args.workspace)
+    ws = Path(args.workspace).resolve()  # tools run with cwd=log/
     gds_path, topcell, _abs_path, _abstract = layout_gen.build(ws, args.block)
 
     rdb_path = (ws / "log" / "analog_drc.lyrdb")

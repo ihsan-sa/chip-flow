@@ -99,7 +99,7 @@ def run(argv=None):
     ap.add_argument("--out", help="write result JSON here instead of stdout")
     args = ap.parse_args(argv)
 
-    ws = Path(args.workspace)
+    ws = Path(args.workspace).resolve()  # tools run with cwd=log/
     block = layout_gen.block_of(ws, args.block)
     bench_tpl, bounds_path = find_bench(ws, block)
     bounds = checklib.load_json(bounds_path, "pex_sim bounds")

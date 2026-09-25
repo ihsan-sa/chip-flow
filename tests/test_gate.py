@@ -338,3 +338,20 @@ def test_record_gate_result_concurrent_writers_do_not_race(tmp_path, monkeypatch
     data = json.loads((ws / "state.json").read_text(encoding="utf-8"))
     assert data["gates"]["lint"]["attempts"] == 2
     assert data["gates"]["lint"]["status"] == "pass"
+
+
+def test_relative_workspace_reaches_the_check_absolute(tmp_path, capsys,
+                                                       monkeypatch):
+    # The analog checks run klayout/magic/netgen with cwd=log/, so a
+    # relative --workspace (the form SKILL.md shows) must reach the check
+    # already absolute or the tool looks for log/blocks/<b>/... .
+    ws = make_ws(tmp_path)
+    gates_yaml = make_gates_yaml(tmp_path)
+    checks_dir = make_checks_dir(tmp_path, FAKE_CHECK.replace(
+        'marker = Path(args.workspace) / "FAIL"',
+        'assert Path(args.workspace).is_absolute(), args.workspace\n'
+        '    marker = Path(args.workspace) / "FAIL"'))
+    monkeypatch.chdir(tmp_path)
+    code = gate.main(["--gate", "lint", "--workspace", "ws",
+                      "--gates", str(gates_yaml), "--checks-dir", str(checks_dir)])
+    assert code == 0, capsys.readouterr().out

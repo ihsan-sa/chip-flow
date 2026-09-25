@@ -29,6 +29,7 @@ check_env.py shape - JSON to stdout/--out, exit 0 ok, 2 error).
 from __future__ import annotations
 
 import argparse
+import contextlib
 import importlib.util
 import json
 import sys
@@ -133,12 +134,15 @@ def build(ws: Path, block: str | None = None):
     check_pex_sim.py - each calls this fresh rather than trusting a GDS
     already on disk."""
     block = block_of(ws, block)
-    mod = load_generator(ws, block)
-    comp = mod.generate()
     layout_dir = ws / "layout"
     layout_dir.mkdir(parents=True, exist_ok=True)
     gds_path = layout_dir / f"{block}.gds"
-    comp.write_gds(str(gds_path))
+    # A generator (or gdsfactory/glayout under it) that print()s would put
+    # text ahead of the caller's JSON on stdout; send it to stderr instead.
+    with contextlib.redirect_stdout(sys.stderr):
+        mod = load_generator(ws, block)
+        comp = mod.generate()
+        comp.write_gds(str(gds_path))
     abstract_path = layout_dir / f"{block}.abstract.json"
     abstract = write_abstract(gds_path, comp.name, abstract_path)
     return gds_path, comp.name, abstract_path, abstract
