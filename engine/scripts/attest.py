@@ -166,6 +166,13 @@ def applicable_gates(skill: str, imap: dict | None = None) -> list[str]:
     way past that for a SPECIFIC, reviewed exception is a durable waiver,
     never a blanket applicability carve-out).
 
+    One narrow exception is decided per build, not here: a gate the
+    block's OWN current spec says it does not ask for (not_applicable_reason
+    below - today only /ade's `mc`) still appears in checks.json, as an ok
+    entry that did not run and says why, bound to spec.yaml's hash so
+    attest.verify() notices the spec changing afterwards. It is never
+    dropped from the list.
+
     The one gate left out is `release` itself: check_release.py calls
     build() to decide release, so counting release among the gates it owes
     would make its first pass demand an earlier one, and it could never
@@ -173,6 +180,41 @@ def applicable_gates(skill: str, imap: dict | None = None) -> list[str]:
     imap = imap or statelib.load_map()
     return sorted(g for g in (imap["gate_inputs"].get(skill) or {})
                   if g != "release")
+
+
+def _mc_not_applicable(ws: Path) -> str | None:
+    """/ade's `mc` (gates.yaml: fault "not applicable by default").
+
+    The decision: release accepts a DECLARED
+    not-applicable, read from the block's current spec.yaml on every
+    build - it does not accept a recorded pass for it. check_mc.py's own
+    not-applicable answer cannot be recorded in state.json (see its
+    comment), and should not be: a pass recorded while MC was off is keyed
+    on netlist/tb and would stay fresh after the spec turned MC on. So the
+    spec is asked again here, with check_mc's own predicate. If the spec
+    is missing or unreadable, MC is owed, never skipped: spec_lint refuses
+    that workspace anyway, and doubt never counts as "not applicable"."""
+    import check_mc
+    import speclib
+    try:
+        spec = speclib.load_spec(ws / "spec" / "spec.yaml")
+        if check_mc.mc_applicable(spec):
+            return None
+    except checklib.CheckError:
+        return None
+    return ("not applicable: spec.yaml asks for no Monte Carlo (no "
+            "'mc.enabled: true'), re-read at this release")
+
+
+# (skill, gate) -> fn(ws) -> reason str when the block's own spec declares
+# the gate not applicable, None when the gate is owed. Deliberately a short
+# explicit list, never a general carve-out (see applicable_gates).
+NOT_APPLICABLE = {("ade", "mc"): _mc_not_applicable}
+
+
+def not_applicable_reason(ws: Path, skill: str, gate: str) -> str | None:
+    fn = NOT_APPLICABLE.get((skill, gate))
+    return fn(ws) if fn else None
 
 
 def gate_check(ws: Path, skill: str, gate: str, data: dict,
@@ -185,6 +227,18 @@ def gate_check(ws: Path, skill: str, gate: str, data: dict,
     of what ran is ... gate, tool and version" (docs/design.md section 2)."""
     tool = (gates_row or {}).get("tool")
     version = checklib.CHECKER_VERSION
+    na = not_applicable_reason(ws, skill, gate)
+    if na:
+        # checks.schema.json keeps `applies: true` for every entry - the
+        # gate is still owed an answer, and this is the answer. ran=False
+        # plus the reason and the spec_yaml hash it was read from say it
+        # was declared, not run; verify() rebuilds and compares this entry,
+        # so a later spec edit turning the gate on invalidates checks.json.
+        _rel, spec_sha = statelib.hash_kind(ws, "spec_yaml", imap,
+                                            data.get("artifacts"))
+        return {"gate": gate, "applies": True, "ran": False, "ok": True,
+                "tool": tool, "version": version, "status": None,
+                "inputs": {"spec_yaml": spec_sha}, "reason": na}
     entry = (data.get("gates") or {}).get(gate)
     if entry is None or not entry.get("status"):
         return {"gate": gate, "applies": True, "ran": False,

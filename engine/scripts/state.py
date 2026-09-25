@@ -296,10 +296,15 @@ class State:
     def gate_coverage(self, phase: str) -> tuple[list[str], list[str]]:
         """(gates owed BEFORE `phase` with no recorded result, gates whose
         last recorded result is a fail). A gate at phase P is owed once the
-        run moves past P."""
+        run moves past P - unless the block's own spec declares it not
+        applicable (attest.NOT_APPLICABLE, re-read from spec.yaml here as
+        release does; a missing or unreadable spec leaves it owed)."""
+        import attest   # lazy: attest imports gate, which imports this
         idx = PHASES.index(phase)
-        owed = [(ph, g) for ph, g in applicable_gate_order(self._skill())
-                if ph in PHASES and PHASES.index(ph) < idx]
+        skill, ws = self._skill(), self.path.parent
+        owed = [(ph, g) for ph, g in applicable_gate_order(skill)
+                if ph in PHASES and PHASES.index(ph) < idx
+                and not attest.not_applicable_reason(ws, skill, g)]
         gates = self.data["gates"]
         missing = [f"{g} ({ph})" for ph, g in owed
                    if not (gates.get(g) or {}).get("status")]

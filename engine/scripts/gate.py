@@ -407,7 +407,7 @@ def main(argv: list[str] | None = None) -> int:
             if not args.workspace:
                 ap.error("--workspace is required unless --report is given")
             report = run_report_for_gate(
-                gate, Path(args.workspace),
+                gate, Path(args.workspace).resolve(),
                 Path(args.checks_dir) if args.checks_dir else None)
 
         result = evaluate(args.gate, gate, report)

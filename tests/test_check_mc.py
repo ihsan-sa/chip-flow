@@ -237,3 +237,36 @@ def test_real_mirror_mc_yields_a_spread(tmp_path):
     mean = sum(values) / len(values)
     stddev = (sum((v - mean) ** 2 for v in values) / len(values)) ** 0.5
     assert stddev > 0, values
+
+
+def test_not_applicable_answer_cannot_be_recorded_as_a_pass(
+        tmp_path, monkeypatch):
+    # check_mc's not-applicable report is stamped with spec.yaml, while
+    # invalidation.yaml keys mc on the netlist: state.json refuses to
+    # record it. Release reads the current spec instead (attest.
+    # _mc_not_applicable), so a stale "not applicable" pass can never
+    # outlive a spec that later turns MC on.
+    import gate as gate_mod
+    import state as state_mod
+    from checklib import CheckError
+
+    ws = make_ws(tmp_path)
+    state_mod.State.init(ws, "ade", "mirror")
+    monkeypatch.setattr(sim_run, "EDA_BIN", make_fake_eda(tmp_path, ["2.0"]))
+    payload, _ = check_mc.run(["--workspace", str(ws)])
+    assert payload["applicable"] is False
+    row = gate_mod.load_gates(gate_mod.DEFAULT_GATES)["ade"]["mc"]
+    result = gate_mod.evaluate("mc", row, payload)
+    assert result["status"] == "pass"
+    st = state_mod.State.load(ws / "state.json")
+    with pytest.raises(CheckError, match="input_digest"):
+        st.record_gate("mc", result, row["phase"])
+
+
+def test_non_mapping_mc_block_is_an_error(tmp_path, monkeypatch, capsys):
+    ws = make_ws(tmp_path, "mc: true\n")
+    monkeypatch.setattr(sim_run, "EDA_BIN", make_fake_eda(tmp_path, ["2.0"]))
+    code = check_mc.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 2, out
+    assert "mapping" in out.get("remediation", "") + out.get("error", "")

@@ -1,21 +1,168 @@
-# tasks.yaml - /ade's own verb table (docs/design.md 1.8, "### M8."). Merged
-# with engine/reference/tasks.yaml's shared verbs (task_router.py:
-# load_tasks) - this file's own entries win on a name collision. Mirrors
-# skills/vde/reference/tasks.yaml's own shape exactly (M2's file): `doc:
-# null` on every row (the recipe markdown under skills/ade/reference/
-# recipes/ is skill/M9+ work, same as vde's own recipes); `layout` (design.md
-# 1.8's fourth /ade verb) is NOT here yet - it needs layout_gen.py and the
-# layout-writer role, both M9 ("### M9.").
+# tasks.yaml - /ade's own verb table (docs/design.md 1.8). Merged with
+# engine/reference/tasks.yaml's shared verbs (task_router.py: load_tasks) -
+# this file's own entries win on a name collision. M8 landed spec, resize,
+# add-corner and optimise; M9 ("### M9.") adds `layout` (layout_gen.py and
+# the layout-writer/layout-fixer roles) and the real `full-run` - the
+# engine's own full-run is a placeholder that stops right after state.py
+# init. Doc files live under skills/ade/reference/recipes/.
+#
+# Analog phases (docs/design.md 1.4): P0 intake, P1 spec, P2 topology, P3
+# bench (before any netlist exists), P4 sizing and the simulation gates,
+# H1, P5 layout and its gates, H2, P6 release. state.py's phase list is
+# shared with vde (P0..P8), so an ade run ends at P6 and never visits P7/P8.
 
 version: 1
 verbs:
+
+  # -------------------------------------------------------------------------
+  full-run:
+    summary: The whole analog pipeline, spec.md to a released package -
+      P1 spec through P6 release, agents and gates interleaved in phase
+      order. Overrides the engine's own placeholder (which stops right
+      after state.py init).
+    doc: skills/ade/reference/recipes/full-run.md
+    workspace: created
+    edit_class: null
+    gates: []
+    human_hold: 0
+    match:
+      any: ['\bdesign (me )?an?\b', '\bdesign [a-z0-9_-]+ from\b',
+            '\bbuild (me )?an?\b', '\bnew block\b',
+            '\bfrom scratch\b', '\bfull (run|pipeline)\b',
+            '\bend[- ]to[- ]end\b', '\bwhole pipeline\b']
+      weight: 1
+    steps:
+      - do: "scripts/state.py init --workspace {ws} --skill {skill} --block {block}"
+        why: "workspace + subdirs, in-repo so gate commits work"
+      - do: "scripts/state.py resume --workspace {ws}"
+        why: "confirm the scaffold and starting phase"
+      - note: "P0 intake: copy the task's spec file(s) into {ws}/brief/
+               verbatim - never a corpus rung's own spec.yaml, netlist/,
+               tb/, sizing/ or layout/, which are its answer key. Write
+               log/P0-digest.md before the first set-phase call below."
+      - do: "scripts/state.py set-phase --workspace {ws} --phase P1"
+        why: "enter P1 - spec writing"
+      - agent: spec-writer
+        tier: fable/high
+        why: "P1 - brief/ -> spec/spec.md + spec/spec.yaml: supply,
+              measures with bounds, corners, post_layout_bounds. No web
+              tools."
+      - gate: spec_lint
+        why: "a measure without bounds is refused here, never carried
+              forward"
+      - note: "Write log/P1-digest.md before advancing."
+      - do: "scripts/state.py set-phase --workspace {ws} --phase P2"
+        why: "enter P2 - topology"
+      - agent: analog-designer
+        tier: fable/high
+        why: "P2, TOPOLOGY MODE - picks a template from reference/
+              topologies/, writes spec/topology.md (subckt name, pin
+              order, device refdes, design equations) and fills
+              spec.yaml's `devices`. No netlist yet."
+      - gate: spec_lint
+        why: "the designer's `devices` edit must leave the spec valid"
+      - note: "Write log/P2-digest.md before advancing."
+      - do: "scripts/state.py set-phase --workspace {ws} --phase P3"
+        why: "enter P3 - benches, before any netlist exists"
+      - agent: bench-writer
+        tier: opus/high
+        why: "tb/*.cir with .measure lines and a .bounds.json sidecar per
+              bench, from spec/ and spec/topology.md only, in fresh
+              context (docs/design.md 5)"
+      - gate: spec_lint
+        why: "now that tb/ exists, spec_lint also cross-checks every spec
+              measure against a bench bound, and back"
+      - note: "Write log/P3-digest.md before advancing."
+      - do: "scripts/state.py set-phase --workspace {ws} --phase P4"
+        why: "enter P4 - netlist, sizing and the simulation gates"
+      - agent: analog-designer
+        tier: opus/high
+        why: "P4, NETLIST MODE - netlist/<block>.cir against gf180mcu_fd_pr
+              models and sizing/sizing.yaml with a bound on every entry;
+              sees tb/ but never edits it. No web tools."
+      - gate: netlist_lint
+        why: "cheapest first - PDK models, declared devices, no floating
+              node, and an ngspice dry run through the P3 bench"
+      - gate: sim_tt
+        why: "every .measure inside its bound at typical"
+      - gate: sim_pvt
+        why: "every measure at every corner - the default five, never
+              fewer"
+      - gate: bench_strength
+        why: "scores the BENCH - a survivor routes to the bench-writer,
+              never the analog-designer (docs/design.md section 2)"
+      - gate: mc
+        why: "Monte Carlo yield, only when spec.yaml asks (mc.enabled)"
+      - note: "Any gate above failing: the fix loop (SKILL.md) - budget,
+               snapshot, fix_dispatch.py, one agent per work order,
+               declare the edit, re-run. A sizing miss across corners may
+               go through the `optimise` verb instead of hand-resizing.
+               Do not advance past a fail."
+      - note: "Write log/P4-digest.md before H1: numbers first - worst
+               margin per measure and at which corner, bench_strength kill
+               count, mc yield or 'not applicable', open issues."
+      - agent: reviewer
+        tier: fable/high
+        why: "H1 - fresh context; reads netlist and benches against the
+              spec, not just the gate table"
+      - human: H1
+        why: "present the reviewer's digest + gate table; the person
+              decides whether the sized netlist is done (docs/design.md
+              1.4: H1 before layout)"
+      - do: "scripts/state.py set-phase --workspace {ws} --phase P5"
+        why: "enter P5 - layout. No --force: every P4 gate needs a recorded
+              result first (SKILL.md, Known limits, has the one mc case
+              where the engine cannot record one)"
+      - agent: bench-writer
+        tier: opus/high
+        why: "PEX MODE - layout_ref/<block>_pex_tb.cir + .bounds.json from
+              spec.yaml's post_layout_bounds, measuring what parasitics
+              move; fresh context, before the layout exists"
+      - agent: layout-writer
+        tier: opus/high
+        why: "layout/gen_<block>.py against gdsfactory + GF180 primitives
+              (engine/lib/layoutlib.py); generator code, never a GDS. No
+              web tools."
+      - do: "scripts/layout_gen.py --workspace {ws}"
+        why: "runs the generator and writes layout/<block>.gds + its
+              abstract - a generator that does not run is caught here,
+              before three gates each rebuild it"
+      - gate: drc
+        why: "0 violations from klayout's GF180 signoff deck"
+      - gate: lvs
+        why: "netgen: the generated layout against netlist/ at its sizing"
+      - gate: pex_sim
+        why: "magic-extracted parasitics, post-layout bench at typical,
+              every measure inside post_layout_bounds"
+      - note: "drc/lvs/pex_sim failing: the fix loop again - work orders
+               go to the layout-fixer, who edits the generator only.
+               Write log/P5-digest.md before H2."
+      - agent: reviewer
+        tier: fable/high
+        why: "H2 - fresh context again; layout generator, gate table and
+              attest.py disposition"
+      - human: H2
+        why: "the person signs off the layout before release (docs/
+              design.md 1.4); submitting to a shuttle is always theirs"
+      - do: "scripts/state.py set-phase --workspace {ws} --phase P6"
+        why: "enter P6 - release. No --force: drc, lvs and pex_sim must
+              each have a recorded result; a gap here is a refusal to
+              fix, never a phase jump"
+      - gate: release
+        why: "strict - every applicable gate fresh-pass on the current
+              inputs, or a refusal naming each miss"
+      - do: "scripts/attest.py build --workspace {ws}"
+        why: "assembles reports/checks.json once release is fresh-pass"
+      - do: "scripts/attest.py disposition --workspace {ws}"
+        why: "the derived release state, for the final digest"
+      - note: "Write log/P6-digest.md, then set-phase done."
 
   # -------------------------------------------------------------------------
   spec:
     summary: Write or refresh a block's spec.yaml/spec.md - supply, devices,
       corners and measure bounds - then lint it before anything downstream
       trusts it.
-    doc: null
+    doc: skills/ade/reference/recipes/spec.md
     workspace: required
     edit_class: spec_edit
     preconditions: [workspace]
@@ -44,7 +191,7 @@ verbs:
       device's W/L/value directly) and re-run the sim gates that sizing
       feeds - never just sim_tt alone, since a fix at typical can lose
       headroom at a corner sim_tt never looks at.
-    doc: null
+    doc: skills/ade/reference/recipes/resize.md
     workspace: required
     edit_class: sizing_edit
     preconditions: [workspace]
@@ -78,13 +225,17 @@ verbs:
         why: "a resize that widens margin by widening the BENCH's own
               bounds instead of the design is what this gate exists to
               catch (docs/design.md section 2)"
+      - note: "lvs and pex_sim are stale too once a layout exists: the
+               generator's own device sizes must follow the new sizing -
+               a layout-fixer work order, never an edit to netlist/ to
+               match the old layout."
 
   # -------------------------------------------------------------------------
   add-corner:
     summary: Add a PVT corner to a block's own spec.yaml `corners` list
       (from engine/reference/corners.yaml's raw axes, via corners.py) and
       re-run sim_pvt against the widened set.
-    doc: null
+    doc: skills/ade/reference/recipes/add-corner.md
     workspace: required
     edit_class: spec_edit
     preconditions: [workspace]
@@ -115,13 +266,53 @@ verbs:
               never fewer', and this verb is how a spec asks for more"
 
   # -------------------------------------------------------------------------
+  layout:
+    summary: Write or change a block's layout generator (layout/
+      gen_<block>.py - gdsfactory code placing GF180 primitives and routing
+      them explicitly), regenerate the GDS and re-run drc, lvs and pex_sim.
+      Layout is code; nobody edits the GDS.
+    doc: skills/ade/reference/recipes/layout.md
+    workspace: required
+    edit_class: layout_code_edit
+    preconditions: [workspace]
+    match:
+      any: ['\blayout\b', '\blay (it |this |the [a-z0-9_-]+ )?out\b',
+            '\bto gds\b', '\bgds\b', '\bgenerator\b',
+            '\bgen_[a-z0-9_]+\.py\b', '\bdraw (the )?(cell|block)\b',
+            '\bguard ring\b', '\bplace and route\b']
+    steps:
+      - do: "scripts/state.py resume --workspace {ws}"
+        why: "the netlist and its sizing are what LVS compares against -
+              sim_pvt should be fresh-pass before layout is worth drawing"
+      - agent: layout-writer
+        tier: opus/high
+        why: "layout/gen_<block>.py only - device sizes read from netlist/
+              and sizing/, pins in the netlist's subckt order. No web
+              tools."
+      - do: "scripts/state.py edit --workspace {ws} --class layout_code_edit --note \"layout\""
+        why: "declare the edit - marks drc, lvs, pex_sim and release stale"
+      - do: "scripts/layout_gen.py --workspace {ws}"
+        why: "the generator must run and write a GDS before three gates
+              each rebuild it"
+      - gate: drc
+        why: "klayout's GF180 signoff deck, 0 violations"
+      - gate: lvs
+        why: "netgen, generated layout vs the sized netlist"
+      - gate: pex_sim
+        why: "post-layout bench at typical against post_layout_bounds"
+      - note: "Any of the three failing: the fix loop, work orders to the
+               layout-fixer (fix_dispatch.py names skills/ade/agents/
+               layout-fixer.md in each order's role_prompt). Declare
+               layout_code_edit after each fix, re-run the failed gate."
+
+  # -------------------------------------------------------------------------
   optimise:
     summary: Run the sizing optimise loop (docs/design.md section 4) against
       sizing/sizing.yaml - a fixed-budget evaluator (the spec bench at
       typical, every K-th trial and the winner at the full corner set) an
       agent or `optimise.py numeric` cannot edit, kept only if the score
       improved.
-    doc: null
+    doc: skills/ade/reference/recipes/optimise.md
     workspace: required
     edit_class: sizing_edit
     preconditions: [workspace]

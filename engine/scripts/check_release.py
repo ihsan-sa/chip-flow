@@ -44,6 +44,7 @@ sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(ENGINE / "lib"))
 import checklib  # noqa: E402
 import attest as attest_mod  # noqa: E402
+import statelib  # noqa: E402
 
 SCRIPT = "check_release"
 # msde's nested workspaces: directory under the msde block -> its skill.
@@ -75,13 +76,14 @@ def input_path(ws: Path) -> Path:
     """The path this release's report digests: the first input kind
     invalidation.yaml's gate_inputs names for this skill's release (rtl
     for vde, netlist for ade, interface for msde)."""
-    import statelib
     data = checklib.load_json(ws / "state.json", "state.json")
     imap = statelib.load_map()
     kinds = (imap["gate_inputs"].get(data.get("skill")) or {}).get("release")
     if not kinds:
-        return ws / "rtl"
-    return ws / imap["artifact_kinds"][kinds[0]]["path"]
+        raise checklib.CheckError(
+            f"invalidation.yaml has no gate_inputs.{data.get('skill')}."
+            "release - a release with no input hashes is not evidence")
+    return ws / statelib.kind_path(kinds[0], imap, data.get("artifacts"))
 
 
 def run(argv=None):
@@ -119,9 +121,11 @@ def run(argv=None):
 
     # stamp() hashes exactly this path as input_digest; gate.py's own
     # record_gate cross-checks that against invalidation.yaml's gate_inputs
-    # kinds[0] for this gate (input_path above).
+    # kinds[0] for this skill's release row (input_path above) - so an
+    # /ade block, which has no rtl/, still records its release pass.
     payload = checklib.report(SCRIPT, input_path(ws), violations, **facts)
     return payload, args.out
+
 
 
 def main(argv=None) -> int:

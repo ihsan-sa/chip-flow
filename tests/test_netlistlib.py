@@ -158,3 +158,15 @@ def test_device_mutants_only_mutates_its_own_line():
         orig_line = next(l for l in MIRROR_NETLIST.splitlines()
                          if l.startswith(other_ref))
         assert orig_line in out
+
+
+@pytest.mark.parametrize("w, doubled", [("{w_out}", "w={(w_out)*2}"),
+                                        ("4u", "w={(4u)*2}")])
+def test_size_doubled_wraps_a_non_numeric_value_in_one_expression(w, doubled):
+    # ngspice reads `w={w_out}*2` as w_out and drops the `*2`, so the mutant
+    # once equalled the baseline and every bench looked too weak
+    net = f"xmout out ref 0 0 nfet_03v3 w={w} l=1u\n"
+    m = next(m for m in netlistlib.device_mutants(net, ["xmout"])
+             if m["kind"] == "size_doubled")
+    out = m["apply"](net)
+    assert doubled in out and "}*2" not in out

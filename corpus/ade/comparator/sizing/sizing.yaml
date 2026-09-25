@@ -1,0 +1,29 @@
+# sizing.yaml (docs/design.md section 4) - this rung's own sizing, and the
+# values netlist/comparator.cir's global .param defaults carry. W and L in
+# meters. Ranges are strongarm_comparator.sp's SIZING BOUNDS; L stays at
+# the 3.3V devices' minimum (0.28um) for every device, as that template
+# asks for the tail and resets and allows for the rest.
+w_tail:
+  value: 6.0e-6
+  min: 4.0e-6
+  max: 2.0e-5
+w_in:
+  value: 4.0e-6
+  min: 2.0e-6
+  max: 2.0e-5
+w_latch_n:
+  value: 2.0e-6
+  min: 2.0e-6
+  max: 1.0e-5
+w_latch_p:
+  value: 4.0e-6
+  min: 2.0e-6
+  max: 1.0e-5
+w_reset:
+  value: 2.0e-6
+  min: 2.0e-6
+  max: 8.0e-6
+l_min:
+  value: 2.8e-7
+  min: 2.8e-7
+  max: 2.8e-7

@@ -1,0 +1,45 @@
+# faults manifest (docs/design.md section 3, "### M9."): one entry per
+# pre-layout ade gate this rung demonstrates - same contract as corpus/
+# mirror's own manifest (faults.py copies the rung into a scratch
+# workspace, imports plant.py's `plant(ws)` and runs it, then runs `gate`
+# and checks the result against `expect`).
+#
+# `mc` has no entry (same as mirror's own manifest): this rung's spec.yaml
+# has no `mc` block, so gates.yaml's own "not applicable by default" fault
+# for that row already covers it.
+#
+# `drc`, `lvs`, `pex_sim` and `release` have no entries either. docs/
+# design.md "### M9." names this rung's row as one that "may stay red at
+# layout": there is no `layout/` generator here, and building one is out of
+# scope for this rung (M9's boundaries section: smoke-tested on the
+# inverter and the mirror first, and the corpus only asks the mirror and
+# the R2R DAC to go all the way to a signed-off GDS). Adding fault entries
+# for gates that have no tool to run against would not demonstrate
+# anything - faults.py's own untouched-reference pre-check would refuse on
+# a missing `layout/` dir before a single fault ever got planted. `release`
+# is omitted for the same reason one level up: it is strict and requires
+# every OTHER ade gate (including the three layout gates above) to already
+# carry a fresh recorded pass, which this rung can never produce without
+# them.
+version: 1
+faults:
+  - name: spec_lint_measure_no_bounds
+    gate: spec_lint
+    plant: plant_spec_lint.py
+    expect: {status: fail, kind: measure_no_bounds}
+  - name: netlist_lint_model_not_in_pdk
+    gate: netlist_lint
+    plant: plant_netlist_lint.py
+    expect: {status: fail, kind: model_not_in_pdk}
+  - name: sim_tt_output_branch_wl_swapped
+    gate: sim_tt
+    plant: plant_sim_tt.py
+    expect: {status: fail, kind: sim_bound_fail}
+  - name: sim_pvt_meets_typical_loses_headroom
+    gate: sim_pvt
+    plant: plant_sim_pvt.py
+    expect: {status: fail, kind: sim_bound_fail}
+  - name: bench_strength_bounds_too_wide
+    gate: bench_strength
+    plant: plant_bench_strength.py
+    expect: {status: fail, kind: survivor_size_doubled}
