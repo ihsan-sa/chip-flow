@@ -256,9 +256,9 @@ Goal: `evals/` with the ladder, per-stage benches on frozen fixtures, the CVDP r
 
 Why: evals are one of the points of the project, and the optimise loop that follows needs baselines.
 
-Boundaries: section 3. `ladder.py` scores a run a session made; it does not drive an agent. Fixtures frozen from M5's runs with `bench.py --freeze`. CVDP at a pinned commit, the subset rule in `evals/cvdp/README.md`, the number reported with its caveat. The RISC-V rung joins the corpus with faults, and its row may stay red.
+Boundaries: section 3. `ladder.py` scores a run a session made; it does not drive an agent. Fixtures are frozen with `bench.py --freeze` from the corpus reference rungs, because M5 kept no run workspaces, and are re-frozen from /vde runs once a /vde session takes a rung to release. CVDP at a pinned commit, the subset rule in `evals/cvdp/README.md`, the number reported with its caveat. The RISC-V rung joins the corpus with faults, and its row may stay red.
 
-Done when `ladder.py --skill vde --rung uart --run <ws>` writes a result and `ladder.md` regenerates with all four vde rungs; `bench.py --stage P4 --fixture uart_rtl --compare` exits 0 against its baseline and 1 when the fixture's RTL is broken; `evals/cvdp/run.py --limit 20` writes a result with pass rate by category; the full subset run is attached to the PR with its number.
+Done when `ladder.py --skill vde --rung uart --run <ws>` writes a result and `ladder.md` regenerates with all four vde rungs as reference baselines, its /vde column reading 'not run' until a skill run is scored; `bench.py --stage P4 --fixture uart_rtl --compare` exits 0 against its baseline and 1 when the fixture's RTL is broken; `evals/cvdp/run.py --limit 20` writes a result with pass rate by category; the full subset run is attached to the PR with its number.
 
 ### M7. The optimise loop for Verilog
 
