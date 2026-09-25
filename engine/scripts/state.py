@@ -26,7 +26,8 @@ Schema (version 3):
                             stale: [mark]?}},
       "jobs": {id: {gate, pid, started, finished?, status: running|done|dead,
                     log, result?}},
-      "holdout": {"sha", "written_by", "ts"} | null,
+      "holdout": {"sha", "written_by", "ts", "edits_at_pin",
+                  "replaced_sha"?} | null,
       "optimise": {"trials", "evaluator_sha", "best": {trial, score}} | null,
       "human": {checkpoint_id: {status: presented|approved|rejected|skipped,
                                 challenge, digest, presented, ts?, answer?,
@@ -64,7 +65,10 @@ CLI (docs/design.md 1.1 script contract: argparse, JSON to stdout, exit 0 ok
     state.py toolchain --image PATH [--versions-sha SHA] [--pdk NAME] [--pdk-sha SHA]
     state.py job-start --gate NAME --pid N --log PATH ...
     state.py job-update --job ID --status done|dead [--result FILE] ...
-    state.py holdout --written-by tb-writer ...
+    state.py holdout --written-by tb-writer ...   (pins holdout/'s hash; a
+        later change must be declared with `edit --class holdout_edit` (or
+        spec_edit) before rehash, a re-pin or record-gate --gate holdout
+        will run over it - resume reports it as holdout_drift)
     state.py decision --what W --why Y ...
     state.py present --checkpoint H1 ...
     state.py human --checkpoint H1 --status approved --answer TEXT [--note N] ...
@@ -431,6 +435,8 @@ class State:
                         f"current {kinds[0]} ({rel}) - the result describes "
                         "a different or stale artifact; re-run the gate "
                         "against the current file")
+        if gate == "holdout":
+            self._refuse_holdout_drift("record the holdout gate")
         entry = {"ts": now(), "status": status,
                  "failing_count": result.get("failing_count", 0),
                  "total": (result.get("counts") or {}).get("total", 0),
@@ -549,6 +555,10 @@ class State:
         ws = self.path.parent
         registry = self.data["artifacts"]
         explicit = names is not None
+        if names is None or "holdout" in names:
+            # a bare rehash is what resume runs; it must not absorb an
+            # undeclared holdout/ change into the registry
+            self._refuse_holdout_drift("rehash")
         if names is None:
             names = sorted(set(registry) | {
                 k for k in imap["artifact_kinds"]
@@ -600,13 +610,66 @@ class State:
         """Hash holdout/ into state.holdout at creation (section 2): a
         held-out test's own hash, pinned once, so a run can tell whether
         the tb-writer's holdout set has changed under it."""
+        drift = self._refuse_holdout_drift("re-pin holdout/")
         imap = self._imap()
         rel, sha = statelib.hash_kind(self.path.parent, "holdout", imap,
                                       self.data["artifacts"])
-        rec = {"sha": sha, "written_by": written_by, "ts": now()}
+        # the pin remembers how many edits existed when it was taken, so a
+        # later drift is answered only by an edit declared AFTER it (list
+        # order, not the second-resolution timestamps)
+        rec = {"sha": sha, "written_by": written_by, "ts": now(),
+               "edits_at_pin": len(self.data["edits"])}
+        if drift:
+            rec["replaced_sha"] = drift["pinned"]
         self.data["holdout"] = rec
-        self._log("holdout", written_by=written_by, sha=sha)
+        self._log("holdout", written_by=written_by, sha=sha,
+                  **({"replaced_sha": drift["pinned"]} if drift else {}))
         return rec
+
+    def _holdout_edit_classes(self) -> set[str]:
+        """Edit classes of this skill that declare a holdout/ change: the
+        ones that rewrite it (holdout_edit) or mark it stale (spec_edit)."""
+        classes = self._imap()["edit_classes"].get(self._skill()) or {}
+        return {name for name, ec in classes.items()
+                if "holdout" in (ec.get("mutates") or [])
+                or "holdout" in (ec.get("stale_artifacts") or [])}
+
+    def holdout_drift(self) -> dict | None:
+        """holdout/'s current hash against the state.holdout pin. None when
+        nothing is pinned or nothing changed; otherwise {pinned, current,
+        declared} where declared names the edit that owns the change (an
+        edit of a holdout-declaring class made after the pin) or is None."""
+        pin = self.data.get("holdout")
+        if not isinstance(pin, dict) or not pin.get("sha"):
+            return None
+        _, cur = statelib.hash_kind(self.path.parent, "holdout", self._imap(),
+                                    self.data["artifacts"])
+        if cur == pin["sha"]:
+            return None
+        edits = self.data["edits"]
+        start = pin.get("edits_at_pin")
+        after = (edits[start:] if isinstance(start, int)
+                 else [e for e in edits if e.get("ts", "") >= pin.get("ts", "")])
+        classes = self._holdout_edit_classes()
+        declared = next((e for e in reversed(after)
+                         if e.get("class") in classes), None)
+        return {"pinned": pin["sha"], "current": cur,
+                "declared": ({"class": declared["class"], "ts": declared["ts"]}
+                             if declared else None)}
+
+    def _refuse_holdout_drift(self, action: str) -> dict | None:
+        """Breakage 12: an undeclared change to holdout/ is refused, never
+        re-hashed over. Returns the (declared) drift, or None."""
+        drift = self.holdout_drift()
+        if drift and not drift["declared"]:
+            raise CheckError(
+                f"holdout/ changed since state.holdout was pinned "
+                f"({drift['pinned']} -> {drift['current']}) and no edit "
+                f"declares it, so state.py will not {action}. Declare it: "
+                "`state.py edit --class holdout_edit --note WHY`, then "
+                "re-pin with `state.py holdout --written-by <who>`; or "
+                "restore holdout/ to the pinned files")
+        return drift
 
     # ---- jobs (docs/design.md 1.7) ---------------------------------------
     def start_job(self, gate: str, pid: int, log: str) -> tuple[str, dict]:
@@ -980,6 +1043,7 @@ class State:
             "gates_stale": fresh["summary"]["stale"],
             "gates_freshness_unknown": fresh["summary"]["unknown"],
             "human_hold_pending": fresh["summary"]["human_hold_pending"],
+            "holdout_drift": self.holdout_drift(),
             "open_issues": open_issues, "running_jobs": running_jobs,
             "budgets": self.data["budgets"],
             "artifacts": self.data["artifacts"], "last_event": last,

@@ -619,3 +619,74 @@ def test_cli_main_json_error_contract(tmp_path, capsys):
     out = json.loads(capsys.readouterr().out)
     assert out["status"] == "error"
     assert "remediation" in out
+
+
+# ------------------------------------------- holdout drift (breakage 12)
+
+def _pinned_holdout(tmp_path):
+    ws = ws_empty(tmp_path)
+    state_mod.State.init(ws, "vde", "counter8")
+    (ws / "holdout" / "t1.py").write_text("assert True\n", encoding="utf-8")
+    st = state_mod.State.load(ws / "state.json")
+    st.record_holdout("tb-writer")
+    return ws, st
+
+
+def test_holdout_unchanged_is_not_drift(tmp_path):
+    ws, st = _pinned_holdout(tmp_path)
+    assert st.holdout_drift() is None
+    st.rehash()                                    # a bare rehash still runs
+    assert st.resume_summary()["holdout_drift"] is None
+
+
+def test_undeclared_holdout_change_refuses_rehash_repin_and_gate(tmp_path):
+    ws, st = _pinned_holdout(tmp_path)
+    (ws / "holdout" / "t1.py").write_text("assert 1\n", encoding="utf-8")
+    drift = st.holdout_drift()
+    assert drift["declared"] is None and drift["current"] != drift["pinned"]
+    assert st.resume_summary()["holdout_drift"]["declared"] is None
+    for call in (lambda: st.rehash(), lambda: st.rehash(["holdout"]),
+                 lambda: st.record_holdout("tb-writer"),
+                 lambda: st.record_gate("holdout", {"status": "pass"})):
+        with pytest.raises(CheckError, match="holdout_edit"):
+            call()
+    # a rehash that names other artifacts only is not the holdout's business
+    st.rehash(["rtl"])
+
+
+def test_holdout_edit_declares_the_change_and_repin_consumes_it(tmp_path):
+    ws, st = _pinned_holdout(tmp_path)
+    old = st.data["holdout"]["sha"]
+    (ws / "holdout" / "t1.py").write_text("assert 1\n", encoding="utf-8")
+    st.apply_edit("holdout_edit", note="fix a wrong expected value")
+    assert st.holdout_drift()["declared"]["class"] == "holdout_edit"
+    st.rehash()
+    st.record_gate("holdout", {"status": "pass"})
+    rec = st.record_holdout("tb-writer")
+    assert rec["replaced_sha"] == old and rec["sha"] != old
+    assert st.holdout_drift() is None
+    # the declaration was spent by the re-pin: a further change needs its own
+    (ws / "holdout" / "t1.py").write_text("assert 2\n", encoding="utf-8")
+    with pytest.raises(CheckError, match="no edit declares it"):
+        st.rehash()
+
+
+def test_spec_edit_also_declares_a_holdout_change(tmp_path):
+    ws, st = _pinned_holdout(tmp_path)
+    (ws / "holdout" / "t1.py").write_text("assert 1\n", encoding="utf-8")
+    st.apply_edit("spec_edit")
+    assert st.holdout_drift()["declared"]["class"] == "spec_edit"
+    st.record_holdout("tb-writer")
+
+
+def test_edit_declared_before_the_pin_does_not_cover_a_later_change(tmp_path):
+    ws = ws_empty(tmp_path)
+    state_mod.State.init(ws, "vde", "counter8")
+    (ws / "holdout" / "t1.py").write_text("assert True\n", encoding="utf-8")
+    st = state_mod.State.load(ws / "state.json")
+    st.apply_edit("holdout_edit")
+    st.record_holdout("tb-writer")
+    (ws / "holdout" / "t1.py").write_text("assert 1\n", encoding="utf-8")
+    assert st.holdout_drift()["declared"] is None
+    with pytest.raises(CheckError):
+        st.rehash()

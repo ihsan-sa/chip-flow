@@ -231,6 +231,11 @@ On gate fail (exit 1, result JSON has `failing` with a `kind`/`file`/
   section 2). The fixer domain is `rtl` (a real functional gap the visible
   tests missed), but its remediation and guidance must stay silent on
   which held-out test caught it.
+- **A change to `holdout/` is declared, never re-hashed over.** Once the
+  tb-writer pins it (`state.py holdout`), `rehash`, a re-pin and
+  `record-gate --gate holdout` all refuse while `holdout/` differs from the
+  pin, until `state.py edit --class holdout_edit --note WHY` (hold 2) or a
+  `spec_edit` declares the change; `resume` shows it as `holdout_drift`.
 - **A `formal` `engine_disagreement` or `cover_not_reached`** routes to the
   `formal` domain (the property, not the design) - "widen the induction
   depth or fix the property, never loosen it to make the gate pass"
