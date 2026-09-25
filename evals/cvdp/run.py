@@ -93,6 +93,8 @@ CATEGORIES = {
     "cid007": "code improvement",
     "cid016": "bug fixing",
 }
+BORROW_FROM = {"cid004", "cid007"}
+MAX_DONORS = 2
 IMAGES = {"__OSS_SIM_IMAGE__", "__OSS_PNR_IMAGE__"}
 # Dockerfile lines that only add pytest, which `eda python` already has.
 DOCKERFILE_OK = re.compile(
@@ -111,6 +113,12 @@ CAVEAT = ("Not the official CVDP harness: each problem's docker-compose "
 MODE_NOTE = {
     "reference": "the dataset's own reference solutions",
     "solutions": "solutions supplied with --solutions",
+    "borrowed": ("each problem scored with the working RTL a sibling problem "
+                 "of its family ships (a cid004/cid007 problem's code before "
+                 "the change), first of up to two siblings to pass. Only "
+                 "problems with such a sibling are run. A pass shows the native "
+                 "harness can pass the problem; a fail may be the older code "
+                 "not meeting the newer spec"),
     "null": ("no solutions: each problem's own input files, unchanged. The "
              "public v1.1 set ships no reference solutions, so this is a "
              "floor plus a harness-reach check (tests_ran), not a model score"),
@@ -334,36 +342,81 @@ def _safe_rel(rel: str) -> Path:
     return p
 
 
-def stage(row: dict, root: Path, mode: str, solutions: Path | None) -> list[str]:
+def stage(row: dict, root: Path, overlay: dict) -> None:
     """Lay the problem out under root the way its containers see it:
-    root/code (the candidate's files), root/src (the harness). Returns the
-    candidate files placed."""
+    root/code (the problem's input files, then the candidate's on top),
+    root/src (the harness, container paths rewritten)."""
     code = root / "code"
     (code / "rundir").mkdir(parents=True)
     (root / "rundir" / "harness").mkdir(parents=True)
     ctx = dict((row.get("input") or {}).get("context") or {})
-    placed = []
-    if mode == "reference":
-        ctx.update(row["output"]["context"])
-    for rel, text in ctx.items():
+    ctx.update(overlay)
+    for rel, body in ctx.items():
         dst = code / _safe_rel(rel)
         dst.parent.mkdir(parents=True, exist_ok=True)
-        dst.write_text(text, encoding="utf-8")
-        placed.append(rel)
-    if mode == "solutions" and solutions is not None:
-        src = solutions / row["id"]
-        for f in sorted(p for p in src.rglob("*") if p.is_file()):
-            rel = f.relative_to(src)
-            dst = code / rel
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(f, dst)
-            placed.append(str(rel))
+        if isinstance(body, bytes):
+            dst.write_bytes(body)
+        else:
+            dst.write_text(body, encoding="utf-8")
     for rel, text in row["harness"]["files"].items():
         if rel.startswith("src/"):
             dst = root / _safe_rel(rel)
             dst.parent.mkdir(parents=True, exist_ok=True)
             dst.write_text(rewrite(text, root), encoding="utf-8")
-    return placed
+
+
+def sources(row: dict) -> list[str]:
+    """The design files the harness compiles, relative to /code."""
+    env = {}
+    for s in services(row):
+        for e in s["env_files"]:
+            env.update(parse_env(row["harness"]["files"].get(e, "")))
+    return [re.sub(r"^/code/", "", p)
+            for p in env.get("VERILOG_SOURCES", "").split()]
+
+
+def family(pid: str) -> str:
+    return re.sub(r"_\d+$", "", pid)
+
+
+def donors(rows: list[dict], chosen: list[dict]) -> dict:
+    """For --borrow: {problem id: [sibling ids]} - problems of the same
+    family (id without its _NNNN) in a category whose shipped input is
+    working RTL (cid004 code modification, cid007 code improvement: the
+    code before the change), which ship every file this problem's harness
+    compiles. Their RTL is a correct answer to an earlier spec, so it may
+    pass this one: evidence the native harness can pass the problem."""
+    fams: dict[str, list[dict]] = {}
+    for r in sorted(rows, key=lambda r: r["id"]):
+        if r["categories"][0] in BORROW_FROM:
+            fams.setdefault(family(r["id"]), []).append(r)
+    out = {}
+    for r in chosen:
+        need = sources(r)
+        found = [o["id"] for o in fams.get(family(r["id"]), [])
+                 if o["id"] != r["id"] and need and
+                 all((o["input"].get("context") or {}).get(n) for n in need)]
+        if found:
+            out[r["id"]] = found[:MAX_DONORS]
+    return out
+
+
+def candidates(row: dict, mode: str, solutions: Path | None,
+               donor_rows: list[dict]) -> list[tuple[str, dict]]:
+    """[(label, files laid over the problem's input)] to try in order; the
+    problem passes on the first that passes. Empty: nothing to score."""
+    if mode == "null":
+        return [("input", {})]
+    if mode == "reference":
+        return [("reference", row["output"]["context"])]
+    if mode == "borrowed":
+        return [(d["id"], {k: v for k, v in d["input"]["context"].items()
+                           if k.startswith("rtl/")}) for d in donor_rows]
+    src = solutions / row["id"]
+    if not src.is_dir():
+        return []
+    return [("solutions", {str(f.relative_to(src)): f.read_bytes()
+                           for f in sorted(src.rglob("*")) if f.is_file()})]
 
 
 def eda_argv(argv: list[str], root: Path) -> list[str]:
@@ -397,6 +450,11 @@ def run_service(svc: dict, row: dict, root: Path, timeout: float) -> dict:
         out, _ = proc.communicate()
         rc = None
     log = out.decode("utf-8", "replace")
+    # cocotb's runner sends the compiler's own messages to sim.log, not to
+    # pytest's output: fold them in so a compile failure says why.
+    for f in sorted(root.rglob("sim.log")):
+        log += f"\n--- {f.relative_to(root)} ---\n" + \
+            f.read_text(encoding="utf-8", errors="replace")[-4000:]
     (root / f"{svc['name']}.log").write_text(log, encoding="utf-8")
     return {"service": svc["name"], "rc": rc, "log": log,
             "wall_s": round(time.monotonic() - t0, 1)}
@@ -437,32 +495,43 @@ def classify(results: list[dict]) -> tuple[str, str, bool]:
     return "fail", f"{bad['service']} exit {bad['rc']}", tests_ran
 
 
-def run_problem(row: dict, mode: str, solutions: Path | None, timeout: float,
+def attempt(row: dict, overlay: dict, timeout: float, keep: Path | None) -> dict:
+    root = Path(tempfile.mkdtemp(prefix=f"cvdp-{row['id']}-",
+                                 dir=str(keep) if keep else None))
+    try:
+        stage(row, root, overlay)
+        results = [run_service(s, row, root, timeout) for s in services(row)]
+        status, reason, ran = classify(results)
+        rec = {"status": status, "reason": reason, "tests_ran": ran,
+               "services": {r["service"]: r["rc"] for r in results}}
+        if status != "pass":
+            bad = next((r for r in results if r["rc"] != 0), results[-1])
+            rec["log_tail"] = bad["log"][-800:]
+        return rec
+    finally:
+        if keep is None:
+            shutil.rmtree(root, ignore_errors=True)
+
+
+def run_problem(row: dict, tries: list[tuple[str, dict]], timeout: float,
                 keep: Path | None) -> dict:
     t0 = time.monotonic()
     rec = {"id": row["id"], "category": row["categories"][0],
            "difficulty": (row["categories"][1:] or [None])[0]}
-    if mode == "solutions" and not (solutions / row["id"]).is_dir():
+    if not tries:
         rec.update(status="fail", reason="no solution supplied",
                    tests_ran=False, wall_s=0.0)
         return rec
-    root = Path(tempfile.mkdtemp(prefix=f"cvdp-{row['id']}-",
-                                 dir=str(keep) if keep else None))
-    try:
-        stage(row, root, mode, solutions)
-        results = [run_service(s, row, root, timeout) for s in services(row)]
-        status, reason, ran = classify(results)
-        rec.update(status=status, reason=reason, tests_ran=ran,
-                   services={r["service"]: r["rc"] for r in results})
-        if status != "pass":
-            bad = next((r for r in results if r["rc"] != 0), results[-1])
-            rec["log_tail"] = bad["log"][-800:]
-    except Exception as exc:  # noqa: BLE001  one problem never sinks the run
-        rec.update(status="error", reason=f"{type(exc).__name__}: {exc}"[:200],
-                   tests_ran=False)
-    finally:
-        if keep is None:
-            shutil.rmtree(root, ignore_errors=True)
+    for label, overlay in tries:
+        try:
+            res = attempt(row, overlay, timeout, keep)
+        except Exception as exc:  # noqa: BLE001  one problem never sinks the run
+            res = {"status": "error", "tests_ran": False,
+                   "reason": f"{type(exc).__name__}: {exc}"[:200]}
+        rec.update(res, candidate=label)
+        if res["status"] == "pass":
+            break
+    rec["tried"] = len(tries)
     rec["wall_s"] = round(time.monotonic() - t0, 1)
     return rec
 
@@ -497,6 +566,9 @@ def run(argv=None):
                     help="use this local jsonl instead of the pinned download "
                          "(recorded as unpinned)")
     ap.add_argument("--solutions", help="DIR/<problem id>/<path> candidate files")
+    ap.add_argument("--borrow", action="store_true",
+                    help="score each problem with a sibling problem's shipped "
+                         "working RTL (a harness-fidelity check, see README)")
     ap.add_argument("--category", action="append",
                     help="only this category (repeatable), e.g. cid003")
     ap.add_argument("--id", action="append", dest="ids",
@@ -534,7 +606,7 @@ def run(argv=None):
                   "sha256": ds["sha256"], "pinned": True}
     rows = load_rows(path)
     try:
-        chosen, excluded = select(rows, args.category, args.limit, args.ids)
+        chosen, excluded = select(rows, args.category, None, args.ids)
     except (KeyError, TypeError) as exc:
         raise CheckError(f"{path} does not look like a CVDP dataset: {exc}") from exc
     in_subset = len(rows) - len(excluded)
@@ -545,12 +617,22 @@ def run(argv=None):
     solutions = Path(args.solutions) if args.solutions else None
     if solutions is not None and not solutions.is_dir():
         raise CheckError(f"--solutions {solutions} is not a directory")
+    if solutions is not None and args.borrow:
+        raise CheckError("--solutions and --borrow score different things; "
+                         "pick one")
+    donor_ids: dict = {}
     if solutions is not None:
         mode = "solutions"
+    elif args.borrow:
+        mode = "borrowed"
+        donor_ids = donors(rows, chosen)
+        chosen = [r for r in chosen if r["id"] in donor_ids]
     elif chosen and all(has_solution(r) for r in chosen):
         mode = "reference"
     else:
         mode = "null"
+    if args.limit is not None:
+        chosen = chosen[:args.limit]
 
     facts = {"dataset": source, "mode": mode, "mode_note": MODE_NOTE[mode],
              "dataset_size": len(rows), "subset_size": in_subset,
@@ -559,19 +641,25 @@ def run(argv=None):
              "categories": args.category, "caveat": CAVEAT}
     if args.select_only:
         facts["ids"] = [r["id"] for r in chosen]
+        if donor_ids:
+            facts["donors"] = {r["id"]: donor_ids[r["id"]] for r in chosen}
         return checklib.report(SCRIPT, None, [], **facts), args.out
     if not chosen:
         raise CheckError("the selection is empty; widen --category or --limit")
     if not EDA.is_file():
         raise CheckError(f"no eda launcher at {EDA}")
 
+    by_id = {r["id"]: r for r in rows}
+    tries = {r["id"]: candidates(r, mode, solutions,
+                                 [by_id[d] for d in donor_ids.get(r["id"], [])])
+             for r in chosen}
     keep = Path(args.keep) if args.keep else None
     if keep:
         keep.mkdir(parents=True, exist_ok=True)
     t0 = time.monotonic()
     with cf.ThreadPoolExecutor(max_workers=args.jobs) as pool:
         records = list(pool.map(
-            lambda r: run_problem(r, mode, solutions, args.timeout, keep), chosen))
+            lambda r: run_problem(r, tries[r["id"]], args.timeout, keep), chosen))
     wall = round(time.monotonic() - t0, 1)
     if all(r["status"] == "error" for r in records):
         raise CheckError("no problem reached a verdict, so the native harness "

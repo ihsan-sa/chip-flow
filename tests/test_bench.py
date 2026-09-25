@@ -126,3 +126,39 @@ def test_uart_rtl_compare_passes_against_its_baseline(tmp_path):
     payload, _ = bench.run(["--stage", "P4", "--fixture", "uart_rtl", "--compare",
                             "--results-dir", str(tmp_path)])
     assert payload["status"] == "pass", payload["violations"]
+
+
+def _fake_bench(tmp_path, monkeypatch, reports):
+    """bench() over a fake gate runner: `reports` maps gate -> report dict,
+    or an exception to raise (a gate that did not run)."""
+    fx = tmp_path / "fx"
+    meta = bench.freeze(make_ws(tmp_path), fx, None, "P4")
+
+    def fake_run(row, ws):
+        r = reports[row["name"]]
+        if isinstance(r, Exception):
+            raise r
+        return r
+    monkeypatch.setattr(bench.gate, "run_report_for_gate", fake_run)
+    gates = {"vde": {g: {"phase": "P4", "tool": g, "name": g} for g in reports}}
+    return bench.bench(fx, meta, gates)
+
+
+FAIL = {"violations": [{"severity": "error", "kind": "test_failed"}]}
+
+
+def test_mutate_refusing_after_sim_failed_scores_zero_not_an_error(tmp_path, monkeypatch):
+    score = _fake_bench(tmp_path, monkeypatch, {
+        "sim": FAIL, "mutate": CheckError("unmutated design fails the visible tests")})
+    assert score["gates"]["mutate"]["status"] == "not_run"
+    assert score["composite"] == 0.0
+
+
+def test_a_refusal_with_no_failed_precondition_is_still_an_error(tmp_path, monkeypatch):
+    # formal refusing is not explained by a failing sim: exit 2, never a score
+    with pytest.raises(CheckError, match="could not run"):
+        _fake_bench(tmp_path, monkeypatch, {
+            "sim": FAIL, "formal": CheckError("no formal properties")})
+    with pytest.raises(CheckError, match="could not run"):
+        _fake_bench(tmp_path, monkeypatch, {
+            "sim": {"violations": []}, "mutate": CheckError("mcy missing")})

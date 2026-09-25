@@ -34,9 +34,21 @@ Frozen fixtures under `evals/fixtures/<stage>/<name>/`; `bench.py --compare` fai
 
 | stage | fixture | baseline composite | gates | written |
 |---|---|---|---|---|
+| P3 | counter8_tb | 1.0 | sim pass, mutate pass, cover pass | 2026-09-24 |
 | P4 | counter8_rtl | 1.0 | lint pass, sim pass, holdout pass, mutate pass, formal pass, cover pass | 2026-09-24 |
 | P4 | uart_rtl | 0.9701 | lint pass, sim pass, holdout pass, mutate fail, formal pass, cover pass | 2026-09-24 |
 
 ## CVDP
 
-No CVDP result yet (`evals/cvdp/run.py`).
+Newest run: `2026-09-24T201239_nonagentic_null.json`. Pass rate - on 20 problems (limit 20), mode `null`.
+
+Caveat: Not the official CVDP harness: each problem's docker-compose services run natively under bin/eda (Icarus, cocotb) instead of in their containers, with container paths rewritten into a scratch directory, on a subset of the non-agentic non-commercial set. Tool versions differ from the dataset's pinned images. A leaderboard submission needs the docker harness and is out of scope.
+
+| category | passed | total | rate |
+|---|---|---|---|
+| cid002 | None | 8 | - |
+| cid003 | None | 6 | - |
+| cid004 | None | 3 | - |
+| cid016 | None | 3 | - |
+
+The leaderboard figures to read this beside are in `evals/cvdp/README.md`.

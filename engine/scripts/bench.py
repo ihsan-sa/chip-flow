@@ -28,9 +28,9 @@ under `evals/results/bench/`. A fixture whose files no longer match their
 pins still runs, and each drifted file is a finding, so an edited fixture is
 never scored as if it were the frozen one; `--baseline` refuses a drifted
 fixture outright (re-freeze instead). A gate that could not run is exit 2,
-never a score - except one that refuses after an earlier gate of the same
-stage failed (mutate refuses RTL that fails its visible tests), which is
-recorded as not run and scores 0, never a pass.
+never a score - except mutate refusing RTL whose sim gate already failed
+in this bench (REFUSES_AFTER), which is recorded as not run and scores 0,
+never a pass.
 
 CLI/exit contract: checklib's (JSON out, exit 0 pass, 1 findings, 2 error).
 """
@@ -76,6 +76,9 @@ PARTIAL = {"mutate": ("kill_rate", 0.9), "cover": ("line_pct", 95.0)}
 METRICS = ("kill_rate", "killed", "survived", "line_pct", "toggle_pct",
            "tests_passed", "area", "corners")
 EPS = 1e-9
+# gates that refuse, by design, to run on RTL an earlier gate already failed
+# (mutate needs the unmutated design to pass its visible tests)
+REFUSES_AFTER = {"mutate": ("sim",)}
 
 
 def rel_input(payload: dict) -> dict:
@@ -216,7 +219,8 @@ def bench(fx: Path, meta: dict, gates: dict) -> dict:
                 if report.get("status") == "error":
                     raise CheckError(report.get("error"))
             except Exception as exc:  # noqa: BLE001  a gate that did not run
-                earlier = [g for g, v in per_gate.items() if v["status"] != "pass"]
+                earlier = [g for g in REFUSES_AFTER.get(name, ())
+                           if per_gate.get(g, {}).get("status") == "fail"]
                 if not earlier:
                     raise CheckError(f"gate {name!r} could not run on fixture "
                                      f"{fx.name}: {exc}") from exc
