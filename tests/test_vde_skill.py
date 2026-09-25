@@ -299,3 +299,38 @@ def test_optimise_never_calls_a_script_that_does_not_exist_yet(tmp_path):
     for step in payload["recipe"]["steps"]:
         if step.get("kind") == "script":
             assert step["script"] != "optimise.py"
+
+
+# ------------------------------------------------------- M4 gates went real
+
+STUB_LANGUAGE = re.compile(
+    r"\bstub\b|STOP HERE|until M4|M4 lands|M4 merges|cannot pass",
+    re.I,
+)
+
+
+def test_real_vde_gates_not_still_called_stubs_after_m4():
+    """M4 (docs/design.md, "### M4.") turned harden/timing/drc/lvs/glsim/
+    precheck from stubs into real tools, and made release passable - the
+    skill text used to tell a full-run to STOP HERE at synth until that PR
+    merged. A gate whose `tool` in gates.yaml is no longer `stub` must not
+    still be called one, or told to wait for M4, in tasks.yaml's full-run
+    notes/whys or in SKILL.md."""
+    gates = yaml.safe_load(
+        (ENGINE / "reference" / "gates.yaml").read_text(encoding="utf-8")
+    )["gates"]["vde"]
+    real_gates = [name for name, spec in gates.items() if spec.get("tool") != "stub"]
+    # sanity: M4's own gates are actually in the real set, or this test
+    # would trivially pass by finding nothing to check
+    assert {"harden", "timing", "drc", "lvs", "glsim", "precheck",
+            "release"} <= set(real_gates)
+
+    for path in (SKILL / "reference" / "tasks.yaml", SKILL / "SKILL.md"):
+        text = path.read_text(encoding="utf-8")
+        for line in text.splitlines():
+            if not STUB_LANGUAGE.search(line):
+                continue
+            for gate in real_gates:
+                assert not re.search(rf"\b{re.escape(gate)}\b", line), (
+                    f"{path.name}: real gate {gate!r} still described as "
+                    f"a stub / told to wait for M4: {line!r}")

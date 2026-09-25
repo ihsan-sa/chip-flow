@@ -110,6 +110,24 @@ def test_start_records_pid_status_becomes_done_state_holds_result(tmp_path):
     assert data["gates"]["harden"]["status"] == "pass"
 
 
+def test_start_with_a_relative_workspace_runs_to_done(tmp_path, monkeypatch):
+    # The router hands out `blocks/<name>`, relative to the run root; the
+    # job runs with cwd=ws, so an unresolved path died at once with no log.
+    ws = make_ws(tmp_path)
+    checks_dir = make_checks_dir(tmp_path, "check_sleepy",
+                                 SLEEPY_CHECK.format(sleep_s=0.2))
+    gates_yaml = make_gates_yaml(tmp_path, "sleepy")
+    monkeypatch.chdir(tmp_path)
+    rel = ws.relative_to(tmp_path)
+
+    rec = jobs_mod.start("harden", rel, "vde",
+                         str(gates_yaml.relative_to(tmp_path)),
+                         str(checks_dir.relative_to(tmp_path)))
+    final = poll_until_not_running(ws, rec["job"])
+    assert final["status"] == "done"
+    assert Path(rec["log"]).is_file()
+
+
 def test_status_reports_dead_on_unexpected_exit_code(tmp_path):
     ws = make_ws(tmp_path)
     checks_dir = make_checks_dir(tmp_path, "check_crashy", CRASHY_CHECK)

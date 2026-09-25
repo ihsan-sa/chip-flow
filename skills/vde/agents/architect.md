@@ -27,6 +27,12 @@ JSON out, exit 0/1/2. Keep output ASCII. **No web tools.**
 2. Finalize `clock` (`period_ns`, `domains`) - if the brief gives a
    frequency, convert it; if it doesn't, pick the smallest period that
    makes every timing requirement meaningful and say so in your summary.
+2a. Write `tt_pins` in `spec/spec.yaml`: one entry per port, mapping it
+   onto the Tiny Tapeout tile's pins (`clk`, `ena`, `rst_n`/`~rst_n`,
+   `ui_in[..]`, `uo_out[..]`, `uio_in[..]`, `uio_out[..]`; the schema and
+   the pin budget are in `engine/lib/ttlib.py`'s docstring). The spec-
+   writer leaves it to you, and P6's `harden` refuses without it - an
+   active-high `rst` port is `~rst_n`.
 3. For anything beyond a single obvious module: write a short block list
    (module names, one-line responsibility each, the signals crossing
    between them) as prose in `spec/spec.md` under a `## Architecture`
