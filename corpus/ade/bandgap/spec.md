@@ -38,9 +38,27 @@ its DC level, its move across the VDD line and its move across temperature),
   temperature-coefficient cancellation the whole topology exists for; a
   first-order bandgap's residual curvature is what this bounds.
 
-Real simulated values on this box (gf180mcuD, typical unless named): vref
-1.19V, vref_line_pp ~4mV, vref_tc_pp ~4mV - all inside spec.yaml's bounds
+Real simulated values on this box (gf180mcuD, default corner set): vref
+1.18011-1.19217V across tt/ss/ff/sf/fs, vref_line_pp 0.0101-0.0116V,
+vref_tc_pp 0.00259-0.00317V - all comfortably inside spec.yaml's bounds
 ([1.16, 1.21]V, 15mV, 6mV).
+
+## bench_strength scope
+
+`spec.yaml`'s `devices` list holds `xm1`-`xm5`, `xr1`, `xr2`, `xq1`-`xq3`
+accountable to `bench_strength`, not `xms1`-`xms3` (the startup network):
+at typical corner `xq2`'s own `m=8` mismatch against `xq1` already biases
+the self-biased core away from its degenerate zero-current point on its
+own, confirmed even under a forced initial condition that starts every
+node - including the startup devices' own gate/drain nodes - at a literal
+0V/degenerate guess. No non-destructive mutant of `xms1`-`xms3` (bigger W,
+a floated body - the terminal `bench_strength`'s mutants always target,
+tied to each one's own source) moves any declared measure; only physically
+removing one does, and that is not a mutant this gate ever plants. Real
+silicon still needs the startup network for the process/mismatch corners
+this deterministic sim does not sweep - that is `mc`'s job, and this rung
+declares no `mc` block, the same "not applicable by default" carve-out
+gates.yaml's own `ade.mc` row already documents for a spec with none.
 
 ## Layout
 
