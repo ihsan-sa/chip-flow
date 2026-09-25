@@ -1,44 +1,84 @@
-top: uart_tx
+top: uart
+
 requirements:
-  - id: REQ-FRAME
-    text: a frame is start(0), 8 data bits LSB-first, an even-parity bit
-      (XOR of the 8 data bits) and stop(1), each held CLKS_PER_BIT clocks
+  - id: REQ-IDLE
+    text: While idle (no frame in flight), tx is 1 and busy is 0.
     check: sim
-  - id: REQ-BUSY
-    text: busy is asserted from the start pulse until the stop bit's hold
-      completes, then returns low
+
+  - id: REQ-RESET
+    text: When rst is sampled high on a clock edge, the transmitter is idle on the next clock, with tx at 1 and busy at 0, regardless of any frame in flight.
+    check: both
+    property: p_reset_idle
+
+  - id: REQ-LATCH-ON-START
+    text: A one-clock start pulse while idle latches data on that clock, and later changes to data during the frame do not alter the bits sent.
     check: sim
-  - id: REQ-FORMAL-RESET
-    text: rst forces tx to 1 and busy to 0 on the very next clock, proven
-      for all time rather than for whatever tb/ happens to try
+
+  - id: REQ-START-BIT
+    text: The first CLKS_PER_BIT clocks of a frame drive tx to 0 (the start bit).
+    check: sim
+
+  - id: REQ-DATA-LSB-FIRST
+    text: After the start bit the frame sends data[0] through data[7] in that order, one bit per CLKS_PER_BIT clocks.
+    check: sim
+
+  - id: REQ-PARITY-EVEN
+    text: The bit after data[7] is the even parity bit, equal to the XOR of all eight latched data bits, so the nine bits data[7:0] plus parity contain an even number of ones.
+    check: sim
+
+  - id: REQ-STOP-BIT
+    text: The last CLKS_PER_BIT clocks of a frame drive tx to 1 (the stop bit), after which tx stays at 1 until the next frame's start bit.
+    check: sim
+
+  - id: REQ-BIT-HOLD
+    text: Every bit of the frame is held on tx for exactly CLKS_PER_BIT consecutive clocks, so a frame is exactly 11 * CLKS_PER_BIT clocks long.
+    check: sim
+
+  - id: REQ-BUSY-FRAME
+    text: busy rises with the start pulse and stays 1 until the stop bit's CLKS_PER_BIT-clock hold completes, then returns to 0.
+    check: sim
+
+  - id: REQ-START-WHILE-BUSY
+    text: A start pulse while busy is 1 is ignored; the frame in flight is not disturbed and no second frame is queued.
     check: formal
-    property: REQ_FORMAL_RESET
+    property: p_start_ignored_while_busy
+
+  - id: REQ-TX-IDLE-HIGH-WHEN-NOT-BUSY
+    text: Whenever busy is 0, tx is 1 (the line never drives a data or start bit outside a frame).
+    check: formal
+    property: p_tx_high_when_not_busy
+
 ports:
-  clk: {dir: input, width: 1}
-  rst: {dir: input, width: 1}
-  start: {dir: input, width: 1}
-  data: {dir: input, width: 8}
-  tx: {dir: output, width: 1}
-  busy: {dir: output, width: 1}
+  clk:   {dir: input,  width: 1}
+  rst:   {dir: input,  width: 1}
+  start: {dir: input,  width: 1}
+  data:  {dir: input,  width: 8}
+  tx:    {dir: output, width: 1}
+  busy:  {dir: output, width: 1}
+
 clock:
-  # 20ns (50MHz) for the same reason as counter8's spec.yaml: physical
-  # implementation's CLOCK_PERIOD, independent of tb/test_uart_tx.py's own
-  # simulation clock, widened for setup margin at the slow corner.
-  period_ns: 20
+  period_ns: 10
   domains: [clk]
-mutate:
-  size: 24
-  seed: 2
-formal:
-  depth: 20
-# M4 (docs/design.md "### M4."): the Tiny Tapeout GF180 tile pin map. `data`
-# (8 bits) already fills ui_in; `start` borrows one uio_in bit as a plain
-# extra input (uio_oe stays 0 - always an input, never truly bidirectional
-# here). rst is active-high inside uart_tx, hence the `~`.
+
+# Module parameters (architect, P2). CLKS_PER_BIT=4 keeps a frame at 44
+# clocks so sim and formal stay fast, while the per-bit hold counter is
+# still a real 2-bit counter (a hold of 1 or 2 would hide off-by-one
+# faults). The tb and formal harness use the same default.
+params:
+  CLKS_PER_BIT: 4
+
+# Timing conventions the architect fixed (see spec.md "## Architecture"):
+# tx and busy are registered outputs; a start sampled on edge N makes
+# busy=1 and tx=0 from edge N+1 (first clock of the frame); busy stays 1 for
+# exactly 11*CLKS_PER_BIT clocks; rst sampled high wins over a start on the
+# same clock. No must_keep: nothing internal is unobservable from the ports.
+
+# TinyTapeout pin map (harden reads this; rst is active-high so it takes
+# the inverted rst_n; start goes on uio_in since ui_in is taken by data).
 tt_pins:
-  clk: clk
-  rst: ~rst_n
-  start: uio_in[0]
-  data: ui_in[7:0]
-  tx: uo_out[0]
-  busy: uo_out[1]
+  clk:   clk
+  rst:   "~rst_n"
+  data:  "ui_in[7:0]"
+  start: "uio_in[0]"
+  tx:    "uo_out[0]"
+  busy:  "uo_out[1]"

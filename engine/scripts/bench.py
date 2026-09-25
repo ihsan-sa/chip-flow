@@ -11,6 +11,17 @@ pins every one of them by sha256. `--freeze` makes one from `--from`, either
 a block workspace (it has a state.json) or a corpus rung (spec.md at its
 root, copied the way faults.py builds its scratch workspaces).
 
+A stage boundary only carries the artifact directories that stage's own
+gates read, never a later stage's output that happens to already sit in the
+source workspace (e.g. a workspace already hardened must not leak harden/
+into a P4 freeze). For vde: P3 and P4 carry spec, tb, holdout, formal, rtl
+(P3 bench scores the frozen tb against the frozen rtl); P5 adds synth
+(synth's own gate needs rtl); P6 adds netlist and harden (harden's job
+needs synth's output, and its own products). `STAGE_FREEZE_DIRS` below is
+the table; a skill/stage this repo has not pinned down yet (ade, msde, any
+stage past P6) falls back to every `FREEZE_DIRS` directory present, same as
+before this table existed.
+
 A bench copies the fixture into a scratch workspace and runs the stage's
 gates on it: every gate gates.yaml puts in that phase for the fixture's
 skill, except job gates (P6 names its own list below, since harden is one),
@@ -66,6 +77,17 @@ EVALS = REPO / "evals"
 FREEZE_DIRS = ("spec", "rtl", "netlist", "tb", "holdout", "formal", "synth",
                "harden", "sizing", "layout", "layout_ref")
 FREEZE_ROOT_FILES = ("interface.yaml", "digital_spec.yaml", "analog_spec.yaml")
+# what each (skill, stage) boundary carries, cumulative with the stage
+# before it (a later stage still needs its predecessor's output). Only
+# vde's stages are pinned down; an unlisted skill/stage falls back to
+# every FREEZE_DIRS directory the source workspace has.
+STAGE_FREEZE_DIRS = {
+    ("vde", "P3"): ("spec", "tb", "holdout", "formal", "rtl"),
+    ("vde", "P4"): ("spec", "tb", "holdout", "formal", "rtl"),
+    ("vde", "P5"): ("spec", "tb", "holdout", "formal", "rtl", "synth"),
+    ("vde", "P6"): ("spec", "tb", "holdout", "formal", "rtl", "synth",
+                     "netlist", "harden"),
+}
 # stages whose gate list is not simply "the non-job gates of that phase"
 STAGE_GATES = {
     ("vde", "P3"): ["sim", "mutate", "cover"],
@@ -111,6 +133,11 @@ def fixture_dir(stage: str, name: str, root: Path) -> Path:
     return root / stage / name
 
 
+def freeze_dirs(skill: str | None, stage: str) -> tuple[str, ...]:
+    """The FREEZE_DIRS subset this (skill, stage) boundary carries."""
+    return STAGE_FREEZE_DIRS.get((skill, stage), FREEZE_DIRS)
+
+
 def freeze(src: Path, dest: Path, skill: str | None, stage: str) -> dict:
     src = src.resolve()
     tmp = None
@@ -132,7 +159,7 @@ def freeze(src: Path, dest: Path, skill: str | None, stage: str) -> dict:
         if dest.exists():
             shutil.rmtree(dest)
         files = {}
-        for sub in FREEZE_DIRS:
+        for sub in freeze_dirs(skill, stage):
             d = ws / sub
             if not d.is_dir():
                 continue

@@ -1,42 +1,34 @@
 top: counter8
+
 requirements:
+  - id: REQ-INC
+    text: On every rising edge of clk with rst low, count becomes its previous value plus 1 (modulo 256).
+    check: both
+    property: p_inc
+  - id: REQ-RST-SYNC
+    text: On every rising edge of clk with rst high, count is 0 on that edge; rst changing between edges does not change count.
+    check: both
+    property: p_rst_sync
   - id: REQ-WRAP
-    text: count increments every clock and wraps from 255 to 0
+    text: When count is 255 and rst is low, the next rising edge of clk sets count to 0 and counting continues from there; there is no overflow output.
     check: sim
-  - id: REQ-RESET
-    text: a held rst clears count to 0 on every following clock, including a
-      one-clock reset asserted mid-run
+  - id: REQ-RST-PULSE
+    text: A single-cycle rst pulse while count is non-zero clears count to 0 on the very next rising edge, and count is 1 on the edge after rst is released.
     check: sim
-  - id: REQ-FORMAL-RESET
-    text: rst forces count to 0 on the very next clock, proven for all time
-      rather than for whatever tb/ happens to try
-    check: formal
-    property: REQ_FORMAL_RESET
+
 ports:
   clk: {dir: input, width: 1}
   rst: {dir: input, width: 1}
   count: {dir: output, width: 8}
+
 clock:
-  # 20ns (50MHz), not the 10ns the functional tb/ clocks at (tb/test_counter8.py
-  # picks its own simulation period independently): this is what M4's harden
-  # gate hands LibreLane as CLOCK_PERIOD, and 10ns left a -0.063ns setup
-  # violation at the slow corner (max_ss_125C_3v00, GF180's mcu7t5v0 library) -
-  # a generic-fallback-SDC artifact (no PNR_SDC_FILE is set), not a real path
-  # this design is anywhere near, so widening the period is the honest fix
-  # (vendored config.json's own comment: "Increase this in case you are
-  # getting setup time violations"), not a relaxed pass criterion.
-  period_ns: 20
+  # brief gives no frequency; 10 ns (100 MHz) chosen by the architect, see spec.md "Clock plan"
+  period_ns: 10
   domains: [clk]
-mutate:
-  size: 24
-  seed: 1
-formal:
-  depth: 20
-# M4 (docs/design.md "### M4."): the Tiny Tapeout GF180 tile pin map -
-# engine/lib/ttlib.py::generate_tt_wrapper reads this to build
-# harden/tt_um_counter8.v. rst is active-high inside counter8 but TT's
-# dedicated reset pin is active-low, hence the `~`.
+
 tt_pins:
+  # Tiny Tapeout tile mapping (engine/lib/ttlib.py): the tile's reset is
+  # active-low, the block's rst is active-high, so it is inverted at the pin.
   clk: clk
-  rst: ~rst_n
-  count: uo_out[7:0]
+  rst: "~rst_n"
+  count: "uo_out[7:0]"
