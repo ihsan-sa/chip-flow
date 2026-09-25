@@ -1,0 +1,12 @@
+b0ef301 ade mirror: P6 release digest, done
+266b72f ade mirror: release pass
+81cf655 ade mirror: pex_sim pass
+ff3d37a ade mirror: lvs pass
+18257fa ade mirror: drc pass
+cf5cc70 ade mirror: bench_strength pass
+3f9df9e ade mirror: sim_pvt pass
+e044564 ade mirror: sim_tt pass
+e628f59 ade mirror: netlist_lint pass
+e9f5efa ade mirror: spec_lint pass (P3)
+8b9a92d ade mirror: spec_lint pass (P2)
+f367942 ade mirror: spec_lint pass

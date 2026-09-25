@@ -84,7 +84,7 @@ gates.
 4. **Record everything in state.json** via `state.py`: phases, gate
    results, issues, decisions, human checkpoints and every declared edit.
    A killed session resumes from `state.json` alone. `set-phase` REFUSES
-   to advance past a gate phase whose gate has no recorded result.
+   to advance past a gate phase whose gate has no recorded result (bar `mc` when the spec asks for no Monte Carlo).
 5. **Gates carry `--workspace` and commit on pass**: `gate.py --gate <g>
    --skill ade --workspace <ws> --commit "ade <block>: <gate> pass"`. A
    report state.json never saw is not evidence.
@@ -241,17 +241,14 @@ layout-fixer read `netlist/` and `sizing/` and edit only `layout/`.
 
 ## Known limits (be honest about these)
 
-- **`mc` not applicable blocks `set-phase` without `--force`.** A spec
-  with no `mc.enabled: true` (every corpus rung) makes `check_mc.py`
-  answer `applicable: false`, which `gate.py` cannot record (the result is
-  keyed on spec.yaml, the gate's inputs are netlist/ and tb/), so
-  `set-phase` P5, P6 and done each refuse naming `mc (P4)`. `release` is
-  unaffected: attest re-asks the spec and records mc as not run, with the
-  reason. The procedure: run `set-phase` without `--force` first; if the
-  refusal names `mc (P4)` and nothing else, record `state.py decision
-  --what "set-phase <P> --force past mc" --why "mc not applicable:
-  spec.yaml has no mc.enabled"` and repeat with `--force`. Any other name
-  in that refusal is a real gap - never force past it.
+- **`mc` not applicable is never recorded.** A spec with no
+  `mc.enabled: true` (every corpus rung) makes `check_mc.py` answer
+  `applicable: false`, which `gate.py` cannot record (the result is keyed
+  on spec.yaml, the gate's inputs are netlist/ and tb/), and `gate.py
+  --commit` still titles its commit "mc pass". `set-phase` and `release`
+  both re-ask the spec and skip mc when it asks for none, so no `--force`
+  is needed; a spec that turns MC on makes mc owed again. Never force past
+  any other name in a `set-phase` refusal - it is a real gap.
 - **r2r_dac's bounds are absolute volts.** Its outputs scale with VDD, and
   the default corner set moves VDD by +/-10%, so `sim_pvt` fails the
   supply corners however good the sizing is. That is a spec/bench fault,

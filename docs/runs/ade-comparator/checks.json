@@ -1,0 +1,146 @@
+{
+ "skill": "ade",
+ "block": "comparator",
+ "ts": "2026-09-25T01:03:02",
+ "checks": [
+  {
+   "gate": "bench_strength",
+   "applies": true,
+   "ran": true,
+   "ok": true,
+   "tool": "bench_strength",
+   "version": 1,
+   "status": "pass",
+   "attempts": 12,
+   "ts": "2026-09-25T00:56:24",
+   "inputs": {
+    "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f",
+    "tb": "dir_text:862897de62811d9ebfc677ca8ef5b45fee770b556bcffcc7ed9932c40e129b13"
+   },
+   "reason": null
+  },
+  {
+   "gate": "drc",
+   "applies": true,
+   "ran": true,
+   "ok": true,
+   "tool": "analog_drc",
+   "version": 1,
+   "status": "pass",
+   "attempts": 6,
+   "ts": "2026-09-25T00:56:37",
+   "inputs": {
+    "layout": "dir_text:4c0d053ea0ddcf37f3e6cc99e67863d61b7c6748df560edda69320521cf47c20"
+   },
+   "reason": null
+  },
+  {
+   "gate": "lvs",
+   "applies": true,
+   "ran": true,
+   "ok": true,
+   "tool": "analog_lvs",
+   "version": 1,
+   "status": "pass",
+   "attempts": 7,
+   "ts": "2026-09-25T00:56:43",
+   "inputs": {
+    "layout": "dir_text:4c0d053ea0ddcf37f3e6cc99e67863d61b7c6748df560edda69320521cf47c20",
+    "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f"
+   },
+   "reason": null
+  },
+  {
+   "gate": "mc",
+   "applies": true,
+   "ran": false,
+   "ok": true,
+   "tool": "mc",
+   "version": 1,
+   "status": null,
+   "inputs": {
+    "spec_yaml": "json_canonical:4688316620eef53f17f4b61ee99259a4242c78d03bc2eab06bca4e10d349d4c9"
+   },
+   "reason": "not applicable: spec.yaml asks for no Monte Carlo (no 'mc.enabled: true'), re-read at this release"
+  },
+  {
+   "gate": "netlist_lint",
+   "applies": true,
+   "ran": true,
+   "ok": true,
+   "tool": "netlist_lint",
+   "version": 1,
+   "status": "pass",
+   "attempts": 4,
+   "ts": "2026-09-25T00:55:23",
+   "inputs": {
+    "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f"
+   },
+   "reason": null
+  },
+  {
+   "gate": "pex_sim",
+   "applies": true,
+   "ran": true,
+   "ok": true,
+   "tool": "pex_sim",
+   "version": 1,
+   "status": "pass",
+   "attempts": 6,
+   "ts": "2026-09-25T00:56:51",
+   "inputs": {
+    "layout": "dir_text:4c0d053ea0ddcf37f3e6cc99e67863d61b7c6748df560edda69320521cf47c20",
+    "tb": "dir_text:862897de62811d9ebfc677ca8ef5b45fee770b556bcffcc7ed9932c40e129b13"
+   },
+   "reason": null
+  },
+  {
+   "gate": "sim_pvt",
+   "applies": true,
+   "ran": true,
+   "ok": true,
+   "tool": "sim_pvt",
+   "version": 1,
+   "status": "pass",
+   "attempts": 10,
+   "ts": "2026-09-25T00:55:35",
+   "inputs": {
+    "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f",
+    "tb": "dir_text:862897de62811d9ebfc677ca8ef5b45fee770b556bcffcc7ed9932c40e129b13"
+   },
+   "reason": null
+  },
+  {
+   "gate": "sim_tt",
+   "applies": true,
+   "ran": true,
+   "ok": true,
+   "tool": "sim_tt",
+   "version": 1,
+   "status": "pass",
+   "attempts": 9,
+   "ts": "2026-09-25T00:55:24",
+   "inputs": {
+    "netlist": "dir_text:fdbecec25f675814388863755cc20885d555c65308a6b1fb07cf1fa7f0d5d36f",
+    "tb": "dir_text:862897de62811d9ebfc677ca8ef5b45fee770b556bcffcc7ed9932c40e129b13"
+   },
+   "reason": null
+  },
+  {
+   "gate": "spec_lint",
+   "applies": true,
+   "ran": true,
+   "ok": true,
+   "tool": "spec_lint_ade",
+   "version": 1,
+   "status": "pass",
+   "attempts": 13,
+   "ts": "2026-09-25T00:55:21",
+   "inputs": {
+    "spec_yaml": "json_canonical:4688316620eef53f17f4b61ee99259a4242c78d03bc2eab06bca4e10d349d4c9"
+   },
+   "reason": null
+  }
+ ],
+ "attestation_sha256": "1f540b9b1451ab26b276646d97c3a0cccce5f2093e9218c67264de2bd831f8c8"
+}
