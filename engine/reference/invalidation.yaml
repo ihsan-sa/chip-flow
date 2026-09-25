@@ -67,6 +67,10 @@ artifact_kinds:
   synth:         {path: "synth", norm: dir_text}
   harden_config: {path: "harden/config.json", norm: json_canonical}
   harden_info:   {path: "harden/info.yaml", norm: json_canonical}
+  # the per-design LibreLane keys check_harden.py merges last into the
+  # config.json it regenerates each run - config.json alone only changes
+  # AFTER a re-harden, so without this an override-only edit reads fresh.
+  harden_override: {path: "harden/config.override.json", norm: json_canonical}
   harden:        {path: "harden", norm: dir_text}
   layout:        {path: "layout", norm: dir_text}
   sizing:        {path: "sizing/sizing.yaml", norm: json_canonical}
@@ -103,7 +107,7 @@ gate_inputs:
     # glsim and precheck all read `top` (and glsim tt_pins) from it too. A
     # period-only edit touches nothing under rtl/ or harden/, so without it
     # a recorded pass on the old period would still read fresh.
-    harden:    [rtl, harden_config, harden_info, spec_yaml]
+    harden:    [rtl, harden_config, harden_override, harden_info, spec_yaml]
     timing:    [harden, spec_yaml]
     drc:       [harden, spec_yaml]
     lvs:       [harden, spec_yaml]
@@ -165,7 +169,7 @@ edit_classes:
       gates: [formal, mutate]
       human_hold: 1
     harden_config_edit:
-      mutates: [harden_config, harden_info]
+      mutates: [harden_config, harden_override, harden_info]
       stale_artifacts: []
       gates: [harden, timing, drc, lvs, glsim, precheck, release]
       human_hold: 2

@@ -14,6 +14,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[1]
 ENGINE = REPO / "engine"
 SCRIPTS = ENGINE / "scripts"
@@ -175,6 +177,108 @@ def test_no_tt_pins_refuses_before_touching_librelane(tmp_path, monkeypatch, cap
     assert "tt_pins" in out["error"]
 
 
+
+# ---------------------------------------------------------------------------
+# harden/config.override.json: the per-design LibreLane layer merged last
+# into the config.json check_harden.py regenerates on every run
+# ---------------------------------------------------------------------------
+def _failing_flow(cwd):
+    run_dir = cwd / "runs" / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "flow.log").write_text("ran\n", encoding="utf-8")
+    return subprocess.CompletedProcess(["eda", "librelane"], 1, stdout="", stderr="")
+
+
+def test_override_key_lands_in_the_generated_config(tmp_path, monkeypatch, capsys):
+    ws = make_ws(tmp_path)
+    (ws / "harden").mkdir()
+    (ws / "harden" / "config.override.json").write_text(json.dumps(
+        {"//": "counter8 misses setup by 0.06 ns at ss_125C",
+         "RUN_POST_GRT_RESIZER_TIMING": 1, "PL_TARGET_DENSITY_PCT": 70}),
+        encoding="utf-8")
+    # a stale hand edit of config.json itself is still overwritten
+    (ws / "harden" / "config.json").write_text('{"STALE": 1}', encoding="utf-8")
+    monkeypatch.setattr(check_harden.subprocess, "run",
+                        _fake_run_factory(_failing_flow))
+    check_harden.main(["--workspace", str(ws)])
+    capsys.readouterr()
+    config = json.loads((ws / "harden" / "config.json").read_text(encoding="utf-8"))
+    assert config["RUN_POST_GRT_RESIZER_TIMING"] == 1
+    assert config["PL_TARGET_DENSITY_PCT"] == 70  # beats the template default
+    assert config["CLOCK_PERIOD"] == 20.0  # still the spec's
+    assert "STALE" not in config and "//" not in config
+
+
+@pytest.mark.parametrize("key,value", [
+    ("CLOCK_PERIOD", 40),           # the spec's clock, never relaxed here
+    ("RUN_KLAYOUT_DRC", 1),         # template "DO NOT CHANGE" block
+    ("DIE_AREA", "0 0 900 900"),    # tile size, engine-owned
+    ("VERILOG_FILES", ["x.v"]),     # engine-owned
+])
+def test_forbidden_override_key_is_refused_before_librelane(
+        tmp_path, monkeypatch, capsys, key, value):
+    ws = make_ws(tmp_path)
+    (ws / "harden").mkdir()
+    (ws / "harden" / "config.override.json").write_text(
+        json.dumps({"RUN_POST_GRT_RESIZER_TIMING": 1, key: value}),
+        encoding="utf-8")
+    calls = []
+
+    def behavior(cwd):
+        calls.append(cwd)
+        return _failing_flow(cwd)
+
+    monkeypatch.setattr(check_harden.subprocess, "run", _fake_run_factory(behavior))
+    code = check_harden.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 2, out
+    assert out["status"] == "error"
+    assert key in out["error"] and key in out["remediation"]
+    assert not calls, "librelane ran despite a refused override"
+    assert not (ws / "harden" / "config.json").exists()
+
+
+def test_non_object_override_is_refused(tmp_path, monkeypatch, capsys):
+    ws = make_ws(tmp_path)
+    (ws / "harden").mkdir()
+    (ws / "harden" / "config.override.json").write_text(
+        '["RUN_POST_GRT_RESIZER_TIMING"]', encoding="utf-8")
+    monkeypatch.setattr(check_harden.subprocess, "run",
+                        _fake_run_factory(_failing_flow))
+    code = check_harden.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 2, out
+    assert "JSON object" in out["error"]
+
+
+def test_override_only_edit_stales_harden(tmp_path):
+    """config.json only changes AFTER a re-harden, so the override must be
+    a harden input of its own - and harden_config_edit must name it."""
+    import statelib
+    ws = make_ws(tmp_path)
+    (ws / "harden").mkdir()
+    (ws / "harden" / "config.json").write_text('{"A": 1}', encoding="utf-8")
+    imap = statelib.load_map()
+    assert "harden_override" in imap["edit_classes"]["vde"][
+        "harden_config_edit"]["mutates"]
+    before = statelib.gate_input_hashes(ws, "vde", "harden", imap)
+    assert before["harden_override"] is None
+    entry = {"last": {"inputs": before}}
+    assert statelib.gate_freshness(entry, before)["fresh"] is True
+
+    override = ws / "harden" / "config.override.json"
+    override.write_text('{"RUN_POST_GRT_RESIZER_TIMING": 1}', encoding="utf-8")
+    after = statelib.gate_input_hashes(ws, "vde", "harden", imap)
+    verdict = statelib.gate_freshness(entry, after)
+    assert "harden_override" in verdict["changed_inputs"]
+    assert verdict["fresh"] is False
+
+    entry = {"last": {"inputs": after}}
+    override.write_text('{"RUN_POST_GRT_RESIZER_TIMING": 0}', encoding="utf-8")
+    verdict = statelib.gate_freshness(
+        entry, statelib.gate_input_hashes(ws, "vde", "harden", imap))
+    assert verdict["changed_inputs"] == ["harden_override"]
+
 # ---------------------------------------------------------------------------
 # real toolchain: the harden job's own kill-halfway-then-restart case
 # (docs/design.md 1.7's done criterion), chained straight into the five
@@ -186,7 +290,6 @@ import os  # noqa: E402
 import signal  # noqa: E402
 import time  # noqa: E402
 
-import pytest  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CORPUS_COUNTER8 = REPO_ROOT / "corpus" / "vde" / "counter8"

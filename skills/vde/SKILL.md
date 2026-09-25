@@ -203,7 +203,7 @@ On gate fail (exit 1, result JSON has `failing` with a `kind`/`file`/
    | testbench | tb_edit | tb/ moved - re-run sim, mutate, cover |
    | formal | formal_edit | formal/ moved - re-run formal, mutate |
    | synth | rtl_edit | a synth finding is almost always an RTL fix (fix_dispatch's own guidance) - the edit still lands in rtl/ |
-   | harden | harden_config_edit | `harden/config.json`/`info.yaml` moved (M4+) |
+   | harden | harden_config_edit | `harden/config.override.json` moved (M4+; config.json/info.yaml are regenerated each run) |
 
 6. Re-run the gate that failed with `--workspace` - EVERY attempt records
    itself, fail and pass (the history is the audit trail; freshness hashes

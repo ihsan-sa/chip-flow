@@ -12,6 +12,15 @@ against the vendored TT GF180 template through `bin/eda librelane`
 finishes with no failing step and `runs/<tag>/final/` carries GDS, LEF,
 netlist, SDF and metrics (gates.yaml's `harden` row).
 
+Per-design config: `harden/config.json` is REGENERATED on every run, so a
+hand edit to it is discarded. A design's own LibreLane keys go in
+`harden/config.override.json` - a JSON object merged last (e.g.
+`{"RUN_POST_GRT_RESIZER_TIMING": 1}` for a small setup miss). It may not
+set a key the engine or the TT template owns (tile/PDK keys, VERILOG_FILES,
+the template's DO-NOT-CHANGE block, CLOCK_PERIOD - the clock is spec.yaml's):
+such a key is a CheckError, exit 2. The file is its own `harden_override`
+input in engine/reference/invalidation.yaml, so editing it stales harden.
+
 Restart: the run tag is fixed ("run") and every invocation passes
 `--overwrite`. LibreLane's own implicit resume (omit `--overwrite`, let it
 load `runs/<tag>`'s latest `state_out.json`) was tried here first and is not
@@ -113,8 +122,17 @@ def run(argv=None):
     except ttlib.TTError as exc:
         raise CheckError(str(exc)) from exc
 
+    # The override is read and refused before config.json is rewritten or
+    # the toolchain is asked for: a forbidden key is a CheckError (exit 2,
+    # the message its remediation), never a silently dropped edit.
+    try:
+        override = ttlib.load_harden_override(
+            harden_dir / ttlib.HARDEN_OVERRIDE_NAME)
+    except ttlib.TTError as exc:
+        raise CheckError(str(exc)) from exc
     pdk_root = _pdk_root()
-    config = ttlib.harden_config(spec, rtl_files, wrapper_path, pdk_root)
+    config = ttlib.harden_config(spec, rtl_files, wrapper_path, pdk_root,
+                                 override=override)
     config_path = harden_dir / "config.json"
     config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
     ttlib.write_info_yaml(spec, harden_dir / "info.yaml")

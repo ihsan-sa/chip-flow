@@ -324,7 +324,7 @@ verbs:
     steps:
       - do: "scripts/state.py resume --workspace {ws}"
         why: "synth must already be fresh-pass - harden's own inputs are
-              rtl + harden/config.json + harden/info.yaml"
+              rtl + harden/config.override.json + spec.yaml"
       - do: "scripts/jobs.py start --gate harden --workspace {ws} --skill {skill}"
         why: "detached (docs/design.md 1.7); records {pid, log} in
               state.jobs and returns at once"
@@ -355,7 +355,7 @@ verbs:
         kind: text
         required: true
         extract: none
-        question: "Did the fix land in rtl/ (rtl_edit) or harden/config.json|info.yaml (harden_config_edit)?"
+        question: "Did the fix land in rtl/ (rtl_edit) or harden/config.override.json (harden_config_edit)?"
     preconditions: [workspace]
     match:
       any: ['\btiming (fails?|failed|failing|violation)\b',
@@ -372,7 +372,7 @@ verbs:
       - agent: fixer
         tier: opus/high
         why: "one per work order; the harden fixer domain edits
-              harden/config.json|info.yaml, the rtl domain edits rtl/"
+              harden/config.override.json, the rtl domain edits rtl/"
       - do: "scripts/state.py edit --workspace {ws} --class {edit_class} --note \"fix timing\""
         why: "declares what actually changed - harden_config_edit marks
               harden onward stale, rtl_edit marks everything from lint

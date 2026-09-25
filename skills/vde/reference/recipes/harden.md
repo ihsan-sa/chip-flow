@@ -20,7 +20,9 @@ from scratch.
 ## Precondition
 
 `synth` must already be fresh-pass. Harden's own recorded inputs are
-`rtl`, `harden/config.json`, and `harden/info.yaml` - a synth-clean
+`rtl`, `harden/config.json`, `harden/config.override.json` (the design's
+own LibreLane keys, merged last - config.json itself is regenerated each
+run), `harden/info.yaml` and spec.yaml - a synth-clean
 netlist does not by itself guarantee harden succeeds (LibreLane's own
 floorplan/placement/routing steps can still fail against the TT tile), but
 running harden against RTL that has not even synthesized cleanly wastes

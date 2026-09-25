@@ -453,15 +453,99 @@ def generate_glsim_harness(spec: dict, dut_instance: str = "dut",
     return "\n".join(lines)
 
 
+# The per-design override layer: a JSON object of LibreLane keys a fixer
+# writes at harden/<HARDEN_OVERRIDE_NAME>, merged LAST into the generated
+# config.json (which check_harden.py rewrites on every run, so a hand edit
+# of config.json itself never reaches LibreLane).
+HARDEN_OVERRIDE_NAME = "config.override.json"
+_TEMPLATE_LOCK_MARKER = "DO NOT CHANGE ANYTHING BELOW THIS POINT"
+# Keys the engine sets itself in harden_config(). CLOCK_PERIOD is the
+# spec's (clock.period_ns) - relaxing it here would pass timing by moving
+# the goalposts; CLOCK_PORT is fixed by the generated wrapper.
+_ENGINE_OWNED_KEYS = frozenset({
+    "DESIGN_NAME", "VERILOG_FILES", "DIE_AREA", "FP_DEF_TEMPLATE", "VDD_PIN",
+    "GND_PIN", "RT_MAX_LAYER", "PDK_ROOT", "TIMING_VIOLATION_CORNERS",
+    "CLOCK_PERIOD", "CLOCK_PORT", "PDK", "STD_CELL_LIBRARY",
+})
+
+
+def template_locked_keys() -> frozenset[str]:
+    """Every key the vendored template lists after its own "DO NOT CHANGE
+    ANYTHING BELOW THIS POINT" comment - read in file order (json.loads
+    alone collapses the repeated "//" keys that carry the marker)."""
+    pairs = json.loads(TEMPLATE_CONFIG.read_text(encoding="utf-8"),
+                       object_pairs_hook=list)
+    locked, below = set(), False
+    for key, value in pairs:
+        if key == "//":
+            below = below or (isinstance(value, str)
+                              and _TEMPLATE_LOCK_MARKER in value)
+        elif below:
+            locked.add(key)
+    if not below:
+        raise TTError(f"{TEMPLATE_CONFIG}: no {_TEMPLATE_LOCK_MARKER!r} "
+                      "marker - cannot tell which keys the template locks")
+    return frozenset(locked)
+
+
+def forbidden_override_keys() -> frozenset[str]:
+    """Keys a harden override may not set: the template's locked keys, the
+    engine's own, and the vendored tech.py's PDK keys."""
+    return (template_locked_keys() | _ENGINE_OWNED_KEYS
+            | frozenset(gf180_tech().librelane_config))
+
+
+def load_harden_override(path: Path) -> dict:
+    """The override object at `path` ({} when the file is absent), refused
+    with a TTError whose message is the remediation when it is not a JSON
+    object or names a forbidden key. `"//"` comment keys are dropped, the
+    template's own convention."""
+    path = Path(path)
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except ValueError as exc:
+        raise TTError(f"{path} is not valid JSON ({exc}) - fix it or delete "
+                      "it, then re-run harden") from exc
+    if not isinstance(data, dict):
+        raise TTError(f"{path} must be a JSON object of LibreLane keys "
+                      f"(got {type(data).__name__}) - e.g. "
+                      '{"RUN_POST_GRT_RESIZER_TIMING": 1}')
+    data.pop("//", None)
+    bad = sorted(set(data) & forbidden_override_keys())
+    if bad:
+        raise TTError(
+            f"{path} sets {bad}, which the engine or the TT template owns "
+            "(tile/PDK keys, the design's own file list, the template's "
+            "DO-NOT-CHANGE block, and CLOCK_PERIOD - the clock target is "
+            "spec.yaml's clock.period_ns and is not relaxed through the "
+            "harden config). Remove those keys; a timing fix goes through "
+            "resizer/placement keys or the RTL, a period change through "
+            "spec_edit.")
+    return data
+
+
 def harden_config(spec: dict, rtl_files: list[Path], wrapper_path: Path,
-                  pdk_root: Path, tiles: str = DEFAULT_TILES) -> dict:
+                  pdk_root: Path, tiles: str = DEFAULT_TILES,
+                  override: dict | None = None) -> dict:
     """The merged LibreLane config.json: the vendored template's own
     defaults, overlaid with this design's DESIGN_NAME/VERILOG_FILES/
     DIE_AREA/FP_DEF_TEMPLATE/clock (docs/design.md 1.5's harden row) and the
     vendored tech.py's gf180mcuD-specific keys (LIB_SYNTH, STA_CORNERS,
     ...) - the same three layers project.py's own create_user_config()/
     golden_harden() apply, read from the files this module vendors rather
-    than retyped."""
+    than retyped - then `override` (load_harden_override()'s result, the
+    per-design harden/config.override.json) last. A forbidden key in
+    `override` raises TTError even when it did not come through
+    load_harden_override()."""
+    override = dict(override or {})
+    override.pop("//", None)
+    bad = sorted(set(override) & forbidden_override_keys())
+    if bad:
+        raise TTError(f"harden override sets engine/template-owned keys "
+                      f"{bad} - remove them from harden/"
+                      f"{HARDEN_OVERRIDE_NAME}")
     config = load_template_config()
     tech = gf180_tech()
     clock = spec.get("clock") or {}
@@ -494,6 +578,7 @@ def harden_config(spec: dict, rtl_files: list[Path], wrapper_path: Path,
     if isinstance(period, (int, float)):
         config["CLOCK_PERIOD"] = float(period)
     config.update(tech.librelane_config)
+    config.update(override)
     return config
 
 
