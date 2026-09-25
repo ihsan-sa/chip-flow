@@ -1,0 +1,39 @@
+{
+ "composite": 1.0,
+ "gates": {
+  "sim": {
+   "status": "pass",
+   "score": 1.0,
+   "failing": 0,
+   "kinds": [],
+   "metrics": {
+    "tests_passed": 2
+   },
+   "wall_s": 28.9
+  },
+  "mutate": {
+   "status": "pass",
+   "score": 1.0,
+   "failing": 0,
+   "kinds": [],
+   "metrics": {
+    "kill_rate": 0.9565,
+    "killed": 22,
+    "survived": 1
+   },
+   "wall_s": 215.32
+  },
+  "cover": {
+   "status": "pass",
+   "score": 1.0,
+   "failing": 0,
+   "kinds": [],
+   "metrics": {
+    "line_pct": 100.0,
+    "toggle_pct": 100.0
+   },
+   "wall_s": 37.64
+  }
+ },
+ "written": "2026-09-24"
+}

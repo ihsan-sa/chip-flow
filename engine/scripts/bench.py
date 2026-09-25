@@ -28,7 +28,9 @@ under `evals/results/bench/`. A fixture whose files no longer match their
 pins still runs, and each drifted file is a finding, so an edited fixture is
 never scored as if it were the frozen one; `--baseline` refuses a drifted
 fixture outright (re-freeze instead). A gate that could not run is exit 2,
-never a score.
+never a score - except one that refuses after an earlier gate of the same
+stage failed (mutate refuses RTL that fails its visible tests), which is
+recorded as not run and scores 0, never a pass.
 
 CLI/exit contract: checklib's (JSON out, exit 0 pass, 1 findings, 2 error).
 """
@@ -211,12 +213,23 @@ def bench(fx: Path, meta: dict, gates: dict) -> dict:
             t0 = time.monotonic()
             try:
                 report = gate.run_report_for_gate(rows[name], ws)
+                if report.get("status") == "error":
+                    raise CheckError(report.get("error"))
             except Exception as exc:  # noqa: BLE001  a gate that did not run
-                raise CheckError(f"gate {name!r} could not run on fixture "
-                                 f"{fx.name}: {exc}") from exc
-            if report.get("status") == "error":
-                raise CheckError(f"gate {name!r} could not run on fixture "
-                                 f"{fx.name}: {report.get('error')}")
+                earlier = [g for g, v in per_gate.items() if v["status"] != "pass"]
+                if not earlier:
+                    raise CheckError(f"gate {name!r} could not run on fixture "
+                                     f"{fx.name}: {exc}") from exc
+                # mutate refuses RTL that already fails its visible tests:
+                # a consequence of the failure already scored, so it scores
+                # 0 as not run rather than hiding that failure behind exit 2
+                per_gate[name] = {"status": "not_run", "score": 0.0,
+                                  "failing": 0, "kinds": [],
+                                  "why": f"refused after {', '.join(earlier)} "
+                                         f"failed: {exc}",
+                                  "metrics": {},
+                                  "wall_s": round(time.monotonic() - t0, 2)}
+                continue
             result = gate.evaluate(name, rows[name], report)
             per_gate[name] = {
                 "status": result["status"],
@@ -241,7 +254,7 @@ def compare(score: dict, base: dict) -> list[str]:
         now = score["gates"].get(name)
         if g["status"] == "pass" and (now is None or now["status"] != "pass"):
             out.append(f"gate {name} passed at baseline and now "
-                       f"{'did not run' if now is None else 'fails'}"
+                       f"{'did not run' if now is None or now['status'] == 'not_run' else 'fails'}"
                        + (f" ({', '.join(now['kinds'])})" if now and now["kinds"] else ""))
     return out
 
