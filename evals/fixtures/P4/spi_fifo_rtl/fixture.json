@@ -1,0 +1,15 @@
+{
+ "version": 1,
+ "skill": "vde",
+ "block": "spi_fifo",
+ "stage": "P4",
+ "source": "corpus/vde/spi_fifo",
+ "frozen_at": "2026-09-25T00:04:52+00:00",
+ "files": {
+  "spec/spec.md": "1307b2d6f986fd19e6cf4e5318c4f06c8da76d2fd96cea772ec07dadd411d846",
+  "spec/spec.yaml": "393106a2b53df0fd5f4993b2a0bfbf75d3449bec1b2af5bb6e99470e51e2fe19",
+  "rtl/spi_fifo.v": "246e66d2af8f2f1d215dbba6d2c78cb5dbe767233d6dfc5c94418769d23baafd",
+  "tb/test_spi_fifo.py": "e03c2ae1c1d9e2fa2d20a4afc66fe177b9346eeffce25f1203e62bf0aa98b09b",
+  "holdout/test_spi_fifo_holdout.py": "a61a6ead3e59e34d6909707a1f0e75bdbc3ffefd7fce437e36310e28253ff717"
+ }
+}

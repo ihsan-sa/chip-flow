@@ -1,0 +1,75 @@
+"""evals/ladder.py: the ladder.md rendering and the pieces of a run's score
+that need no gate run (docs/design.md section 3, "### M6.")."""
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO / "evals"))
+
+import pytest  # noqa: E402
+
+import ladder  # noqa: E402
+from checklib import CheckError  # noqa: E402
+
+
+def _result(rung, counts, **kw):
+    r = {"skill": "vde", "rung": rung, "counts": counts, "gates_green": counts,
+         "gate_problems": [] if counts else ["mutate: no fresh pass"],
+         "held_out": {"status": "pass", "tests_passed": 1, "tests_run": 1},
+         "hand_edits": 0, "scored_at": "2026-09-24T00:00:00+00:00",
+         "kill_rate": 0.74, "area": 1234.5}
+    r.update(kw)
+    return r
+
+
+def _write(results: Path, name: str, r: dict) -> None:
+    (results / "ladder").mkdir(parents=True, exist_ok=True)
+    (results / "ladder" / name).write_text(json.dumps(r), encoding="utf-8")
+
+
+def test_render_has_all_four_vde_rungs_and_a_place_for_ade_and_msde(tmp_path):
+    md = ladder.render(tmp_path / "results", tmp_path / "fixtures")
+    assert "| level | vde | ade | msde |" in md
+    for title in ("8-bit counter", "UART", "SPI peripheral with a FIFO",
+                  "small RISC-V core"):
+        assert title in md
+    assert "## /ade" in md and "## /msde" in md
+    # harder upward: level 4 is printed before level 1
+    assert md.index("| 4 |") < md.index("| 1 |")
+
+
+def test_render_takes_the_newest_result_per_rung(tmp_path):
+    res = tmp_path / "results"
+    _write(res, "2026-09-01T000000_vde_uart.json", _result("uart", False))
+    _write(res, "2026-09-02T000000_vde_uart.json", _result("uart", True))
+    md = ladder.render(res, tmp_path / "fixtures")
+    assert "UART: counts" in md
+    row = [ln for ln in md.splitlines() if ln.startswith("| uart |")][0]
+    assert "| yes |" in row and "0.74" in row
+
+
+def test_render_says_why_a_rung_is_red(tmp_path):
+    res = tmp_path / "results"
+    _write(res, "2026-09-02T000000_vde_uart.json",
+           _result("uart", False, held_out={"status": "fail", "tests_passed": 0,
+                                            "tests_run": 1}, hand_edits=2))
+    row = [ln for ln in ladder.render(res, tmp_path / "f").splitlines()
+           if ln.startswith("| uart |")][0]
+    assert "1 gate(s) not green" in row and "held-out fails" in row
+    assert "hand edits" in row
+
+
+def test_worst_slack_is_the_minimum_setup_slack():
+    corners = {"ss": {"setup_ws": -0.2, "hold_ws": 0.1},
+               "tt": {"setup_ws": 1.5}, "bad": "x"}
+    assert ladder.worst_slack(corners) == -0.2
+    assert ladder.worst_slack(None) is None
+
+
+def test_scoring_needs_hand_edits_declared(tmp_path):
+    with pytest.raises(CheckError, match="--hand-edits"):
+        ladder.run(["--skill", "vde", "--rung", "uart", "--run", str(tmp_path),
+                    "--results-dir", str(tmp_path / "r")])
