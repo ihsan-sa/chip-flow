@@ -16,7 +16,7 @@ edited the run by hand (docs/design.md section 3). Harder rungs are higher up.
 | rung | counts | why not | held-out | kill rate | area | worst slack ns | fix attempts | tokens | cost USD | wall s | scored | note |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | counter8 | yes |  | pass (1/1) | 1.00 | 1086.6 | 0.29 | 19 | - | - | 14718 | 2026-09-25 | vde session run 2026-09-24/25, workspace runs/counter8-20260924 |
-| uart | no | 12 gate(s) not green; held-out fails | fail (0/1) | 0.79 | - | - | 9 | - | - | 1404 | 2026-09-25 | vde session run 2026-09-24/25, workspace runs/uart-20260924; stopped at P4 mutate fix loop: 4 survivors proven equivalent at CLKS_PER_BIT=4 (15/19=0.79 < 0.9), escalated |
+| uart | no | 12 gate(s) not green | pass (1/1) | 0.79 | - | - | 9 | - | - | 1404 | 2026-09-25 | vde session run 2026-09-24/25, workspace runs/uart-20260924; stopped at P4 mutate fix loop: 4 survivors proven equivalent at CLKS_PER_BIT=4 (15/19=0.79 < 0.9), escalated |
 | spi_fifo | not run | | | | | | | | | | | |
 | riscv | not run | | | | | | | | | | | |
 

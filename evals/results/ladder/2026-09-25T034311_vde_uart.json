@@ -4,7 +4,7 @@
  "block": "uart",
  "run": "uart",
  "phase": "P4",
- "scored_at": "2026-09-25T07:23:31+00:00",
+ "scored_at": "2026-09-25T07:43:11+00:00",
  "counts": false,
  "gates_green": false,
  "gate_problems": [
@@ -29,12 +29,10 @@
  ],
  "hand_edits": 0,
  "held_out": {
-  "status": "fail",
-  "tests_passed": 0,
+  "status": "pass",
+  "tests_passed": 1,
   "tests_run": 1,
-  "kinds": [
-   "holdout_failed"
-  ]
+  "kinds": []
  },
  "kill_rate": 0.7895,
  "line_pct": null,
