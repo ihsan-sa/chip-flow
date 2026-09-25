@@ -32,6 +32,10 @@ terminal past row 0's right one to the right edge. n0 is a metal2 spine
 down the right terminals of rows 1-3. Each resistor carries its own
 substrate contact left of its body; a metal1 strip joins the four to the
 vss rail, and row 3's left terminal is butted onto its contact.
+
+For the hardened tile's own checks, each resistor's terminal contacts sit
+where magic's HRES.7 wants them (magic_clean_res), and dummy COMP squares
+fill the empty corner under the 2R rows (DCF.1a in TT's precheck).
 """
 from __future__ import annotations
 
@@ -68,6 +72,10 @@ X0 = 3.0          # first column's centre
 LADDER_GAP = 5.0  # last column's centre to the resistors' left terminal
 VIA = 0.26        # GF180 via1/via2 are a fixed 0.26 square
 PAD = 0.5         # metal landing around each via
+COMP_DUMMY = (22, 4)
+DUMMY = 5.0         # dummy COMP square, the PDK fill script's (DCF.1c)
+DUMMY_GAP = 1.9     # DCF.2b: dummy to dummy
+DUMMY_SPACE = 3.5   # DCF.8a: dummy to the resistor marking layer
 LINK = 0.38       # drain link width
 RAIL = 1.0        # metal1 rail and metal3 strap height
 WIRE = 0.3        # metal1 vout line width
@@ -148,12 +156,49 @@ def place(top, cell, angle, cx, drain_edge):
     return pads
 
 
+# The PDK's klayout cell puts each terminal's contacts 0.25um from the SAB
+# block (0.35um in from the poly end, SAB 0.1um past the body). klayout's
+# PRES/LRES/HRES.7 is a minimum 0.22um, which that meets; magic's reading
+# of the same rule is exact (SAB + 0.22um + one 0.22um contact), so the
+# contacts' outer 0.03um is a magic DRC error in the hardened tile. Moving
+# each terminal's contacts 0.03um toward the body meets both decks.
+RES_CO_SHIFT = 0.03
+
+
+def magic_clean_res(cell, length):
+    """A flat copy of a ppolyf_u_high_Rs cell with its terminal contacts
+    RES_CO_SHIFT toward the body; the substrate tap's contact stays."""
+    import gdsfactory as gf
+    import klayout.db as kdb
+
+    out = gf.Component()
+    out.add_ref(cell)
+    out.flatten()
+    shapes = out.shapes(out.kcl.layer(*LY["contact"]))
+    moved = 0
+    for shape in list(shapes.each()):
+        box = shape.dbbox()
+        if box.left > -1.0 and box.right < 0:
+            dx = RES_CO_SHIFT
+        elif box.left > length and box.right < length + 1.0:
+            dx = -RES_CO_SHIFT
+        else:
+            continue
+        shape.transform(kdb.DTrans(dx, 0))
+        moved += 1
+    if moved == 0:
+        raise layoutlib.LayoutError("no terminal contacts on a ppolyf_u_1k")
+    return out
+
+
 def resistor(top, length, x, y):
     """One ppolyf_u_1k with its body's lower-left corner at (x, y), the
     body running right. Returns its metal1 pads: 'sub' (its substrate
     contact), 'a' (left terminal) and 'b' (right terminal)."""
     _draw_fet, draw_res = layoutlib.gf180_cells()
-    cell = draw_res.draw_ppolyf_u_high_Rs_res(l_res=length, w_res=R_WIDTH)
+    cell = magic_clean_res(
+        draw_res.draw_ppolyf_u_high_Rs_res(l_res=length, w_res=R_WIDTH),
+        length)
     boxes = layoutlib.layer_boxes(cell, M1)
     if len(boxes) != 3:
         raise layoutlib.LayoutError(
@@ -275,6 +320,27 @@ def generate():
         layoutlib.rect(top, 0.0, y0, x_right, y1, M1)
         layoutlib.rect(top, 0.0, y0, x_right, y1, M3)
         labels.append((net, 1.0, (y0 + y1) / 2, LY["metal3_label"]))
+
+    # dummy COMP under row 1's right half, where row 0 is shorter: left
+    # empty, that corner and the 10um stdcell-row cut around the macro form
+    # an area with no COMP within 10um (DCF.1a in the tile's precheck).
+    # Kept DCF.8a's 3.5um from the rows' resistor layers (which enclose
+    # their poly2, so DCF.5's 1.5um holds too); the circuit COMP (DCF.4,
+    # 3.5um) is all left of the ladder.
+    fill_box = (rows[0]["box"][2] + DUMMY_SPACE, vss_y0,
+                x_right, rows[1]["box"][1] - DUMMY_SPACE)
+    fills = 0
+    x = fill_box[0]
+    while x + DUMMY <= fill_box[2]:
+        y = fill_box[1]
+        while y + DUMMY <= fill_box[3]:
+            layoutlib.rect(top, x, y, x + DUMMY, y + DUMMY, COMP_DUMMY)
+            fills += 1
+            y += DUMMY + DUMMY_GAP
+        x += DUMMY + DUMMY_GAP
+    if fills == 0:
+        raise layoutlib.LayoutError(
+            f"no room for dummy COMP under the ladder: {fill_box}")
 
     # one nwell over both pfets (both bulk vdd)
     nw = layoutlib.layer_boxes(top, LY["nwell"])

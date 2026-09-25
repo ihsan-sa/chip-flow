@@ -302,7 +302,8 @@ def run(argv=None):
     except layoutlib.LayoutError as exc:
         raise CheckError(str(exc)) from exc
     macros = [{k: m[k] for k in ("cell", "instance", "location", "size_um",
-                                 "pins")} for m in spec["macros"]]
+                                 "pins", "ua") if k in m}
+              for m in spec["macros"]]
     too_big = [m for m in macros if m["location"] is None]
     tiles = ttlib.spec_tiles(spec)
     if too_big:

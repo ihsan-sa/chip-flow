@@ -68,7 +68,7 @@ def test_dac_tile_goes_green_on_the_analog_tile_and_its_faults_go_red(
                                         "dac_tile")
     faults.import_plant(rung, "plant_top_harden.py")(off)
     payload, _ = check_top_harden.run(["--workspace", str(off)])
-    assert payload["status"] == "fail"
+    assert payload["status"] == "violations"
     assert {v["kind"] for v in payload["violations"]} == {
         "ua_pin_off_template"}
     assert not (off / "top" / "harden").exists()
@@ -89,6 +89,6 @@ def test_dac_tile_goes_green_on_the_analog_tile_and_its_faults_go_red(
     spec_path.write_text(yaml.safe_dump(spec, sort_keys=False),
                          encoding="utf-8")
     payload, _ = check_precheck.run(["--workspace", str(ws)])
-    assert payload["status"] == "fail"
+    assert payload["status"] == "violations"
     assert any(v["kind"] == "precheck_failed" and "ua[1]" in v["msg"]
                for v in payload["violations"]), payload["violations"]
