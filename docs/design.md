@@ -300,6 +300,8 @@ Boundaries: the `d_cosim` bridge proven on a two-inverter case before the gate i
 
 Done when `cosim` runs the ring oscillator with its divider in one bench and reports the divided frequency inside bounds; `faults.py --skill msde` exits 0; a session running `/msde` on `corpus/msde/sensor_counted/spec.md` reaches `release` with both nested workspaces released and `top_lvs` matching; `ladder.md` gains the msde column.
 
+M10 lands in three parts. Part 1 is `split` and `cosim`. Part 2 is the gates, the corpus faults passing, `cosim` on the ring oscillator and the msde column. Part 3 is the `/msde` run to `release`, and it waits for M9 to merge, because that run's analog half is built on M9's layout roles.
+
 ### M11. The course project
 
 Goal: the course workspace picks one of its own term proposals and designs it as a subproject with its own repository, using the skills, to a package ready to submit.
