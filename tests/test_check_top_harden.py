@@ -40,6 +40,15 @@ def test_macro_size_takes_drawn_extent_past_lef(tmp_path):
     assert check_top_harden.macro_size(lef, _gds(tmp_path, 10), "mac") == (45.6, 31.04)
 
 
+def test_signal_pins_expands_a_bus_to_its_bits():
+    pins = check_top_harden.signal_pins({"dac_code": "d2a", "en": "d2a"},
+                                        {"dac_code": 8})
+    assert pins["en"] == "en"
+    assert {p for p, s in pins.items() if s == "dac_code"} == {
+        f"dac_code[{i}]" for i in range(8)}
+    assert "dac_code" not in pins
+
+
 def test_centre_fits_and_refuses():
     die = "0 0 346.64 160.72"
     assert check_top_harden.centre(die, 45.6, 31.04) == [150.64, 66.64]
