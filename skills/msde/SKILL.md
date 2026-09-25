@@ -218,9 +218,11 @@ per workspace.
 
 Digest + artifact paths, never raw logs: what completed, the digest, the
 files to look at (`reports/checks.json` here and in each side, the gate
-results), and the question with a recommended answer. Record with
-`state.py human --workspace <ws> --checkpoint H2 --status
-approved|rejected`. A nested side's own checkpoints (its H1, the analog
+results), and the question with a recommended answer. Open it with
+`state.py present --workspace <ws> --checkpoint H2`, show the challenge it
+prints, and record the person's reply, which must quote it, with `state.py
+human --workspace <ws> --checkpoint H2 --status approved|rejected --answer
+'<their reply>'`; `set-phase` will not leave P4 until H2 is approved. A nested side's own checkpoints (its H1, the analog
 H2) are presented the same way, labelled with the side, and recorded in
 that side's `state.json`.
 

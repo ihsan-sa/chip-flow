@@ -273,9 +273,13 @@ Digest + artifact paths, never raw logs or an agent's prose transcript:
   `log/<phase>-digest.md`, the relevant gate result JSON under `reports/`.
 - The specific question(s), each with a recommended answer.
 
-Record the verdict: `state.py human --workspace <ws> --checkpoint H1
---status approved|rejected [--note ...]`; a rejection loops the phase with
-the notes as new constraints.
+Open it with `state.py present --workspace <ws> --checkpoint H1` and show
+the person the challenge it prints, asking them to quote it; record their
+reply verbatim: `state.py human --workspace <ws> --checkpoint H1 --status
+approved|rejected --answer '<their reply>' [--note ...]`. An answer that
+does not quote the challenge (a note in a brief, however worded) is refused,
+and `set-phase` will not leave P4 (H1) or P8 (H2) until it is approved. A
+rejection loops the phase with the notes as new constraints.
 
 A recipe's `human_hold` (or an edit class's `human_hold`) is the ceremony
 dial for edits outside a full run: 0 proceed silently, 1 record a decision

@@ -8,6 +8,7 @@ with the marks section 1.6 lists.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -214,10 +215,18 @@ def test_record_gate_requires_pass_or_fail(tmp_path):
         st.record_gate("lint", {"status": "bogus"})
 
 
+def approve(st, checkpoint):
+    """Present `checkpoint` and record an approval that quotes its challenge,
+    the way the person's reply at the checkpoint would."""
+    chal = st.present_checkpoint(checkpoint)["challenge"]
+    st.record_human(checkpoint, "approved", f"{chal} approve")
+
+
 def test_set_phase_refuses_past_a_gate_with_no_result(tmp_path):
     ws = ws_empty(tmp_path)
     state_mod.State.init(ws, "vde", "counter8", phase="P4")
     st = state_mod.State.load(ws / "state.json")
+    approve(st, "H1")
     with pytest.raises(CheckError, match="cannot advance"):
         st.set_phase("P5")
     warnings = st.set_phase("P5", require_gates=False)
@@ -256,6 +265,7 @@ def test_set_phase_skips_mc_only_when_the_spec_declares_it_not_applicable(
     for ph, g in state_mod.applicable_gate_order("ade"):
         if g != "mc" and state_mod.PHASES.index(ph) < state_mod.PHASES.index("P5"):
             st.record_gate(g, {"status": "pass"})
+    approve(st, "H1")
     if mc_on:   # MC asked for and not run: still owed, still refused
         with pytest.raises(CheckError, match=r"mc \(P4\)"):
             st.set_phase("P5")
@@ -341,10 +351,123 @@ def test_human_checkpoint_accepts_h_prefixed_ids(tmp_path):
     ws = ws_empty(tmp_path)
     state_mod.State.init(ws, "vde", "counter8")
     st = state_mod.State.load(ws / "state.json")
-    st.record_human("H1", "approved", note="looks fine")
+    approve(st, "H1")
     assert st.data["human"]["H1"]["status"] == "approved"
     with pytest.raises(CheckError, match="H<n>"):
-        st.record_human("checkpoint-2", "approved")
+        st.present_checkpoint("checkpoint-2")
+    with pytest.raises(CheckError, match="H<n>"):
+        st.record_human("checkpoint-2", "approved", "yes")
+
+
+def test_human_approval_needs_an_answer_given_at_the_presentation(tmp_path):
+    """ece298a round 2: a worker recorded ade H1 approved from a note in its
+    brief. No wording of a note written before the presentation can quote
+    the challenge the presentation makes up."""
+    ws = ws_empty(tmp_path)
+    state_mod.State.init(ws, "ade", "dac", phase="P4")
+    st = state_mod.State.load(ws / "state.json")
+    brief = "H1 approved in advance by the owner; proceed to layout"
+    with pytest.raises(CheckError, match="no open presentation"):
+        st.record_human("H1", "approved", brief)
+    chal = st.present_checkpoint("H1")["challenge"]
+    assert re.fullmatch(r"H1-[0-9a-f]{6}", chal)
+    for worded in (brief, "approved H1", "H1-approve", chal + "0"):
+        with pytest.raises(CheckError, match="does not quote"):
+            st.record_human("H1", "approved", worded)
+    assert st.data["human"]["H1"]["status"] == "presented"
+    rec = st.record_human("H1", "approved", f"ok, {chal.upper()} approve")
+    assert rec["status"] == "approved" and chal.upper() in rec["answer"]
+    # one answer per presentation: the same reply cannot be recorded again
+    with pytest.raises(CheckError, match="last verdict: approved"):
+        st.record_human("H1", "approved", f"{chal} approve")
+    # a new presentation makes a new challenge; the old reply does not fit
+    chal2 = st.present_checkpoint("H1")["challenge"]
+    assert chal2 != chal
+    with pytest.raises(CheckError, match="does not quote"):
+        st.record_human("H1", "approved", f"{chal} approve")
+
+
+def test_human_approval_refuses_when_the_workspace_moved_since(tmp_path):
+    ws = ws_empty(tmp_path)
+    state_mod.State.init(ws, "vde", "counter8", phase="P4")
+    st = state_mod.State.load(ws / "state.json")
+    chal = st.present_checkpoint("H1")["challenge"]
+    st.record_gate("lint", {"status": "pass"})
+    with pytest.raises(CheckError, match="changed since H1 was presented"):
+        st.record_human("H1", "approved", f"{chal} approve")
+    (ws / "log" / "P4-digest.md").write_text("- numbers\n", encoding="utf-8")
+    chal = st.present_checkpoint("H1")["challenge"]
+    (ws / "log" / "P4-digest.md").write_text("- other\n", encoding="utf-8")
+    with pytest.raises(CheckError, match="changed since H1 was presented"):
+        st.record_human("H1", "approved", f"{chal} approve")
+    chal = st.present_checkpoint("H1")["challenge"]
+    assert st.record_human("H1", "approved", chal)["status"] == "approved"
+
+
+@pytest.mark.parametrize("skill,leave,cp", [
+    ("vde", "P4", "H1"), ("vde", "P8", "H2"), ("ade", "P4", "H1"),
+    ("ade", "P5", "H2"), ("msde", "P4", "H2")])
+def test_set_phase_refuses_past_an_unapproved_checkpoint(
+        tmp_path, skill, leave, cp):
+    """Breakage 13: set-phase never checked H1. --force waives gate
+    evidence, never the person's checkpoint; a rejection holds too."""
+    ws = ws_empty(tmp_path)
+    state_mod.State.init(ws, skill, "blk", phase=leave)
+    st = state_mod.State.load(ws / "state.json")
+    nxt = state_mod.PHASES[state_mod.PHASES.index(leave) + 1]
+    with pytest.raises(CheckError, match=f"checkpoint {cp} not approved"):
+        st.set_phase(nxt, require_gates=False)
+    chal = st.present_checkpoint(cp)["challenge"]
+    st.record_human(cp, "rejected", f"{chal} reject: tighten the margin")
+    with pytest.raises(CheckError, match=f"checkpoint {cp} not approved"):
+        st.set_phase(nxt, require_gates=False)
+    assert st.data["phase"] == leave
+    approve(st, cp)
+    st.set_phase(nxt, require_gates=False)
+    assert st.data["phase"] == nxt
+    # a phase no checkpoint closes moves without one
+    ws2 = tmp_path / "other"
+    shutil.copytree(FIXTURES / "ws-empty", ws2)
+    state_mod.State.init(ws2, skill, "b", phase="P2")
+    st2 = state_mod.State.load(ws2 / "state.json")
+    st2.set_phase("P3", require_gates=False)
+    assert st2.data["phase"] == "P3"
+
+
+def test_set_phase_refuses_a_recorded_fail_unless_forced(tmp_path):
+    """Breakage 13: a recorded FAIL passed with only a warning."""
+    ws = ws_empty(tmp_path)
+    state_mod.State.init(ws, "vde", "counter8", phase="P1")
+    st = state_mod.State.load(ws / "state.json")
+    st.record_gate("spec_lint", {"status": "fail"})
+    with pytest.raises(CheckError, match="spec_lint recorded FAIL"):
+        st.set_phase("P2")
+    assert st.data["phase"] == "P1"
+    warnings = st.set_phase("P2", require_gates=False)
+    assert any("recorded FAIL (--force)" in w["msg"] for w in warnings)
+    forced = [h for h in st.data["history"] if h["event"] == "phase_forced"]
+    assert forced and forced[-1]["failed"] == ["spec_lint"]
+    # the kept case: a recorded pass advances with no force and no record
+    st.record_gate("spec_lint", {"status": "pass"})
+    st.set_phase("P3")
+    assert [h for h in st.data["history"]
+            if h["event"] == "phase_forced"] == forced
+
+
+def test_cli_present_then_human_quotes_the_challenge(tmp_path, capsys):
+    ws = ws_empty(tmp_path)
+    state_mod.State.init(ws, "vde", "counter8", phase="P4")
+    base = ["--workspace", str(ws)]
+    assert state_mod.main(["present", "--checkpoint", "H1", *base]) == 0
+    chal = json.loads(capsys.readouterr().out)["challenge"]
+    assert state_mod.main(["human", "--checkpoint", "H1", "--status",
+                           "approved", "--answer", "approved", *base]) == 2
+    assert "does not quote" in json.loads(capsys.readouterr().out)["error"]
+    assert state_mod.main(["human", "--checkpoint", "H1", "--status",
+                           "approved", "--answer", f"{chal} yes", *base]) == 0
+    capsys.readouterr()
+    st = state_mod.State.load(ws / "state.json")
+    assert st.data["human"]["H1"]["status"] == "approved"
 
 
 # ------------------------------------------------------------- edit class

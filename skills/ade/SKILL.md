@@ -209,9 +209,15 @@ post-layout value against its bound), the files to look at, decisions.
 Digest + artifact paths, never raw logs: what completed (one line), the
 digest, the files (`reports/gate-*.json`, `log/<phase>-digest.md`,
 `reports/checks.json` once release runs), and each question with a
-recommended answer. Record the verdict with `state.py human --workspace
-<ws> --checkpoint H1 --status approved|rejected [--note ...]`; a rejection
-loops the phase with the notes as new constraints. H1 comes after P4
+recommended answer. Open it with `state.py present --workspace <ws>
+--checkpoint H1`, show the person the challenge it prints (`H1-3fa9c2`) and
+ask them to quote it in their reply, then record that reply verbatim with
+`state.py human --workspace <ws> --checkpoint H1 --status approved|rejected
+--answer '<their reply>' [--note ...]`. state.py refuses an answer that does
+not quote the challenge, or a workspace that changed since the
+presentation, so an approval written in a brief never counts, and
+`set-phase` will not leave P4 (H1) or P5 (H2) until the checkpoint is
+approved. A rejection loops the phase with the notes as new constraints. H1 comes after P4
 (before any layout is drawn), H2 after P5. Submitting to a shuttle is
 always the person's.
 
