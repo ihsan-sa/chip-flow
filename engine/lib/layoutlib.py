@@ -63,13 +63,22 @@ GF180_LAYER = {
 DRC_DECK_REL = "libs.tech/klayout/tech/drc/gf180mcu.drc"
 # The PDK's own signoff selection (libs.tech/librelane/config.tcl:
 # KLAYOUT_DRC_OPTIONS decks "all,-antenna,-density", variant $PDK): every
-# FEOL, metal, via and guard-ring rule. Only density and antenna are off,
-# because both judge a whole chip's metal fill and gate-to-metal ratios,
-# which a lone block with no floorplan around it cannot pass or fail. The
-# variant is the PDK's name (gf180mcuD: 5 metals, 11K top), never a fixed
-# letter: variant A is a 3-metal stack, and its mslot deck dies on
-# metal4_drawn.
-DRC_DECKS = "all,-density,-antenna"
+# FEOL, metal, via and guard-ring rule, less the decks in DRC_SKIPPED,
+# which judge a whole chip's fill and gate-to-metal ratios, so a lone block
+# with no floorplan around it cannot pass or fail them. The variant is the
+# PDK's name (gf180mcuD: 5 metals, 11K top), never a fixed letter: variant
+# A is a 3-metal stack, and its mslot deck dies on metal4_drawn.
+DRC_SKIPPED = {
+    "density": "metal and poly density is a whole-chip figure; a lone "
+               "block has no fill around it",
+    "antenna": "the gate-to-metal ratio depends on the routing the chip "
+               "puts on the block's pins",
+    "dummy": "the dummy-fill decks (DCF/DPF/DMF, e.g. DCF.1a: the space "
+             "between COMP must be filled) check fill a lone block does not "
+             "have yet; the chip's fill step adds it, for the same reason "
+             "density is off",
+}
+DRC_DECKS = ",".join(["all", *(f"-{d}" for d in DRC_SKIPPED)])
 
 
 class LayoutError(RuntimeError):
@@ -232,26 +241,41 @@ def add_text_label(top, text: str, x: float, y: float,
 
 
 def finalize(top, name: str, labels: list[tuple[str, float, float, tuple]]):
-    """Flatten + snap `top` to the 5nm manufacturing grid via the PDK's own
-    pcell_utilities.snap_to_grid - the same function draw_nfet()/
-    draw_npolyf_res() rely on internally, proven clean against the real
-    klayout deck (docs/spikes/glayout.md's failure was gLayout's OWN
-    from-scratch snap, not this one). Needed here because
-    cells.via_generator.via_stack (unlike draw_fet.py/draw_res.py) does NOT
-    snap itself - calling it directly, as gen_r2r_dac.py's metal2 jumper
-    does, produced real *_OFFGRID findings until this was added.
+    """Flatten + snap `top` to the 5nm manufacturing grid, then add its
+    labels. Needed because cells.via_generator.via_stack (unlike
+    draw_fet.py/draw_res.py) does NOT snap itself - calling it directly, as
+    gen_r2r_dac.py's metal2 jumper does, produced real *_OFFGRID findings
+    until this was added.
 
-    snap_to_grid only copies POLYGONS (get_polygons(by_spec=True)) and
-    returns a brand new Component - any text label added before calling
-    this would be silently dropped, and a label could not be added to
-    `top` afterward either (it is the same locked, already-generated
-    Component). So every generator builds refs+wires only, then calls
-    this ONCE at the end with its labels, in that order."""
-    import importlib
+    Not the PDK's own pcell_utilities.snap_to_grid: that rebuilds each
+    polygon from its outline points and drops its holes, so the PDK
+    filltie's NPLUS keyhole came back as a solid block over its P+ tap -
+    96 of a real R-2R DAC's 98 DRC findings (DF.16_MV, DF.3b, NP.3d/e,
+    PP.3d/e). This snaps each layer's shapes vertex by vertex with
+    klayout's own Region.snapped, which keeps every contour, holes too.
 
-    pcell_utilities = importlib.import_module("cells.pcell_utilities")
-    snapped = pcell_utilities.snap_to_grid(top, dbu=0.005)
+    Only polygons are copied (a Region takes no texts), into a brand new
+    Component - any text label added before calling this would be dropped.
+    So every generator builds refs+wires only, then calls this ONCE at the
+    end with its labels, in that order."""
+    import gdsfactory as gf
+    import klayout.db as kdb
+
+    flat = top.copy()
+    flat.flatten()
+    snapped = gf.Component()
     snapped.name = name
+    grid = int(round(0.005 / flat.kcl.dbu))
+    for li in flat.kcl.layer_indexes():
+        region = kdb.Region(flat.kdb_cell.begin_shapes_rec(li))
+        if region.is_empty():
+            continue
+        # merged semantics off: snap the shapes as drawn, never a union of
+        # them, so a finalized cell is the raw one moved onto the grid.
+        region.merged_semantics = False
+        info = flat.kcl.get_info(li)
+        snapped.kdb_cell.shapes(snapped.kcl.layer(info.layer, info.datatype)
+                                ).insert(region.snapped(grid, grid))
     for text, x, y, layer in labels:
         add_text_label(snapped, text, x, y, layer)
     return snapped
@@ -484,6 +508,60 @@ def netgen_setup() -> Path:
 
 
 _FINAL_RE = re.compile(r"^Final result:\s*(.*)$", re.MULTILINE)
+_PLACEHOLDER_RE = re.compile(r"Call to undefined subcircuit (\S+)")
+_SETUP_DEVICE_RE = re.compile(r"^\s*lappend\s+devices\s+(\S+)", re.MULTILINE)
+
+
+def compared_devices(setup: Path) -> set[str]:
+    """The device classes the PDK's netgen setup gives property rules
+    (`lappend devices NAME` before each `property` loop): the resistors,
+    FETs, caps, diodes and BJTs whose W/L, r_width/r_length, area... it
+    compares. netgen reads each as a placeholder cell, since the extracted
+    and the schematic netlist both call it as an undefined subckt, and
+    still compares its properties (a ppolyf_u 150u against 100u is a
+    property error)."""
+    text = setup.read_text(encoding="utf-8", errors="replace")
+    return {m.lower() for m in _SETUP_DEVICE_RE.findall(text)}
+
+
+def std_cell_subckts(netlist_text: str) -> tuple[str, list[str]]:
+    """(the .SUBCKT text, their names) of every PDK standard cell
+    netlist_text calls but does not define, with the cells those call in
+    turn. finalize() flattens a std cell into its transistors, so the
+    extracted netlist has no buf_20, only its FETs. Handing netgen the
+    cell's own transistor netlist lets it flatten the reference to the
+    same level, and compare every std-cell device, not a black box."""
+    import netlistlib
+
+    library: dict[str, str] = {}
+    for rel in netlistlib.PDK_STDCELL_FILES:
+        p = pdk_root() / rel
+        if not p.is_file():
+            continue
+        block: list[str] = []
+        name = None
+        for line in p.read_text(encoding="utf-8",
+                                errors="replace").splitlines():
+            m = netlistlib.SUBCKT_RE.match(line)
+            if m:
+                name, block = m.group(1).lower(), []
+            if name is not None:
+                block.append(line)
+                if line.strip().lower().startswith(".ends"):
+                    library.setdefault(name, "\n".join(block) + "\n")
+                    name = None
+    defined = set(netlistlib.subckt_pins(netlist_text))
+    wanted = [d["model"] for d in netlistlib.parse_devices(netlist_text)]
+    added: list[str] = []
+    while wanted:
+        cell = wanted.pop()
+        if cell in defined or cell not in library:
+            continue
+        defined.add(cell)
+        added.append(cell)
+        wanted += [d["model"] for d in
+                   netlistlib.parse_devices(library[cell])]
+    return "".join(library[c] for c in added), added
 
 
 def run_netgen_lvs(work_dir, extracted_spice, extracted_cell: str,
@@ -492,7 +570,9 @@ def run_netgen_lvs(work_dir, extracted_spice, extracted_cell: str,
     """netgen LVS under the PDK's own setup (device classes, pin
     permutations, which properties to compare and which - ad/pd/as/ps, nf -
     to drop). A match is the top cell's last "Final result:" line reading
-    "Circuits match uniquely." with no property error anywhere in the log."""
+    "Circuits match uniquely." with no property error anywhere in the log.
+    Refuses (LayoutError) when netgen had to black-box a cell whose
+    properties it does not compare."""
     setup = netgen_setup()
     # netgen writes out_log relative to its own cwd (work_dir) - resolve it
     # there regardless of the caller's own cwd.
@@ -512,6 +592,19 @@ def run_netgen_lvs(work_dir, extracted_spice, extracted_cell: str,
         raise LayoutError(
             "netgen LVS log has no 'Final result:' line - nothing was "
             f"compared: {text[-2000:]}")
+    # A cell neither netlist defines is a placeholder netgen can only count
+    # and wire. Only the PDK's own device classes carry property rules; any
+    # other placeholder (a std cell the reference calls but never defines)
+    # is compared as an empty box, so the gate refuses rather than pass it.
+    blind = sorted({c.lower() for c in _PLACEHOLDER_RE.findall(out + text)}
+                   - compared_devices(setup))
+    if blind:
+        raise LayoutError(
+            f"netgen compared {', '.join(blind)} as black boxes: neither "
+            "netlist defines them and the PDK setup gives them no property "
+            "rules, so LVS cannot see inside them. Give the reference their "
+            ".subckt (std cells: layoutlib.std_cell_subckts) or flatten them "
+            "out of the layout")
     matched = finals[-1].strip().startswith("Circuits match uniquely")
     failed = "property error" in text.lower() or "do not match" in text
     return (matched and not failed), text
