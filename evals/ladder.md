@@ -9,13 +9,13 @@ edited the run by hand (docs/design.md section 3). Harder rungs are higher up.
 | 4 | small RISC-V core: red | bandgap: not in corpus | SAR ADC: not in corpus |
 | 3 | SPI peripheral with a FIFO: red | comparator: not in corpus | DAC with an SPI register: not in corpus |
 | 2 | UART: red | R2R DAC: not run | ring oscillator with a divider: not run |
-| 1 | 8-bit counter: red | current mirror: not run | a sensor counted: not run |
+| 1 | 8-bit counter: counts | current mirror: not run | a sensor counted: not run |
 
 ## /vde
 
 | rung | counts | why not | held-out | kill rate | area | worst slack ns | fix attempts | tokens | cost USD | wall s | scored | note |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| counter8 | no | 7 gate(s) not green | pass (1/1) | 0.96 | 1086.6 | - | 0 | - | - | 438 | 2026-09-25 | reference RTL with its gates run by gate.py, not a /vde skill run |
+| counter8 | yes |  | pass (1/1) | 0.96 | 1086.6 | 7.97 | 0 | - | - | 4450 | 2026-09-25 | reference RTL with its gates run by gate.py, not a /vde skill run |
 | uart | no | 8 gate(s) not green | pass (1/1) | 0.74 | 3197.8 | - | 0 | - | - | 507 | 2026-09-25 | reference RTL with its gates run by gate.py, not a /vde skill run |
 | spi_fifo | no | 10 gate(s) not green | pass (1/1) | 0.70 | 8252.7 | - | 0 | - | - | 378 | 2026-09-25 | reference RTL with its gates run by gate.py, not a /vde skill run |
 | riscv | no | 9 gate(s) not green | pass (1/1) | - | - | - | 0 | - | - | 1044 | 2026-09-25 | reference RTL with its gates run by gate.py, not a /vde skill run |
