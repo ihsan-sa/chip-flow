@@ -175,6 +175,16 @@ edit_classes:
       stale_artifacts: []
       gates: [formal, mutate]
       human_hold: 1
+    holdout_edit:
+      # held-out tests are the check the designer never sees (section 2),
+      # so a change to them is declared, hold 2 like a spec change. It is
+      # also what lets holdout/ drift from the state.holdout pin: without
+      # it (or a spec_edit, which marks holdout stale) state.py refuses to
+      # rehash, re-pin or record the holdout gate over the changed files.
+      mutates: [holdout]
+      stale_artifacts: []
+      gates: [holdout]
+      human_hold: 2
     harden_config_edit:
       mutates: [harden_config, harden_override, harden_info]
       stale_artifacts: []

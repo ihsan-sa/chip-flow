@@ -12,7 +12,8 @@ Requirement tagging convention (this module's own choice; docs/design.md
 section 2 says only "every test carries the requirement ids it covers", not
 the mechanism): a `# req: ID [ID2 ...]` comment on the line immediately
 before a `@cocotb.test()` decorator tags that test with the requirement
-id(s) it covers - UNLESS that decorator carries `expect_fail`/`expect_error`
+id(s) it covers; several such lines stacked above one test (other comment
+lines may sit between them) tag it with the union of their ids - UNLESS that decorator carries `expect_fail`/`expect_error`
 (see scan_requirement_tags below): a test cocotb itself expects to fail
 cannot silently stand in for a real pass.
 """
@@ -50,7 +51,8 @@ def scan_requirement_tags(py_dir: Path) -> dict[str, set[str]]:
     """{test_function_name: {req_id, ...}} for every `@cocotb.test()`
     function under py_dir (non-recursive - test files live directly in tb/
     or holdout/) whose immediately preceding non-blank line is a `# req:
-    ...` comment. A test with no such comment is simply absent here; callers
+    ...` comment, with every stacked `# req:` line in the comment block above
+    it counted, not only the last. A test with no such comment is simply absent here; callers
     decide whether that omission is itself a finding.
 
     A test decorated `expect_fail`/`expect_error` never gets its pending tag
@@ -66,7 +68,10 @@ def scan_requirement_tags(py_dir: Path) -> dict[str, set[str]]:
         for i, line in enumerate(lines):
             m = REQ_TAG_RE.match(line)
             if m:
-                pending = set(m.group(1).split())
+                # Stacked `# req:` lines above one test all count (ece298a
+                # round 2, breakage 11: a second line used to replace the
+                # first, silently dropping its ids from coverage).
+                pending = (pending or set()) | set(m.group(1).split())
                 continue
             if COCOTB_TEST_RE.match(line):
                 window = lines[i:i + 4]

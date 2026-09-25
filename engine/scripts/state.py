@@ -26,9 +26,12 @@ Schema (version 3):
                             stale: [mark]?}},
       "jobs": {id: {gate, pid, started, finished?, status: running|done|dead,
                     log, result?}},
-      "holdout": {"sha", "written_by", "ts"} | null,
+      "holdout": {"sha", "written_by", "ts", "edits_at_pin",
+                  "replaced_sha"?} | null,
       "optimise": {"trials", "evaluator_sha", "best": {trial, score}} | null,
-      "human": {checkpoint_id: {status: approved|rejected|skipped, ts, note}},
+      "human": {checkpoint_id: {status: presented|approved|rejected|skipped,
+                                challenge, digest, presented, ts?, answer?,
+                                note?}},
       "artifacts": {name: {path, kind|null, sha256|null, hashed: ts,
                            stale: [mark]?}},
       "open_issues": [{id, gate, phase, fixer, kinds[], severity, count,
@@ -62,9 +65,13 @@ CLI (docs/design.md 1.1 script contract: argparse, JSON to stdout, exit 0 ok
     state.py toolchain --image PATH [--versions-sha SHA] [--pdk NAME] [--pdk-sha SHA]
     state.py job-start --gate NAME --pid N --log PATH ...
     state.py job-update --job ID --status done|dead [--result FILE] ...
-    state.py holdout --written-by tb-writer ...
+    state.py holdout --written-by tb-writer ...   (pins holdout/'s hash; a
+        later change must be declared with `edit --class holdout_edit` (or
+        spec_edit) before rehash, a re-pin or record-gate --gate holdout
+        will run over it - resume reports it as holdout_drift)
     state.py decision --what W --why Y ...
-    state.py human --checkpoint H1 --status approved [--note N] ...
+    state.py present --checkpoint H1 ...
+    state.py human --checkpoint H1 --status approved --answer TEXT [--note N] ...
     state.py issue --id 3 --status fixed [--agent fixer-1] [--bump-attempts] ...
     state.py issue --id 3 --status waived --note TEXT --approved-by WHO ...
     state.py budget --path fix_loops.lint [--consume] ...
@@ -72,9 +79,22 @@ CLI (docs/design.md 1.1 script contract: argparse, JSON to stdout, exit 0 ok
     state.py snapshot --label L [--files F ...] / restore --label L ...
 
 `set-phase` REFUSES to advance past a gate phase whose gate has no recorded
-result. `gate.py --workspace <ws>` records the result itself, so the normal
-flow never sees the refusal; `--force` is the escape hatch and logs
-`phase_forced` with the missing gates.
+result or whose last recorded result is a FAIL. `gate.py --workspace <ws>`
+records the result itself, so the normal flow never sees the refusal;
+`--force` is the escape hatch for gate evidence only and logs `phase_forced`
+with the missing and failed gates.
+
+Human checkpoints need an answer given AT the checkpoint, never a note
+written beforehand (a brief that says "H1 is approved" is not an answer).
+`present` records the checkpoint with a digest of what is being shown (phase,
+every gate's last result, every artifact hash, the phase digest file) and
+prints a fresh random challenge, e.g. `H1-3fa9c2`, that the presentation
+shows the person. `human` then REFUSES unless the checkpoint was presented and
+not yet answered, the `--answer` text (the person's reply, verbatim) contains
+that challenge, and the digest still matches - so nothing written before the
+presentation can satisfy it however it is worded, and a state that moved after
+the presentation must be presented again. `set-phase` REFUSES to advance past
+a phase whose checkpoint (CHECKPOINTS below) is not approved, `--force` or not.
 
 CLI `log` event names are machine keys: ^[a-z][a-z0-9_-]{0,31}$ - prose
 belongs in --data {"msg": ...}. `log --event spawn --data {...}`
@@ -96,6 +116,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import shutil
 import sys
 import time
@@ -121,6 +142,14 @@ PHASES = ["P0", "P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "done"]
 # names (docs/design.md 1.4: digital H1/H2, analog H1/H2, msde H2) - never a
 # fixed phase->checkpoint table, because that table differs per skill.
 CHECKPOINT_RE = re.compile(r"H[1-9][0-9]?\Z")
+# Which checkpoint closes which phase, per skill (the skills' phase machines:
+# vde H1 after P4 and H2 at P8 release, ade H1 after P4 and H2 after P5, msde
+# H2 at P4 release). set-phase refuses to move past the phase until the
+# checkpoint is approved. A recipe's own `human:` hold (tasks.yaml) is not in
+# this table - it is presented and answered the same way, but holds no phase.
+CHECKPOINTS = {"vde": {"P4": "H1", "P8": "H2"},
+               "ade": {"P4": "H1", "P5": "H2"},
+               "msde": {"P4": "H2"}}
 GATES_YAML = ENGINE / "reference" / "gates.yaml"
 DEFAULT_BUDGETS = {
     "fix_loops": {},   # populated per gate on first budget touch, see budget()
@@ -220,6 +249,12 @@ class State:
             raise CheckError(f"unknown skill {skill!r} (known: {', '.join(SKILLS)})")
         if phase not in PHASES:
             raise CheckError(f"unknown phase {phase!r}")
+        split_name = statelib.split_block_name(workspace)
+        if split_name and block != split_name:
+            raise CheckError(
+                f"{workspace} is the msde split's {workspace.name} side, so its "
+                f"block is {split_name!r}, not {block!r} (skills/msde/SKILL.md, "
+                "Run start): give --block " + split_name)
         workspace.mkdir(parents=True, exist_ok=True)
         for d in SUBDIRS:  # idempotent scaffold; pre-existing content survives
             (workspace / d).mkdir(exist_ok=True)
@@ -341,14 +376,30 @@ class State:
                     "kind": "gate_coverage",
                     "msg": f"advanced to {phase} with no recorded result for "
                            f"{', '.join(missing)} (--force)"})
+            if failed and require_gates:
+                raise CheckError(
+                    f"cannot advance {prev} -> {phase}: {', '.join(failed)} "
+                    "recorded FAIL. The fix loop re-records a pass before the "
+                    "run moves on; --force advances anyway and says so in "
+                    "history")
+            if missing or failed:
                 self._log("phase_forced", phase=phase, prev=prev,
-                          missing=missing)
+                          missing=missing, failed=failed)
             if failed:
                 warnings.append({
                     "kind": "gate_coverage",
                     "msg": f"advanced to {phase} with {', '.join(failed)} "
-                           "recorded FAIL - the fix loop re-records a pass "
-                           "before the run moves on"})
+                           "recorded FAIL (--force)"})
+            # never waived by --force: a human checkpoint is the person's
+            unanswered = self.unapproved_checkpoints(prev, phase)
+            if unanswered:
+                raise CheckError(
+                    f"cannot advance {prev} -> {phase}: human checkpoint "
+                    f"{', '.join(unanswered)} not approved. Present it "
+                    "(state.py present --checkpoint <H>), then record the "
+                    "person's reply with state.py human --status approved "
+                    "--answer '<reply quoting the challenge>'. --force does "
+                    "not waive a checkpoint")
         self.data["phase"] = phase
         self._log("phase", phase=phase, prev=prev)
         if prev != phase and re.fullmatch(r"P\d+", prev or ""):
@@ -390,6 +441,8 @@ class State:
                         f"current {kinds[0]} ({rel}) - the result describes "
                         "a different or stale artifact; re-run the gate "
                         "against the current file")
+        if gate == "holdout":
+            self._refuse_holdout_drift("record the holdout gate")
         entry = {"ts": now(), "status": status,
                  "failing_count": result.get("failing_count", 0),
                  "total": (result.get("counts") or {}).get("total", 0),
@@ -508,6 +561,10 @@ class State:
         ws = self.path.parent
         registry = self.data["artifacts"]
         explicit = names is not None
+        if names is None or "holdout" in names:
+            # a bare rehash is what resume runs; it must not absorb an
+            # undeclared holdout/ change into the registry
+            self._refuse_holdout_drift("rehash")
         if names is None:
             names = sorted(set(registry) | {
                 k for k in imap["artifact_kinds"]
@@ -559,13 +616,66 @@ class State:
         """Hash holdout/ into state.holdout at creation (section 2): a
         held-out test's own hash, pinned once, so a run can tell whether
         the tb-writer's holdout set has changed under it."""
+        drift = self._refuse_holdout_drift("re-pin holdout/")
         imap = self._imap()
         rel, sha = statelib.hash_kind(self.path.parent, "holdout", imap,
                                       self.data["artifacts"])
-        rec = {"sha": sha, "written_by": written_by, "ts": now()}
+        # the pin remembers how many edits existed when it was taken, so a
+        # later drift is answered only by an edit declared AFTER it (list
+        # order, not the second-resolution timestamps)
+        rec = {"sha": sha, "written_by": written_by, "ts": now(),
+               "edits_at_pin": len(self.data["edits"])}
+        if drift:
+            rec["replaced_sha"] = drift["pinned"]
         self.data["holdout"] = rec
-        self._log("holdout", written_by=written_by, sha=sha)
+        self._log("holdout", written_by=written_by, sha=sha,
+                  **({"replaced_sha": drift["pinned"]} if drift else {}))
         return rec
+
+    def _holdout_edit_classes(self) -> set[str]:
+        """Edit classes of this skill that declare a holdout/ change: the
+        ones that rewrite it (holdout_edit) or mark it stale (spec_edit)."""
+        classes = self._imap()["edit_classes"].get(self._skill()) or {}
+        return {name for name, ec in classes.items()
+                if "holdout" in (ec.get("mutates") or [])
+                or "holdout" in (ec.get("stale_artifacts") or [])}
+
+    def holdout_drift(self) -> dict | None:
+        """holdout/'s current hash against the state.holdout pin. None when
+        nothing is pinned or nothing changed; otherwise {pinned, current,
+        declared} where declared names the edit that owns the change (an
+        edit of a holdout-declaring class made after the pin) or is None."""
+        pin = self.data.get("holdout")
+        if not isinstance(pin, dict) or not pin.get("sha"):
+            return None
+        _, cur = statelib.hash_kind(self.path.parent, "holdout", self._imap(),
+                                    self.data["artifacts"])
+        if cur == pin["sha"]:
+            return None
+        edits = self.data["edits"]
+        start = pin.get("edits_at_pin")
+        after = (edits[start:] if isinstance(start, int)
+                 else [e for e in edits if e.get("ts", "") >= pin.get("ts", "")])
+        classes = self._holdout_edit_classes()
+        declared = next((e for e in reversed(after)
+                         if e.get("class") in classes), None)
+        return {"pinned": pin["sha"], "current": cur,
+                "declared": ({"class": declared["class"], "ts": declared["ts"]}
+                             if declared else None)}
+
+    def _refuse_holdout_drift(self, action: str) -> dict | None:
+        """Breakage 12: an undeclared change to holdout/ is refused, never
+        re-hashed over. Returns the (declared) drift, or None."""
+        drift = self.holdout_drift()
+        if drift and not drift["declared"]:
+            raise CheckError(
+                f"holdout/ changed since state.holdout was pinned "
+                f"({drift['pinned']} -> {drift['current']}) and no edit "
+                f"declares it, so state.py will not {action}. Declare it: "
+                "`state.py edit --class holdout_edit --note WHY`, then "
+                "re-pin with `state.py holdout --written-by <who>`; or "
+                "restore holdout/ to the pinned files")
+        return drift
 
     # ---- jobs (docs/design.md 1.7) ---------------------------------------
     def start_job(self, gate: str, pid: int, log: str) -> tuple[str, dict]:
@@ -604,15 +714,84 @@ class State:
              "ts": now()})
         self._log("decision", what=what)
 
-    def record_human(self, checkpoint: str, status: str,
-                     note: str | None = None) -> None:
+    def unapproved_checkpoints(self, prev: str, phase: str) -> list[str]:
+        """Checkpoints closing a phase in [prev, phase) that are not
+        approved - the ones set-phase prev -> phase would walk past."""
+        lo, hi = PHASES.index(prev), PHASES.index(phase)
+        table = CHECKPOINTS.get(self._skill(), {})
+        return [cp for ph, cp in table.items()
+                if lo <= PHASES.index(ph) < hi
+                and (self.data["human"].get(cp) or {}).get("status")
+                != "approved"]
+
+    def checkpoint_digest(self) -> str:
+        """Digest of what a checkpoint shows the person: the phase, every
+        gate's last result, every artifact hash and the current phase's
+        digest file. An approval binds to it, so it approves this state."""
+        ws = self.path.parent
+        ph = self.data["phase"]
+        dig = ws / "log" / f"{ph}-digest.md"
+        view = {"phase": ph,
+                "gates": {g: rec.get("last") for g, rec
+                          in sorted(self.data["gates"].items())},
+                "artifacts": {n: a.get("sha256") for n, a
+                              in sorted(self.data["artifacts"].items())},
+                "digest_md": (safelib.sha256_bytes(dig.read_bytes())
+                              if dig.is_file() else None)}
+        return safelib.sha256_bytes(
+            json.dumps(view, sort_keys=True).encode("utf-8"))
+
+    def present_checkpoint(self, checkpoint: str) -> dict:
+        """Record that `checkpoint` is being shown to the person now, with a
+        fresh challenge only this presentation knows. A re-presentation
+        replaces the last one (and its challenge)."""
+        if not CHECKPOINT_RE.fullmatch(checkpoint or ""):
+            raise CheckError(f"checkpoint must match H<n>, got {checkpoint!r}")
+        rec = {"status": "presented",
+               "challenge": f"{checkpoint}-{secrets.token_hex(3)}",
+               "digest": self.checkpoint_digest(), "presented": now(),
+               "phase": self.data["phase"]}
+        self.data["human"][checkpoint] = rec
+        self._log("human_presented", checkpoint=checkpoint,
+                  challenge=rec["challenge"], digest=rec["digest"])
+        return rec
+
+    def record_human(self, checkpoint: str, status: str, answer: str | None,
+                     note: str | None = None) -> dict:
+        """Record the person's verdict on a presented checkpoint. The answer
+        must be given after the presentation: it has to quote the challenge
+        `present` printed, which did not exist before it, so no brief or
+        earlier note can stand in for it."""
         if not CHECKPOINT_RE.fullmatch(checkpoint or ""):
             raise CheckError(f"checkpoint must match H<n>, got {checkpoint!r}")
         if status not in ("approved", "rejected", "skipped"):
             raise CheckError("human status must be approved|rejected|skipped")
-        self.data["human"][checkpoint] = {"status": status, "ts": now(),
-                                          "note": note}
-        self._log("human", checkpoint=checkpoint, status=status)
+        rec = self.data["human"].get(checkpoint) or {}
+        if rec.get("status") != "presented":
+            raise CheckError(
+                f"{checkpoint} has no open presentation"
+                + (f" (last verdict: {rec['status']})" if rec else "")
+                + ": run state.py present --checkpoint "
+                f"{checkpoint}, show the person the digest and the challenge "
+                "it prints, and record their reply. A note written before "
+                "the checkpoint is not an answer to it")
+        chal = rec["challenge"]
+        if not re.search(rf"(?<![0-9A-Za-z]){re.escape(chal)}(?![0-9A-Za-z])",
+                         answer or "", re.IGNORECASE):
+            raise CheckError(
+                f"--answer does not quote {checkpoint}'s challenge {chal}: "
+                "record the person's reply verbatim, and ask them to include "
+                "the challenge. An answer that does not quote it was not "
+                "given at this presentation")
+        if self.checkpoint_digest() != rec["digest"]:
+            raise CheckError(
+                f"the workspace changed since {checkpoint} was presented "
+                "(a gate, an artifact, the phase or its digest file): the "
+                "answer is to a state that is gone. Present it again")
+        rec.update(status=status, ts=now(), answer=answer, note=note)
+        self._log("human", checkpoint=checkpoint, status=status,
+                  challenge=chal)
+        return rec
 
     def open_issue(self, issue: dict) -> dict:
         iid = self.data["next_issue_id"]
@@ -870,6 +1049,7 @@ class State:
             "gates_stale": fresh["summary"]["stale"],
             "gates_freshness_unknown": fresh["summary"]["unknown"],
             "human_hold_pending": fresh["summary"]["human_hold_pending"],
+            "holdout_drift": self.holdout_drift(),
             "open_issues": open_issues, "running_jobs": running_jobs,
             "budgets": self.data["budgets"],
             "artifacts": self.data["artifacts"], "last_event": last,
@@ -987,10 +1167,18 @@ def run(argv=None):
     p.add_argument("--why", required=True)
     p.add_argument("--phase")
 
+    p = sub.add_parser("present", help="record a human checkpoint as shown "
+                       "now; prints the challenge the answer must quote")
+    common(p)
+    p.add_argument("--checkpoint", required=True)
+
     p = sub.add_parser("human")
     common(p)
     p.add_argument("--checkpoint", required=True)
     p.add_argument("--status", required=True)
+    p.add_argument("--answer", required=True,
+                   help="the person's reply, verbatim; must quote the "
+                        "challenge `present` printed")
     p.add_argument("--note")
 
     p = sub.add_parser("issue")
@@ -1112,8 +1300,14 @@ def _mutate(st: "State", args, result: dict):
     elif args.cmd == "decision":
         st.add_decision(args.what, args.why, args.phase)
         result.update(what=args.what)
+    elif args.cmd == "present":
+        rec = st.present_checkpoint(args.checkpoint)
+        result.update(checkpoint=args.checkpoint, challenge=rec["challenge"],
+                      checkpoint_digest=rec["digest"],
+                      ask=f"Reply quoting {rec['challenge']} with approve or "
+                          "reject and any notes")
     elif args.cmd == "human":
-        st.record_human(args.checkpoint, args.status, args.note)
+        st.record_human(args.checkpoint, args.status, args.answer, args.note)
         result.update(checkpoint=args.checkpoint, status=args.status)
     elif args.cmd == "issue":
         rec = st.update_issue(args.id, args.status, args.agent,

@@ -27,8 +27,8 @@ checkout binds `skills/msde` alone:
       --task "<words>"
 
 A recipe step written `scripts/state.py resume --workspace {ws}` is already
-resolved to that root by the time it reaches `recipe.steps[].command` - run
-the rendered `command` verbatim, through `eda python`.
+resolved to that root, and led by `bin/eda python`, by the time it reaches
+`recipe.steps[].command` - run the rendered `command` verbatim.
 
 ## The workspace: one msde block, two nested runs
 
@@ -176,7 +176,9 @@ Other cross-boundary edits, declared where the file lives:
 --skill msde --block <name>`, copy the spec into `brief/`, then the
 splitter. The nested workspaces are created by their own `full-run` plans
 in P2, with block names `<name>` (digital - it is the tile) and
-`<name>_analog`.
+`<name>_analog`. Never the directory's name: layout, LVS, pex_sim and
+top_harden name files after the block, so `state.py init` refuses any
+other name there and the router blocks a plan that carries one.
 
 **Existing block**: `state.py resume` on the msde workspace AND on each
 nested one that exists, then `jobs.py status --workspace <ws> --all`
@@ -218,9 +220,11 @@ per workspace.
 
 Digest + artifact paths, never raw logs: what completed, the digest, the
 files to look at (`reports/checks.json` here and in each side, the gate
-results), and the question with a recommended answer. Record with
-`state.py human --workspace <ws> --checkpoint H2 --status
-approved|rejected`. A nested side's own checkpoints (its H1, the analog
+results), and the question with a recommended answer. Open it with
+`state.py present --workspace <ws> --checkpoint H2`, show the challenge it
+prints, and record the person's reply, which must quote it, with `state.py
+human --workspace <ws> --checkpoint H2 --status approved|rejected --answer
+'<their reply>'`; `set-phase` will not leave P4 until H2 is approved. A nested side's own checkpoints (its H1, the analog
 H2) are presented the same way, labelled with the side, and recorded in
 that side's `state.json`.
 

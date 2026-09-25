@@ -243,6 +243,20 @@ def test_unknown_gate_for_skill_errors(tmp_path, capsys):
     assert "unknown gate" in out["error"]
 
 
+def test_error_goes_to_out_not_stdout(tmp_path, capsys):
+    ws = make_ws(tmp_path)
+    out_path = tmp_path / "reports" / "gate-x.json"
+    out_path.parent.mkdir()
+    out_path.write_text('{"status": "pass"}', encoding="utf-8")  # a stale pass
+    code = gate.main(["--gate", "not-a-gate", "--workspace", str(ws),
+                      "--out", str(out_path)])
+    assert code == 2
+    assert capsys.readouterr().out == ""
+    written = json.loads(out_path.read_text(encoding="utf-8"))
+    assert written["status"] == "error"
+    assert "unknown gate" in written["remediation"]
+
+
 def test_skill_override_used_without_workspace(tmp_path, capsys):
     checks_dir = make_checks_dir(tmp_path)
     gates_yaml = make_gates_yaml(tmp_path)

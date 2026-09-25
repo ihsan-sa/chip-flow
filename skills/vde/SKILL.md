@@ -36,8 +36,9 @@ resolved for you by the time it reaches `recipe.steps[].command`:
 `task_router.py` binds the `scripts/` convention to
 `${CHIP_FLOW_HOME:-$HOME/.claude/skills/chip-flow}/engine/scripts/` before
 it ever renders a plan, and that resolution is proven to work from any cwd
-(`tests/test_task_router.py`) - run the rendered `command` field verbatim,
-through `eda python`, never a hand-assembled relative path. Gates are the
+(`tests/test_task_router.py`) - run the rendered `command` field verbatim
+(it already starts with `bin/eda python`, so the toolchain's python runs
+it, never the host's), never a hand-assembled relative path. Gates are the
 one exception worth knowing up front: `gate.py` dynamically imports its
 sibling `check_<tool>.py` from that same directory by module name, so a
 gate step's `--workspace` is the only path that varies.
@@ -231,6 +232,11 @@ On gate fail (exit 1, result JSON has `failing` with a `kind`/`file`/
   section 2). The fixer domain is `rtl` (a real functional gap the visible
   tests missed), but its remediation and guidance must stay silent on
   which held-out test caught it.
+- **A change to `holdout/` is declared, never re-hashed over.** Once the
+  tb-writer pins it (`state.py holdout`), `rehash`, a re-pin and
+  `record-gate --gate holdout` all refuse while `holdout/` differs from the
+  pin, until `state.py edit --class holdout_edit --note WHY` (hold 2) or a
+  `spec_edit` declares the change; `resume` shows it as `holdout_drift`.
 - **A `formal` `engine_disagreement` or `cover_not_reached`** routes to the
   `formal` domain (the property, not the design) - "widen the induction
   depth or fix the property, never loosen it to make the gate pass"
@@ -273,9 +279,13 @@ Digest + artifact paths, never raw logs or an agent's prose transcript:
   `log/<phase>-digest.md`, the relevant gate result JSON under `reports/`.
 - The specific question(s), each with a recommended answer.
 
-Record the verdict: `state.py human --workspace <ws> --checkpoint H1
---status approved|rejected [--note ...]`; a rejection loops the phase with
-the notes as new constraints.
+Open it with `state.py present --workspace <ws> --checkpoint H1` and show
+the person the challenge it prints, asking them to quote it; record their
+reply verbatim: `state.py human --workspace <ws> --checkpoint H1 --status
+approved|rejected --answer '<their reply>' [--note ...]`. An answer that
+does not quote the challenge (a note in a brief, however worded) is refused,
+and `set-phase` will not leave P4 (H1) or P8 (H2) until it is approved. A
+rejection loops the phase with the notes as new constraints.
 
 A recipe's `human_hold` (or an edit class's `human_hold`) is the ceremony
 dial for edits outside a full run: 0 proceed silently, 1 record a decision

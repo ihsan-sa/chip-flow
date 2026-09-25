@@ -226,6 +226,30 @@ def find_workspace(input_file: Path | None,
     return None
 
 
+# skills/msde/SKILL.md, "Run start": the nested workspaces take "block names
+# `<name>` (digital - it is the tile) and `<name>_analog`". Never the
+# directory's own name: layout_gen, analog LVS, pex_sim and top_harden name
+# files after the block, so an `analog` block looks for netlist/analog.cir.
+SPLIT_SUFFIX = {"digital": "", "analog": "_analog"}
+
+
+def split_block_name(ws: Path | str) -> str | None:
+    """The block name the msde split gives `ws`, or None when `ws` is not
+    digital/ or analog/ directly under an msde workspace with a block."""
+    ws = Path(ws)
+    suffix = SPLIT_SUFFIX.get(ws.name)
+    parent_state = ws.parent / "state.json"
+    if suffix is None or not parent_state.is_file():
+        return None
+    try:
+        parent = json.loads(parent_state.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if parent.get("skill") != "msde" or not parent.get("block"):
+        return None
+    return parent["block"] + suffix
+
+
 def kind_path(kind: str, imap: dict, registry: dict | None = None) -> str:
     """Workspace-relative path for a standard artifact kind. A registry
     entry registered under the kind's name overrides the default template -
