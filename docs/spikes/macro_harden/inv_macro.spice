@@ -1,0 +1,6 @@
+* inv_macro.spice - the schematic of gen_inv.py's cell: a GF180 3.3V CMOS
+* inverter. The top-level LVS reads this as the macro's subcircuit.
+.subckt inv_macro in out vdd vss
+xmp out in vdd vdd pfet_03v3 w=4e-6 l=5e-7
+xmn out in vss vss nfet_03v3 w=2e-6 l=5e-7
+.ends inv_macro

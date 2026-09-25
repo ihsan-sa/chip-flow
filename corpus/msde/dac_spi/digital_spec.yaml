@@ -1,0 +1,21 @@
+# digital_spec.yaml - the digital side's own declared copy of the crossing
+# signals interface.yaml names (docs/design.md section 5: "two specs
+# carrying the same entries"). Stands in for a real nested /vde block's own
+# spec.yaml `interface:` section until M4 merges (engine/scripts/
+# check_split.py's own docstring). No reference design exists yet for this
+# rung (spec.md: "a spec with faults only") - this file is the digital
+# side's declared interface, nothing more.
+top: dac_spi_digital
+interface:
+  - name: code
+    direction: d2a
+    level: cmos_3v3
+    domain: clk_sys
+    width: 8
+    load: "R2R ladder DAC code input"
+  - name: dac_en
+    direction: d2a
+    level: cmos_3v3
+    domain: clk_sys
+    width: 1
+    load: "DAC ladder power-down enable"

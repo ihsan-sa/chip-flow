@@ -38,15 +38,14 @@ def test_registry_validates_clean_for_every_skill(skill):
     assert problems == [], "\n".join(problems)
 
 
-def test_shared_verb_set_is_exactly_the_six_named():
-    # msde has no skills/msde/reference/tasks.yaml yet (M1: "No skill
-    # directories"), so load_tasks on it still reflects the engine's own
-    # shared table alone - unlike vde (M2) and ade (M8), which each merged
-    # their own tasks.yaml in (see test_vde_adds_its_own_m2_verbs and
-    # test_ade_adds_its_own_m8_verbs below).
+def test_msde_adds_its_own_m10_verbs():
+    # M10 (docs/design.md, "### M10.") merged skills/msde/reference/
+    # tasks.yaml in; tests/test_msde_skill.py's test_msde_verb_set holds the
+    # per-verb detail.
     tasks = tr.load_tasks("msde")
     assert sorted(tasks["verbs"]) == sorted(
-        ["full-run", "review", "fix-finding", "resume", "release", "learn"])
+        ["full-run", "review", "fix-finding", "resume", "release", "learn",
+         "split", "cosim", "integrate"])
 
 
 def test_vde_adds_its_own_verbs():
@@ -202,10 +201,11 @@ def test_resume_view_and_no_open_issues_precondition_treat_escalated_as_open():
     assert problems[0]["ok"] is False
 
 
-def test_list_shows_all_six_verbs():
+def test_list_shows_every_msde_verb():
     payload, _ = tr.run(["--skill", "msde", "--list"])
     assert {v["verb"] for v in payload["verbs"]} == {
-        "full-run", "review", "fix-finding", "resume", "release", "learn"}
+        "full-run", "review", "fix-finding", "resume", "release", "learn",
+        "split", "cosim", "integrate"}
 
 
 # --------------------------------------------------- CHIP_FLOW_HOME binding

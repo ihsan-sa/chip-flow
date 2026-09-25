@@ -1,0 +1,56 @@
+top: sensor_counted_digital
+requirements:
+  - id: REQ-COUNT
+    text: over a fixed gate window of 1024 clk cycles, count is latched to the
+      number of rising edges seen on the synchronised osc_out, saturating at
+      255 rather than wrapping
+    check: sim
+  - id: REQ-OSCEN
+    text: osc_en equals en at all times
+    check: both
+    property: REQ_FORMAL_ENABLE
+  - id: REQ-HOLD
+    text: while en is low the window and edge counters are held at their reset
+      value of 0, so a window never completes and re-enabling always starts a
+      fresh full window
+    check: sim
+  - id: REQ-VALID
+    text: valid goes high once the first gate window completes and stays high
+      across every following window until reset
+    check: sim
+  - id: REQ-FORMAL-RESET
+    text: rst_n low forces count and valid to 0 on the very next clock, proven
+      for all time rather than for whatever tb/ happens to try
+    check: formal
+    property: REQ_FORMAL_RESET
+ports:
+  clk: {dir: input, width: 1}
+  rst_n: {dir: input, width: 1}
+  en: {dir: input, width: 1}
+  osc_out: {dir: input, width: 1}
+  osc_en: {dir: output, width: 1}
+  count: {dir: output, width: 8}
+  valid: {dir: output, width: 1}
+clock:
+  # 20ns (50MHz) - the tb/ functional testbench clocks at the same period
+  # here (unlike counter8, where tb/ deliberately used a different period);
+  # nothing about this design depends on a specific ratio between clk and
+  # the async osc_out, so there was no reason to diverge.
+  period_ns: 20
+  domains: [clk]
+mutate:
+  size: 24
+  seed: 1
+formal:
+  depth: 20
+# Tiny Tapeout GF180 tile pin map (engine/lib/ttlib.py::generate_tt_wrapper).
+# rst_n is already active-low, so no `~` is needed the way counter8's
+# active-high rst needed one.
+tt_pins:
+  clk: clk
+  rst_n: rst_n
+  en: ui_in[0]
+  osc_out: ui_in[7]
+  count: uo_out[7:0]
+  osc_en: uio_out[0]
+  valid: uio_out[1]

@@ -1,0 +1,57 @@
+* sensor_counted_analog_tb.cir - the ring oscillator's bench. {{PDK}}/
+* {{CORNER}}/{{TEMP_C}}/{{VDD}}/{{NETLIST}}/{{SIZING}} are sim_run.py's
+* placeholders (engine/lib/simlib.py:materialize).
+*
+* osc_en starts low, so the operating point is the stopped state (no
+* symmetric equilibrium to escape), rises at 20ns and falls again at
+* 2.5us. osc_out drives 20fF: a standard-cell input plus its route.
+*
+* No .control block: `ngspice -b` then runs the transient once. With a
+* `.control run .endc` block it runs twice, and the PARAM measures below
+* fail to re-insert on the second pass.
+.include '{{PDK}}/libs.tech/ngspice/design.spice'
+.lib '{{PDK}}/libs.tech/ngspice/sm141064.spice' {{CORNER}}
+.temp {{TEMP_C}}
+.include '{{NETLIST}}'
+{{SIZING}}
+
+vdd_src vdd 0 {{VDD}}
+ven_src osc_en 0 pwl(0 0 20n 0 21n {{VDD}} 2.5u {{VDD}} 2.501u 0)
+xdut osc_en osc_out vdd 0 sensor_counted_analog
+cload osc_out 0 20f
+
+.param vmid={{VDD}}/2
+.tran 2n 3u
+
+* running: one period of osc_out, its frequency and its swing
+.measure tran t_per TRIG v(osc_out) VAL=vmid RISE=2 TARG v(osc_out) VAL=vmid RISE=3
+.measure tran f_osc PARAM='1/t_per'
+.measure tran v_hi MAX v(osc_out) FROM=0.3u TO=2.4u
+.measure tran v_lo MIN v(osc_out) FROM=0.3u TO=2.4u
+
+* stopped: osc_out held low over the last 200ns, after osc_en fell
+.measure tran v_stop MAX v(osc_out) FROM=2.8u TO=3u
+
+* stage balance: each stage's share of the ring period, its rise delay
+* plus its fall delay. Process skew moves a stage's rise and fall delays in
+* opposite directions and temperature and supply scale the whole period,
+* so the share stays put across PVT; resizing or unbiasing one device
+* moves it. n0 falls first once osc_en rises; the third cycle is timed.
+.measure tran t0f WHEN v(xdut.n0)=vmid FALL=3
+.measure tran t1r WHEN v(xdut.n1)=vmid RISE=3
+.measure tran t2f WHEN v(xdut.n2)=vmid FALL=3
+.measure tran t3r WHEN v(xdut.n3)=vmid RISE=3
+.measure tran t4f WHEN v(xdut.n4)=vmid FALL=3
+.measure tran t0r WHEN v(xdut.n0)=vmid RISE=3
+.measure tran t1f WHEN v(xdut.n1)=vmid FALL=3
+.measure tran t2r WHEN v(xdut.n2)=vmid RISE=3
+.measure tran t3f WHEN v(xdut.n3)=vmid FALL=3
+.measure tran t4r WHEN v(xdut.n4)=vmid RISE=3
+.measure tran t0f4 WHEN v(xdut.n0)=vmid FALL=4
+.measure tran t_ring PARAM='t0f4-t0f'
+.measure tran share0 PARAM='((t0r-t4f)+(t0f4-t4r))/t_ring'
+.measure tran share1 PARAM='((t1r-t0f)+(t1f-t0r))/t_ring'
+.measure tran share2 PARAM='((t2f-t1r)+(t2r-t1f))/t_ring'
+.measure tran share3 PARAM='((t3r-t2f)+(t3f-t2r))/t_ring'
+.measure tran share4 PARAM='((t4f-t3r)+(t4r-t3f))/t_ring'
+.end

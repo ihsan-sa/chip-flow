@@ -1,0 +1,32 @@
+* sensor_counted_analog_pex_tb.cir - the post-layout bench, typical corner
+* (docs/design.md 1.5's ade pex_sim row). It runs on the magic-extracted,
+* parasitic-annotated netlist of this run's own GDS; check_pex_sim.py fills
+* in {pdk} and {extracted}, never a path typed by hand.
+*
+* Same stimulus as tb/sensor_counted_analog_tb.cir. The frequency is what
+* the layout's wiring capacitance moves: every fF on n0..n4 slows the ring.
+* The extracted netlist carries no ring-node names, so only the pins are
+* measured. Values are printed from the .control block ("name = value"),
+* the form check_pex_sim.py reads.
+.include '{pdk}/libs.tech/ngspice/design.spice'
+.lib '{pdk}/libs.tech/ngspice/sm141064.spice' typical
+.include '{extracted}'
+
+vdd_src vdd 0 3.3
+ven_src osc_en 0 pwl(0 0 20n 0 21n 3.3 2.5u 3.3 2.501u 0)
+xdut osc_en osc_out vdd 0 sensor_counted_analog
+cload osc_out 0 20f
+
+.control
+tran 2n 3u
+meas tran t_per TRIG v(osc_out) VAL=1.65 RISE=2 TARG v(osc_out) VAL=1.65 RISE=3
+meas tran t_hi TRIG v(osc_out) VAL=1.65 RISE=2 TARG v(osc_out) VAL=1.65 FALL=2
+meas tran v_stop MAX v(osc_out) FROM=2.8u TO=3u
+let f_osc = 1/t_per
+let duty = t_hi/t_per
+let vstop = v_stop
+print f_osc
+print duty
+print vstop
+.endc
+.end

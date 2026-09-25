@@ -480,3 +480,76 @@ def test_ade_release_result_records_against_the_netlist(tmp_path, capsys):
     assert result["status"] == "pass", result
     rec = gate_mod.record_gate_result("ade", "release", row, result, ws)
     assert rec["recorded"] is True, rec
+
+
+# --- msde (M10): "both nested runs released, top gates fresh" -------------
+
+def make_msde_ws(tmp_path: Path) -> Path:
+    """An msde block whose top gates and both nested sides have all passed
+    and whose nested sides each hold a written, verifying checks.json."""
+    ws = tmp_path / "msde"
+    state_mod.State.init(ws, "msde", "sensor_counted")
+    (ws / "interface.yaml").write_text("version: 1\nsignals: []\n",
+                                      encoding="utf-8")
+    for side, skill, kind in (("digital", "vde", "rtl"),
+                              ("analog", "ade", "netlist")):
+        sub = ws / side
+        state_mod.State.init(sub, skill, f"sensor_counted_{side}")
+        (sub / kind / "x.txt").write_text("a\n", encoding="utf-8")
+        (sub / "layout" / "x.txt").write_text("a\n", encoding="utf-8")
+        st = state_mod.State.load(sub / "state.json")
+        for g in statelib.load_map()["gate_inputs"][skill]:
+            st.record_gate(g, {"status": "pass"})
+        st.save()
+        att, problems = attest_mod.build(sub)
+        assert att is not None, problems
+        attest_mod.write_attestation(sub, att)
+    st = state_mod.State.load(ws / "state.json")
+    for g in statelib.load_map()["gate_inputs"]["msde"]:
+        st.record_gate(g, {"status": "pass"})
+    st.save()
+    return ws
+
+
+def test_msde_release_passes_with_both_nested_sides_released(tmp_path, capsys):
+    ws = make_msde_ws(tmp_path)
+    code = check_release.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0, out
+    assert (ws / "reports" / "checks.json").is_file()
+
+
+def test_msde_release_refuses_a_stale_nested_release(tmp_path, capsys):
+    ws = make_msde_ws(tmp_path)
+    (ws / "digital" / "rtl" / "x.txt").write_text("b\n", encoding="utf-8")
+    code = check_release.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 1, out
+    kinds = {(v["module"], v["kind"]) for v in out["violations"]}
+    assert ("nested_digital", "nested_not_released") in kinds
+    assert not any(m == "nested_analog" for m, _ in kinds)
+    assert not (ws / "reports" / "checks.json").exists()
+
+
+def test_msde_release_refuses_a_missing_nested_side(tmp_path, capsys):
+    ws = make_msde_ws(tmp_path)
+    import shutil
+    shutil.rmtree(ws / "analog")
+    code = check_release.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 1, out
+    # the top gates read analog/layout too, so they go stale with it; the
+    # nested finding names only the missing side
+    assert [v["module"] for v in out["violations"]
+            if v["kind"] == "nested_not_released"] == ["nested_analog"]
+
+
+def test_msde_release_refuses_a_nested_side_of_the_wrong_skill(tmp_path, capsys):
+    ws = make_msde_ws(tmp_path)
+    data = json.loads((ws / "analog" / "state.json").read_text())
+    data["skill"] = "vde"
+    (ws / "analog" / "state.json").write_text(json.dumps(data))
+    code = check_release.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 1, out
+    assert any("expected 'ade'" in v["msg"] for v in out["violations"])

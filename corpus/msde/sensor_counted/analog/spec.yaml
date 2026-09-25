@@ -1,0 +1,26 @@
+top: sensor_counted_analog
+supply:
+  vdd: 3.3
+# The ten ring devices; see spec.md "Bench strength" for why the enable
+# pair (xmp0e, xmn0e) and the output buffer (xmpb, xmnb) are not listed.
+devices: [xmp0a, xmn0a, xmp1, xmn1, xmp2, xmn2, xmp3, xmn3, xmp4, xmn4]
+corners: default
+measures:
+  - name: f_osc
+    bounds: {min: 1.0e6, max: 12.5e6}
+  - name: v_hi
+    bounds: {min: 2.6}
+  - name: v_lo
+    bounds: {max: 0.3}
+  - name: v_stop
+    bounds: {max: 0.3}
+  - name: share0
+    bounds: {min: 0.1969, max: 0.2072}
+  - name: share1
+    bounds: {min: 0.1957, max: 0.1986}
+  - name: share2
+    bounds: {min: 0.1881, max: 0.1918}
+  - name: share3
+    bounds: {min: 0.1881, max: 0.1911}
+  - name: share4
+    bounds: {min: 0.2159, max: 0.2266}
