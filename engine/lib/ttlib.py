@@ -56,6 +56,7 @@ its pin template is the vendored `def/analog/tt_analog_<tiles>.def` (the
 digital pins plus ua[7:0] on Metal4), `tiles` defaults to the vendored
 ttgf-analog-template's own `tiles` value, the wrapper gains the template's
 `inout wire [7:0] ua` port with each pin wired straight to ua[k], and
+the resizer never touches a ua[k] net (RSZ_DONT_TOUCH_RX), and
 info.yaml carries `analog_pins` and the ua pinout that precheck.py's
 analog pin check reads. The ua indices must be 0..n-1 with n no more than
 the template allows: precheck fails any ua[k] below analog_pins that has
@@ -766,11 +767,22 @@ def harden_config(spec: dict, rtl_files: list[Path], wrapper_path: Path,
 MACRO_PDN_CFG = Path(__file__).resolve().parent / "macro_pdn.tcl"
 
 
+# The nets that run from an analog macro's pin straight to its ua pad, which
+# LibreLane's resizer must leave alone: a buffer on one would put a digital
+# cell in the analog path, and the post-GRT repair_design that
+# SIGNOFF_REPAIR_CONFIG turns on stops on such a net instead - "[RSZ-0074]
+# failed to build tree from global routes: found route to 1 pins, expected 0"
+# (the net joins a top-level inout pad to a LEF-only macro pin).
+ANALOG_NET_RX = r"^ua\[\d+\]$"
+
+
 def macro_config(macros: list[dict]) -> dict:
     """LibreLane's keys for hard macros (the spike's recipe,
     docs/spikes/macro_harden.md): MACROS, their power hookup, and a GDS-based
     final extraction so the macro's transistors - not a LEF blackbox - reach
-    LVS, which gets each macro's .subckt to compare them against."""
+    LVS, which gets each macro's .subckt to compare them against. On an
+    analog tile the ua pad nets are also don't-touch for the resizer
+    (ANALOG_NET_RX)."""
     return {
         "MACROS": {m["cell"]: {
             "gds": [m["files"]["gds"]], "lef": [m["files"]["lef"]],
@@ -786,6 +798,8 @@ def macro_config(macros: list[dict]) -> dict:
         "PDN_CFG": str(MACRO_PDN_CFG),
         "MAGIC_EXT_USE_GDS": True,
         "EXTRA_SPICE_MODELS": [m["files"]["spice"] for m in macros],
+        **({"RSZ_DONT_TOUCH_RX": ANALOG_NET_RX}
+           if any(m.get("ua") for m in macros) else {}),
     }
 
 

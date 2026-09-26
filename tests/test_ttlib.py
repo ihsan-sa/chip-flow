@@ -4,6 +4,7 @@ read the vendored template files (engine/reference/tt/) directly, and
 generate_tt_wrapper()/generate_glsim_harness() are text generation."""
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -270,6 +271,21 @@ def test_harden_config_uses_the_analog_def(tmp_path):
     cfg = ttlib.harden_config(spec, [], tmp_path / "w.v", tmp_path)
     assert cfg["FP_DEF_TEMPLATE"].endswith("analog/tt_analog_1x2.def")
     assert cfg["DIE_AREA"] == ttlib.tile_die_area("1x2")
+    # the resizer leaves the pad nets alone: post-GRT repair_design stopped
+    # on ua[0] with RSZ-0074, and a buffer there would sit in the analog path
+    rx = re.compile(cfg["RSZ_DONT_TOUCH_RX"])
+    assert all(rx.search(f"ua[{k}]") for k in range(8))
+    assert not any(rx.search(n) for n in ("uo_out[0]", "ua", "u_ua[0]",
+                                          "ua[0]_buf"))
+
+
+def test_a_digital_tile_touches_every_net(tmp_path):
+    spec = _analog_spec({})
+    spec["macros"][0].update(location=[10, 10], power={"vdd": "vdd",
+                             "vss": "vss"}, files={k: "/x" for k in
+                                                  ("gds", "lef", "vh", "spice")})
+    cfg = ttlib.harden_config(spec, [], tmp_path / "w.v", tmp_path)
+    assert "RSZ_DONT_TOUCH_RX" not in cfg
 
 
 def test_info_yaml_claims_exactly_the_used_ua_pins(tmp_path):
