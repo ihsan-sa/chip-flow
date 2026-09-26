@@ -1,0 +1,46 @@
+# The repo's own gates on GitHub's standard runners. Every tool still runs
+# through bin/eda, from the same IIC-OSIC-TOOLS tree the box uses (see
+# .github/actions/toolchain). A gate that cannot run fails its job; nothing
+# here turns a gate that did not run into a pass.
+name: checks
+
+on:
+  pull_request:
+  push:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: tests/check.sh (landing gate)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/toolchain
+      - name: tests/check.sh
+        run: |
+          set +e
+          start=$SECONDS
+          bash tests/check.sh
+          rc=$?
+          echo "tests/check.sh: $((SECONDS - start))s, exit $rc" | tee -a "$GITHUB_STEP_SUMMARY"
+          exit $rc
+
+  slow:
+    name: tests/check-slow.sh (real-tool pytest)
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/toolchain
+      - name: tests/check-slow.sh
+        run: |
+          set +e
+          start=$SECONDS
+          bash tests/check-slow.sh
+          rc=$?
+          echo "tests/check-slow.sh: $((SECONDS - start))s, exit $rc" | tee -a "$GITHUB_STEP_SUMMARY"
+          exit $rc

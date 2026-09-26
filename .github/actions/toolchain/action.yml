@@ -1,0 +1,32 @@
+# Unpack the IIC-OSIC-TOOLS image the box uses into a plain directory and
+# point EDA_TOOLCHAIN at it, so bin/eda runs here exactly as it does on the
+# box: from an unpacked tree, never inside docker.
+name: eda toolchain
+description: Stream the pinned IIC-OSIC-TOOLS image's filesystem into /mnt/eda and export EDA_TOOLCHAIN.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        # The box's tree is iic-osic-tools 2026.09 (docs/design.md); the
+        # digest pins the tag so a re-push upstream can't change CI silently.
+        IMAGE: hpretl/iic-osic-tools:2026.09@sha256:b87b3f1af9ba72d9486466ea777cf4248e96e20d9dba76d67259bc185db3859c
+        CRANE_URL: https://github.com/google/go-containerregistry/releases/download/v0.22.1/go-containerregistry_Linux_x86_64.tar.gz
+        CRANE_SHA256: 0ab7a1d6932a213aed964ce97666c3077fe691c8606413674a8b3e0b9ec4cda0
+      run: |
+        set -euo pipefail
+        curl -fsSL -o /tmp/crane.tgz "$CRANE_URL"
+        echo "$CRANE_SHA256  /tmp/crane.tgz" | sha256sum -c -
+        tar -xzf /tmp/crane.tgz -C /tmp crane
+        # /mnt is the runner's roomy scratch disk; the tree is ~12 GB.
+        sudo mkdir -p /mnt/eda && sudo chown "$(id -u):$(id -g)" /mnt/eda
+        start=$SECONDS
+        # crane export writes the image's flattened filesystem as one tar
+        # stream, the same tree `docker export` gave the box, without a
+        # second copy in docker's own storage.
+        /tmp/crane export --platform linux/amd64 "$IMAGE" - | tar -x -C /mnt/eda
+        secs=$((SECONDS - start))
+        test -x /mnt/eda/lib64/ld-linux-x86-64.so.2
+        echo "EDA_TOOLCHAIN=/mnt/eda" >> "$GITHUB_ENV"
+        df -h /mnt | tail -1
+        echo "Toolchain pull and unpack: ${secs}s ($(du -sh /mnt/eda | cut -f1))" | tee -a "$GITHUB_STEP_SUMMARY"
