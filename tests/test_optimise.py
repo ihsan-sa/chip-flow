@@ -640,3 +640,25 @@ def test_real_uart_loop_keeps_area_win_rejects_sim_fail_and_winner_passes(tmp_pa
     assert "bits_left" not in target.read_text(encoding="utf-8")
     rows = tsv_rows(ws)
     assert [r["kept"] for r in rows[:3]] == ["True", "False", "True"]
+
+
+def test_sizing_start_and_numeric_record_state_optimise(tmp_path, monkeypatch):
+    # design.md 4: sizing "runs the same loop", and the loop records its
+    # evaluator hash in state.optimise - a session resuming from state.json
+    # alone must see that a sizing search ran, not optimise: null.
+    import state as state_mod
+    ws = make_ws(tmp_path, start_value=-3.0)
+    state_mod.State.init(ws, "ade", "widget")
+    optimise.run_start(["--workspace", str(ws), "--target", "sizing/sizing.yaml"])
+    meta = json.loads((ws / optimise.META_PATH).read_text())
+    rec = json.loads((ws / "state.json").read_text())["optimise"]
+    assert rec == {"trials": 0, "evaluator_sha": meta["evaluator_sha"],
+                   "best": {"trial": None, "score": None}}
+    monkeypatch.setattr(sim_run, "EDA_BIN", make_identity_fake_eda(tmp_path))
+    payload, _ = optimise.run_numeric(
+        ["--workspace", str(ws), "--popsize", "6", "--maxiter", "5", "--seed", "1"])
+    rec = json.loads((ws / "state.json").read_text())["optimise"]
+    assert rec["trials"] == payload["trials"]
+    assert rec["evaluator_sha"] == meta["evaluator_sha"]
+    assert rec["best"]["score"] == pytest.approx(payload["best_score"], abs=1e-6)
+    assert rec["best"]["trial"] > 0  # -3 is out of bounds; DE beat it
