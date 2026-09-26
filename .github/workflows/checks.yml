@@ -30,17 +30,31 @@ jobs:
 
   slow:
     name: tests/check-slow.sh (real-tool pytest)
-    if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/toolchain
       - name: tests/check-slow.sh
+        env:
+          # -vv prints a failed assertion's whole violation, and a fixed
+          # basetemp lets the step below keep a failed run's logs.
+          PYTEST_ADDOPTS: -vv --basetemp=/mnt/pytest
         run: |
           set +e
+          sudo install -d -o "$(id -u)" -g "$(id -g)" /mnt/pytest
           start=$SECONDS
           bash tests/check-slow.sh
           rc=$?
           echo "tests/check-slow.sh: $((SECONDS - start))s, exit $rc" | tee -a "$GITHUB_STEP_SUMMARY"
           exit $rc
+      - name: keep a failed run's logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: check-slow-logs
+          path: |
+            /mnt/pytest/**/*.log
+            /mnt/pytest/**/*.json
+          retention-days: 7
+          if-no-files-found: ignore
