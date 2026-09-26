@@ -422,6 +422,12 @@ def main(argv: list[str] | None = None) -> int:
         if result["status"] == "pass" and args.commit:
             if not args.workspace:
                 raise RuntimeError("--commit requires --workspace")
+            # Write the report first so the commit carries this run's
+            # report, not the last one's, and leaves no modified copy.
+            if args.out:
+                Path(args.out).parent.mkdir(parents=True, exist_ok=True)
+                Path(args.out).write_text(json.dumps(result, indent=2),
+                                          encoding="utf-8")
             result["commit_result"] = git_commit_on_pass(
                 args.commit, Path(args.workspace))
     except Exception as exc:  # noqa: BLE001 - the exit-2 contract
@@ -442,7 +448,13 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     text = json.dumps(result, indent=2)
-    if args.out:
+    cr = result.get("commit_result")
+    if args.out and cr is not None and cr.get("committed"):
+        # Already written and committed above; rewriting it to add the
+        # commit id would leave the tree dirty again.
+        print(f"gate {args.gate}: committed {cr.get('commit')}",
+              file=sys.stderr)
+    elif args.out:
         Path(args.out).parent.mkdir(parents=True, exist_ok=True)
         Path(args.out).write_text(text, encoding="utf-8")
     else:
@@ -457,7 +469,6 @@ def main(argv: list[str] | None = None) -> int:
         print(f"gate {args.gate}: result NOT recorded in state.json - "
               f"{rr.get('reason')}", file=sys.stderr)
         return 2
-    cr = result.get("commit_result")
     if cr is not None and not cr.get("ok"):
         print(f"gate {args.gate}: requested commit did not occur - "
               f"{cr.get('reason')}", file=sys.stderr)
