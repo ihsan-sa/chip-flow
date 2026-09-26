@@ -5,7 +5,11 @@ scipy's real differential_evolution runs against a trivial but REAL
 objective with no actual ngspice call. test_real_r2r_dac_optimise_reaches_
 bounds_from_wrong_start (slow) runs the whole thing against the REAL
 corpus/ade/r2r_dac rung and the real gf180mcuD toolchain - this milestone's
-own done criterion."""
+own done criterion.
+
+The RTL loop (M7: `start`/`trial`/`finish`) is tested below the M8 tests:
+fast ones over real git and hashing with the tools faked, and one slow
+test on the real corpus UART with the real tools."""
 from __future__ import annotations
 
 import json
@@ -458,7 +462,12 @@ def test_rtl_evaluator_edit_mid_loop_aborts_and_reverts(tmp_path, monkeypatch):
 def test_rtl_edit_outside_target_is_reverted(tmp_path, monkeypatch):
     """M7 done-criterion: an edit outside the target is reverted."""
     ws = make_rtl_ws(tmp_path, monkeypatch)
+    lock = ws / "state.json.lock"  # state.py's own lock: engine output
+    lock.write_text("", encoding="utf-8")
+    git(ws, "add", "state.json.lock")
+    git(ws, "-c", "user.name=t", "-c", "user.email=t@l", "commit", "-qm", "lock")
     rtl_start(ws)
+    lock.write_text("held\n", encoding="utf-8")
     tb = ws / "tb" / "test_blk.py"
     tb.write_text("# req: REQ-A\nassert True  # weakened\n", encoding="utf-8")
     (ws / "spec" / "extra.yaml").write_text("x: 1\n", encoding="utf-8")
@@ -468,6 +477,7 @@ def test_rtl_edit_outside_target_is_reverted(tmp_path, monkeypatch):
     assert sorted(payload["reverted_outside_target"]) == [
         "holdout/test_h.py", "spec/extra.yaml", "tb/test_blk.py"]
     assert tb.read_text() == "# req: REQ-A\n"
+    assert lock.read_text() == "held\n"
     assert not (ws / "spec" / "extra.yaml").exists()
     assert (ws / "holdout" / "test_h.py").read_text() == "# h\n"
     # the target's own change was still scored, and kept
@@ -555,8 +565,10 @@ def test_rtl_finish_discards_a_winner_failing_full_gates(tmp_path, monkeypatch):
     edit_target(ws, "  // pad 3\n", "")
     assert rtl_trial(ws, "second")["kept"]
 
-    def fake_full(ws_):
+    def fake_full(ws_, detail):
         bad = "DROPS_HOLDOUT" in (ws_ / "rtl" / "blk.v").read_text()
+        if bad:
+            detail.append("check_holdout: a held-out test failed")
         return {"holdout": "fail" if bad else "pass", "formal": "pass",
                 "mutate": "pass"}
 
@@ -564,7 +576,67 @@ def test_rtl_finish_discards_a_winner_failing_full_gates(tmp_path, monkeypatch):
     payload, _ = optimise.run_finish(["--workspace", str(ws)])
     assert payload["status"] == "pass"
     assert payload["winner"]["trial"] == 1 and payload["discarded"] == [2]
+    assert payload["tried"][0]["detail"] == ["check_holdout: a held-out test failed"]
     assert (ws / "rtl" / "blk.v").read_text() == first
     assert "restore trial 1" in git(ws, "log", "-1", "--format=%s")
     notes = [r["note"] for r in tsv_rows(ws)[-2:]]
     assert "holdout=fail" in notes[0] and "holdout=pass" in notes[1]
+
+
+CORPUS_UART = REPO / "corpus" / "vde" / "uart"
+# Drop the frame counter: the frame ends when only the stop bit is left in
+# `shift`. Smaller, same frames - the kept area trial.
+DROP_BITS_LEFT = [
+    ("  localparam FRAME_BITS = 4'd11; // start + 8 data + parity + stop\n", ""),
+    ("  reg [3:0]  bits_left;\n", ""),
+    ("      bits_left <= 4'd0;\n", ""),
+    ("        bits_left <= FRAME_BITS;\n", ""),
+    ("        bits_left <= bits_left - 4'd1;\n", ""),
+    ("        if (bits_left == 4'd1)\n", "        if (shift[10:1] == 10'd0)\n"),
+]
+
+
+@pytest.mark.slow
+def test_real_uart_loop_keeps_area_win_rejects_sim_fail_and_winner_passes(tmp_path):
+    """M7 on the real corpus UART and the real tools: a trial that breaks
+    the start bit fails `sim` and is not kept, a trial that drops the frame
+    counter is kept with less area and slack >= 0, and `finish` runs
+    holdout, unbounded formal and mutate on that winner, which passes."""
+    sys.path.insert(0, str(ENGINE / "lib"))
+    import faults
+    ws = faults.make_scratch_workspace(tmp_path, CORPUS_UART, "vde", "uart")
+    git(ws, "init", "-q")
+    git(ws, "add", "-A")
+    git(ws, "-c", "user.name=t", "-c", "user.email=t@l", "commit", "-qm", "init")
+    target = ws / "rtl" / "uart_tx.v"
+
+    start, _ = optimise.run_rtl_start(["--workspace", str(ws), "--target",
+                                       "rtl/uart_tx.v", "--trials", "5"])
+    base = start["baseline"]
+    assert base["passed"] and base["slack"] >= 0, base
+
+    text = target.read_text(encoding="utf-8")
+    bad = "shift     <= {1'b1, ^data, data, 1'b0};"
+    assert bad in text
+    target.write_text(text.replace(bad, bad.replace("1'b0}", "1'b1}")),
+                      encoding="utf-8")
+    t1 = rtl_trial(ws, "start bit driven high")
+    assert t1["kept"] is False and t1["constraints"]["sim"] == "fail", t1
+    assert target.read_text(encoding="utf-8") == text
+
+    for old, new in DROP_BITS_LEFT:
+        assert old in text, old
+        text = text.replace(old, new)
+    target.write_text(text, encoding="utf-8")
+    t2 = rtl_trial(ws, "drop bits_left; end on shift[10:1] == 0")
+    assert t2["kept"] is True, t2
+    assert t2["area"] < base["area"] and t2["slack"] >= 0, t2
+
+    done, _ = optimise.run_finish(["--workspace", str(ws)])
+    assert done["status"] == "pass", done
+    assert done["winner"]["trial"] == 2 and done["discarded"] == []
+    assert done["tried"][0]["gates"] == {"holdout": "pass", "formal": "pass",
+                                         "mutate": "pass"}
+    assert "bits_left" not in target.read_text(encoding="utf-8")
+    rows = tsv_rows(ws)
+    assert [r["kept"] for r in rows[:3]] == ["True", "False", "True"]

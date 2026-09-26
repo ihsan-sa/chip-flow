@@ -32,14 +32,9 @@ faults:
     plant: plant_synth.py
     expect: {status: fail, kind: combinational_loop}
 
-# `mutate` is NOT exercised on this rung. The untouched reference's own
-# kill rate tops out around 0.65-0.74 (checked across seeds 1-42, sizes
-# 8-24) and never nears the 0.9 floor: the survivors are concentrated on
-# `clk_cnt`/`bits_left`, an internal bit-period/frame-length counter whose
-# individual bit mutations are largely equivalent (any test, however
-# thorough - every data byte tried twice, back-to-back framing included -
-# still leaves the same ~35% unkilled). counter8/faults/manifest.yaml's
-# `mutate_asserts_nothing` entry already exercises this gate for real, on a
-# design whose kill rate cleanly clears the floor; fixing uart_tx's own
-# mutation-testability (a different internal encoding for the bit-period
-# counter) is follow-up work, not blocking M2.
+# `mutate` is NOT exercised on this rung: counter8/faults/manifest.yaml's
+# `mutate_asserts_nothing` entry already exercises that gate for real. The
+# untouched reference clears the 0.9 floor (0.95 at the default seed and
+# size) since tb/ checks the parity bit for bytes with data[7] == 0; before
+# that every survivor was a parity mutant. The M7 optimise loop's `finish`
+# runs mutate on this design's winner, so it has to stay above the floor.

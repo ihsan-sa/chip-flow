@@ -1,9 +1,10 @@
 """Visible tests for uart_tx (docs/design.md section 2). Same FallingEdge-
 only discipline as corpus/vde/counter8/tb/test_counter8.py - see that file's
-note. Deliberately does NOT check the parity bit's VALUE (only that a frame
-has the right shape around it) - see holdout/test_uart_tx_holdout.py, which
-does, and is what the `holdout` gate's own corpus fault targets (gates.yaml:
-"UART parity inverted where the visible tests do not look")."""
+note. Checks the parity bit's VALUE only for bytes with data[7] == 0; the
+other half is left to holdout/test_uart_tx_holdout.py, which checks every
+byte, and is where the `holdout` gate's own corpus fault hides (gates.yaml:
+"UART parity inverted where the visible tests do not look"). Checking half
+kills the parity mutants that `mutate` would otherwise count as survivors."""
 import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import FallingEdge
@@ -85,6 +86,10 @@ async def test_frame_start_data_stop(dut):
         assert start == 0, f"value={value}: start bit was {start}"
         assert data == data_bits(value), f"value={value}: bad bits {data}"
         assert stop == 1, f"value={value}: stop bit was {stop}"
+        if value < 128:  # data[7] == 1 is the holdout's alone
+            parity = sum(data_bits(value)) & 1
+            assert bits[9] == parity, \
+                f"value={value}: parity bit was {bits[9]}, want {parity}"
         await wait_idle(dut)
         await FallingEdge(dut.clk)  # a clock of idle margin between frames
 

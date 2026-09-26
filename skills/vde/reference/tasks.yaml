@@ -389,26 +389,60 @@ verbs:
 
   # -------------------------------------------------------------------------
   optimise:
-    summary: Placeholder verb - optimise.py (docs/design.md section 4) is
-      M7's build. Until then this records intent and the current
-      synth/timing baseline and stops; it never spawns the optimiser role.
+    summary: Run the RTL optimise loop (docs/design.md section 4, "### M7.")
+      on one file under rtl/ - a frozen, hashed evaluator scores one
+      optimiser change per trial; lint, sim, bounded formal, the port list,
+      must_keep and slack >= 0 are gates, and a trial is kept only if the
+      score improved. The winner then has to pass holdout, unbounded formal
+      and mutate.
     doc: skills/vde/reference/recipes/optimise.md
     workspace: required
-    gates: []
+    gates: [lint, sim, holdout, mutate, formal, cover, synth]
     human_hold: 0
     preconditions: [workspace, gates_fresh:synth]
+    args:
+      target:
+        kind: path
+        required: true
+        extract: none
+        question: "Which one file under rtl/ may the optimiser edit?"
+      objective:
+        kind: text
+        required: false
+        extract: none
+        question: "area, slack, power, or score (area and power relative to
+                   the starting RTL)? Default area."
     match:
       any: ['\boptimi[sz]e\b', '\bimprove (the )?(area|slack|power|timing)\b',
             '\bmake it (smaller|faster|lower power)\b', '\breduce area\b']
     steps:
       - do: "scripts/state.py resume --workspace {ws}"
-        why: "the current synth and timing result is the baseline any
-              future optimise.py trial would score against"
-      - do: "scripts/state.py decision --workspace {ws} --what \"optimise requested\" --why \"optimise.py lands in M7 (docs/design.md, section 4 and ### M7.) - recording intent now rather than fabricating a loop this milestone does not own\""
-        why: "the record a real optimise run will reference once M7 lands"
-      - note: "Stop here. Do not hand-roll a one-off area/power edit
-               outside optimise.py's frozen-evaluator loop - that is
-               exactly the metric-gaming section 4 is written to prevent
-               (a fixed synth script, a locked clock period and port list,
-               must_keep checked after synth, the evaluator itself
-               hashed)."
+        why: "the loop optimises working code: the starting RTL must pass
+              its gates, and start refuses one that fails the constraints"
+      - note: "The workspace must be a git repo with a clean tree - the loop
+               commits each kept trial and reverts everything else with git."
+      - do: "scripts/optimise.py start --workspace {ws} --target {target} --objective {objective}"
+        why: "freezes the evaluator (synth script, liberty, SDC from the
+              spec clock, tb/, formal/, holdout hash, ports, must_keep),
+              hashes it, and scores the starting RTL as trial 0"
+      - agent: optimiser
+        tier: opus/high
+        why: "a fresh subagent per trial: the target file, the tail of
+              optimise/trials.tsv, the last trial's output, the objective,
+              one change"
+      - do: "scripts/optimise.py trial --workspace {ws} --note \"<the optimiser's NOTE line>\""
+        why: "reverts anything outside the target, re-hashes the evaluator
+              (exit 2 = aborted), runs the constraints then the metric, and
+              commits the target only if every constraint passed and the
+              score beat the best"
+      - note: "Repeat the optimiser and trial steps until trial's payload
+               has a non-null `stop` (N trials, the wall budget, or K
+               non-improving trials in a row). Never edit the evaluator,
+               tb/, formal/ or holdout/ between trials."
+      - do: "scripts/optimise.py finish --workspace {ws}"
+        why: "holdout, formal at the spec's own depth, and mutate on the
+              winner; a winner that fails is discarded and the last passing
+              trial restored (exit 1 = no trial passed)"
+      - do: "scripts/state.py edit --workspace {ws} --class rtl_edit --note \"optimise winner\""
+        why: "the winner is new RTL - every gate from lint onward is stale,
+              harden included"

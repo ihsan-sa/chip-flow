@@ -57,7 +57,7 @@ AGENT_OUTPUT_MARKER = re.compile(r"^## Output contract", re.M)
 # reviewer/fixer from the P1-P6 steps, layout-writer/layout-fixer from P5
 # and the layout fix loop, optimiser from the spawn-tier table (M9's
 # `optimise` verb runs optimise.py directly; an agent may still append
-# trials per the recipe doc, same placeholder shape as /vde's optimiser).
+# trials per the recipe doc).
 ADE_ROLES = {"spec-writer", "analog-designer", "bench-writer",
              "layout-writer", "layout-fixer", "reviewer", "fixer",
              "optimiser"}

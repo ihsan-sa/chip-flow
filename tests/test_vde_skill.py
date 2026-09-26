@@ -72,8 +72,7 @@ def test_every_agent_step_has_a_role_prompt_with_an_output_contract():
                 if "agent" in step:
                     roles.add(step["agent"])
     # every role docs/design.md 1.9 names for /vde, whether or not a
-    # current verb spawns it yet (optimiser: M7 placeholder, SKILL.md's
-    # own spawn-tier table still lists it)
+    # current verb spawns it yet
     roles |= {"spec-writer", "architect", "tb-writer", "property-writer",
               "rtl-writer", "reviewer", "fixer", "optimiser"}
     # "learner" comes from the SHARED engine `learn` verb (engine/
@@ -285,20 +284,29 @@ def test_fix_timing_plans_once_args_given_and_reharden_precedes_timing(tmp_path)
     assert harden_idx < timing_idx
 
 
-def test_optimise_never_calls_a_script_that_does_not_exist_yet(tmp_path):
-    """optimise.py is M7's build - this verb's steps must resolve to real,
-    already-existing scripts only (task_router.py --validate already
-    proves this structurally; this test proves the planned commands agree
-    at runtime too)."""
+def test_optimise_plans_start_trials_and_finish(tmp_path):
+    """M7: the verb runs optimise.py's own loop - start, the optimiser
+    agent and `trial` per trial, then `finish` - and marks the winner as an
+    RTL edit so every later gate reruns."""
     ws = ws_empty(tmp_path)
     state_mod.State.init(ws, "vde", "counter8")
     _record_synth_pass(ws)
     payload, _ = tr.run(["--skill", "vde", "--verb", "optimise",
-                        "--workspace", str(ws)])
-    assert payload["status"] == "planned"
-    for step in payload["recipe"]["steps"]:
-        if step.get("kind") == "script":
-            assert step["script"] != "optimise.py"
+                        "--workspace", str(ws), "--arg",
+                        "target=rtl/counter8.v", "--arg", "objective=area"])
+    assert payload["status"] == "planned", payload
+    steps = payload["recipe"]["steps"]
+    cmds = [s["command"] for s in steps if s.get("kind") == "script"]
+    verbs = [c.split("optimise.py ")[1].split()[0] for c in cmds
+             if "optimise.py " in c]
+    assert verbs == ["start", "trial", "finish"]
+    assert any("--target rtl/counter8.v --objective area" in c for c in cmds)
+    roles = [s["role"] for s in steps if s.get("kind") == "agent"]
+    assert roles == ["optimiser"]
+    order = [s.get("role") or s.get("command", "") for s in steps]
+    assert order.index("optimiser") < next(
+        i for i, c in enumerate(order) if "optimise.py trial" in c)
+    assert any("--class rtl_edit" in c for c in cmds)
 
 
 # ------------------------------------------------------- M4 gates went real

@@ -1,0 +1,7 @@
+fa71ca4 optimise trial 10: clk_cnt wraps 3->0 by itself: increment unconditionally while busy, shift on 3
+20c2016 optimise trial 8: fold the idle start check into one condition: else if (!busy && start)
+a328d28 optimise trial 5: derive busy from shift != 0: shift empties exactly when the stop bit's hold ends, so the busy flop goes
+9f282d4 optimise trial 4: drive tx from shift[0] combinationally while busy: drops the tx flop and its mux
+06c8833 optimise trial 2: clk_cnt needs no reset: start clears it before it is read
+7e53d82 optimise trial 1: drop bits_left: end the frame when only the stop bit is left in shift
+c9c429c corpus UART

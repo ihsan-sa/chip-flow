@@ -1,19 +1,50 @@
 #!/usr/bin/env python
-"""optimise.py - the optimise loop (docs/design.md section 4, "### M8."):
-`start` freezes an evaluator, `numeric` runs scipy differential evolution
-against it. New at M8: M7 (the agent-driven per-trial loop for /vde's RTL,
-"### M7.") has not landed, so this is the analog half section 4 describes
-("Analog sizing runs the same loop with `--target sizing/sizing.yaml`...
-`optimise.py numeric`") built directly against sim_run.py rather than on
-top of a pre-existing digital `trial` command - there is no `optimise.py
-trial` here, and none of vde's synth/OpenSTA/VCD machinery applies to a
-sizing search. `start`/`numeric` are the two verbs skills/ade/reference/
-tasks.yaml's own `optimise` verb calls.
+"""optimise.py - the optimise loop (docs/design.md section 4, "### M7." and
+"### M8."). Two halves share `start`, meta.json and trials.tsv, and `start`
+picks the half from the target's suffix:
 
+- RTL (M7, /vde's `optimise` verb): `start` freezes the evaluator and
+  scores trial 0; then per trial the optimiser agent edits the one target
+  file and `trial` scores it; `finish` runs the full gates on the winner.
+- sizing (M8, /ade's `optimise` verb): `start` freezes the evaluator and
+  `numeric` runs scipy differential evolution against it.
+
+    optimise.py start --workspace DIR --target rtl/<file>.v
+                [--objective area|slack|power|score] [--trials N]
+                [--wall MIN] [--patience K] [--out FILE]
+    optimise.py trial --workspace DIR --note "one line" [--out FILE]
+    optimise.py finish --workspace DIR [--out FILE]
     optimise.py start --workspace DIR --target sizing/sizing.yaml
                 [--objective margin|power] [--out FILE]
     optimise.py numeric --workspace DIR [--trials N] [--wall MIN]
                 [--popsize N] [--maxiter N] [--seed N] [--out FILE]
+
+RTL LOOP. The workspace must be a git repo with a clean tree, and the target
+one tracked file under rtl/. `start` copies spec.yaml, the synth script, the
+liberty path and its sha, an SDC built from the spec's clock, tb/, formal/,
+the holdout's hash, the port list, `must_keep` and rtl/lint_allow.yaml into
+optimise/evaluator/, hashes it into meta.json and state.optimise, and scores
+the starting RTL as trial 0 (refused if it fails a constraint). `trial`:
+reverts every changed path but the target (ENGINE_OUTPUTS are left alone),
+re-hashes the evaluator and aborts the loop on a mismatch, then in a scratch
+workspace built from the frozen copies runs the constraints - lint, sim,
+formal at depth <= FAST_FORMAL_DEPTH - and, if they pass, the metric: yosys
+with the frozen script for cell area, the netlist's ports against the
+locked list, every `must_keep` cell still present, OpenSTA with the frozen
+SDC for worst slack and for power from the VCD the testbench wrote. Slack
+>= 0 is a constraint unless slack is the objective. A trial is kept (a git
+commit of the target) only if every constraint passes AND the score beats
+the best so far; otherwise `git checkout -- <target>`. The score is higher-
+is-better: -area, slack, -power, or for `score` the mean of area and power
+relative to trial 0. One row per trial in RTL_TSV_FIELDS order. The loop
+reports `stop` at N trials, the wall budget, or K non-improving trials in a
+row, and refuses further trials. `finish` checks the holdout is unchanged,
+then runs holdout, formal at the spec's own depth and mutate on the winner;
+a winner that fails is discarded and the next earlier kept trial (then the
+baseline) is tried and restored - exit 1 if none passes.
+
+SIZING SEARCH. Built directly against sim_run.py; none of the RTL half's
+synth/OpenSTA/VCD machinery applies to a sizing search.
 
 EVALUATOR (section 4: "freezes the evaluator... hashes it"): `start` copies
 tb/ (every bench + its .bounds.json sidecar) and the target file's OWN
@@ -424,7 +455,7 @@ DEFAULT_PATIENCE = 5
 # them alone; everything else outside the target is reverted. optimise/
 # holds the evaluator, which the hash guards instead.
 ENGINE_OUTPUTS = ("log/", "synth/", "optimise/", "state_snapshots/")
-ENGINE_OUTPUT_FILES = ("state.json",)
+ENGINE_OUTPUT_FILES = ("state.json", "state.json.lock")
 GIT_ID = ["-c", "user.name=optimise.py", "-c", "user.email=optimise@localhost"]
 TOOL_TIMEOUT_S = 300.0
 
@@ -1055,14 +1086,14 @@ def run_trial(argv=None):
     return payload, args.out
 
 
-def full_gates(ws: Path) -> dict:
+def full_gates(ws: Path, detail: list) -> dict:
     """section 4: "On the winner the full gates run: holdout, formal
     without the bound, mutate" - the real gate scripts on the real
-    workspace, at the spec's own depth."""
+    workspace, at the spec's own depth. Failing messages go on `detail`."""
     import check_formal
     import check_holdout
     import check_mutate
-    return {name: _gate_status(mod, ws)
+    return {name: _gate_status(mod, ws, detail)
             for name, mod in (("holdout", check_holdout),
                               ("formal", check_formal),
                               ("mutate", check_mutate))}
@@ -1099,9 +1130,11 @@ def run_finish(argv=None):
     chosen = None
     for cand in candidates:
         _git(ws, "checkout", cand["commit"], "--", target_rel)
-        gates = full_gates(ws)
+        detail: list = []
+        gates = full_gates(ws, detail)
         ok = all(v == "pass" for v in gates.values())
-        tried.append({"trial": cand["trial"], "gates": gates, "passed": ok})
+        tried.append({"trial": cand["trial"], "gates": gates, "passed": ok,
+                      "detail": detail})
         _append_row(ws, _row(
             cand["trial"], target, {}, ok,
             "full gates on trial {}: {}".format(cand["trial"], " ".join(

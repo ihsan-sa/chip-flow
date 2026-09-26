@@ -315,7 +315,7 @@ Spawn tiers (mirrors `/hwde`'s escalate-never-silently-downgrade rule):
 | tier | roles |
 |---|---|
 | fable/high | spec-writer, architect (novel-block judgment; no web tools) |
-| opus/high | tb-writer, property-writer (fresh context, spec only), rtl-writer, fixer, optimiser (M7) |
+| opus/high | tb-writer, property-writer (fresh context, spec only), rtl-writer, fixer, optimiser |
 | fable/high | reviewer (fresh context, gate table + disposition only) |
 
 If a tier's model is unavailable, substitute the nearest available model
@@ -327,9 +327,9 @@ silently drop to a weaker tier.
 - **The SPI FIFO block** is in the corpus (`corpus/vde/spi_fifo`, added by
   M4 - `docs/design.md`, "### M4."); the member-workspace (bwrap) run of
   this skill is still out of scope for this PR.
-- **`optimise` is a placeholder verb.** `optimise.py` (section 4's
-  frozen-evaluator loop) is M7's build; the verb here records intent and
-  the current synth/timing baseline and stops.
+- **`optimise` needs a git workspace.** The RTL loop commits each kept
+  trial and reverts the rest with git, so a block workspace that is not a
+  clean git repo is refused at `optimise.py start`.
 - **No skill-directory host bind yet.** `docs/design.md`'s Risks section:
   the `~/.claude/skills/vde` read-only bind does not exist on the host yet.
   It no longer matters for path resolution: every command in this file is
