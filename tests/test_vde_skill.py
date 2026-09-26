@@ -352,3 +352,17 @@ def test_some_p1_p2_role_is_told_to_write_tt_pins():
     assert "tt_pins" in text
     spec_writer = (SKILL / "agents" / "spec-writer.md").read_text(encoding="utf-8")
     assert "tt_pins" in spec_writer and "architect" in spec_writer
+
+
+def test_every_routed_work_order_role_has_a_work_order_mode():
+    """fix_dispatch names a role prompt per vde fixer domain; each routed
+    role other than the generic fixer must say how to work an order (a
+    WORK-ORDER MODE with its own output contract), and SKILL.md's fix loop
+    must name that role's prompt - else the order has no taker."""
+    import fix_dispatch
+    skill_md = (SKILL / "SKILL.md").read_text(encoding="utf-8")
+    for role in fix_dispatch.ROLE_BY_DOMAIN["vde"].values():
+        text = (SKILL / "agents" / f"{role}.md").read_text(encoding="utf-8")
+        assert re.search(r"^##+ .*work-order mode", text, re.M | re.I), role
+        assert "Output contract, work-order mode" in text, role
+        assert f"skills/vde/agents/{role}.md" in skill_md, role

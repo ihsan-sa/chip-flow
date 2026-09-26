@@ -149,8 +149,11 @@ SIDECARS = ["spec/spec.yaml"]
 # bench_strength survivor is the BENCH's fault, like a mutate survivor), and
 # everything else to the fixer. /vde sends every testbench order (every
 # mutate survivor, every requirement-coverage gap) to the tb-writer in
-# work-order mode (skills/vde/SKILL.md, fix loop step 4), and rtl/formal/
-# synth/harden/review to the fixer. /msde has no split: every msde order
+# work-order mode (skills/vde/SKILL.md, fix loop step 4), every formal
+# order (a failed or bounded property, an unreached cover, a formal depth
+# to set) to the property-writer in work-order mode - its prompt is the one
+# that may edit formal/* and spec.yaml's `formal:` key - and rtl/synth/
+# harden/review to the fixer. /msde has no split: every msde order
 # goes to its own fixer (skills/msde/SKILL.md, fix loop), so no entry.
 ROLE_BY_DOMAIN: dict[str, dict[str, str]] = {
     "ade": {"layout": "layout-fixer", "testbench": "bench-writer"},

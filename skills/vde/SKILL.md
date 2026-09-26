@@ -188,9 +188,13 @@ On gate fail (exit 1, result JSON has `failing` with a `kind`/`file`/
    `testbench` order (every `mutate` finding, and every requirement-
    coverage gap - `requirement_no_test`, `untagged_holdout_test`, a
    `cover` line/toggle gap) goes to the tb-writer in WORK-ORDER MODE
-   (`skills/vde/agents/tb-writer.md`), never the generic fixer; every
-   other domain (rtl/formal/synth/harden/review) goes to the `fixer` role
-   (`skills/vde/agents/fixer.md`). Orders inside one `parallel_groups`
+   (`skills/vde/agents/tb-writer.md`), never the generic fixer; a
+   `formal` order (`property_failed`, `cover_not_reached`, a bounded
+   property, a formal depth to set) goes to the property-writer in
+   WORK-ORDER MODE (`skills/vde/agents/property-writer.md`); every other
+   domain (rtl/synth/harden/review) goes to the `fixer` role
+   (`skills/vde/agents/fixer.md`). Each order's own `role_prompt` names
+   the same file. Orders inside one `parallel_groups`
    entry (from the dispatch summary) may run concurrently since their
    files don't overlap; groups run in sequence. When in doubt, serialize -
    correctness beats wall clock. Mark issues `fixing` ->
@@ -238,9 +242,10 @@ On gate fail (exit 1, result JSON has `failing` with a `kind`/`file`/
   pin, until `state.py edit --class holdout_edit --note WHY` (hold 2) or a
   `spec_edit` declares the change; `resume` shows it as `holdout_drift`.
 - **A `formal` `engine_disagreement` or `cover_not_reached`** routes to the
-  `formal` domain (the property, not the design) - "widen the induction
-  depth or fix the property, never loosen it to make the gate pass"
-  (`fix_dispatch.DOMAINS["formal"]`).
+  `formal` domain (the property, not the design), worked by the
+  property-writer: raise `formal.cover_depth` for an unreached cover, make
+  the property inductive or fix it for a disagreement, never loosen it to
+  make the gate pass (`fix_dispatch.DOMAINS["formal"]`).
 - **`release`'s `gate_not_ready`** is `attest.py`'s own coverage refusal,
   not a design defect - it routes to `review`; read which gate is missing
   or stale and re-enter that phase, there is nothing here a script fixes.
