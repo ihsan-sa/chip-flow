@@ -100,7 +100,7 @@ P0 Intake - P1 Split -
 P2 The two nested runs, independent: analog to its own release, digital
    to its own release (its own harden and signoff included) -
 P3 cosim, then the top gates (top_harden, top_drc, top_lvs, precheck) -
-P4 Release -[H2: sign-off]-
+P4 Release -[H2: sign-off]- then the design document
 ```
 
 Each side releases alone. The digital side hardens as a standalone tile:

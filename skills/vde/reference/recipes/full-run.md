@@ -65,3 +65,18 @@ full-run.
 
 `release` (strict - refuses on any gap, by design), `attest.py build` then
 `disposition`, H2. Passes once every P6 gate has a fresh recorded pass.
+
+**The design document.** Once `release` passes and H2 is recorded, build
+the block's design document:
+`eda python engine/scripts/design_doc.py --workspace <ws> --file`. It
+writes `doc/<block>_design.pdf` in the pdf-material-builder house style:
+what the block is (spec.md, spec.yaml), the architecture and the
+recorded decisions behind it, a block diagram, a layout render, and one row
+per gate the skill owes with the numbers read from its recorded result. A
+gate with no result is a "not run" row, never left out. Nobody types a
+number into it: if a number looks wrong, re-run its gate, never edit the `.tex`.
+For a released block in a project's own repo, `--file` files the PDF in the
+document register (project 004, Chip design) and a rebuild files the next
+revision. A corpus, eval or ladder run, a test, and a block that is not
+released never file: the JSON's `not_filed_because` says which. Attach the
+PDF to the release PR. A build that fails is exit 2 with a remediation.

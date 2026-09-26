@@ -40,7 +40,7 @@ Python entry points with an absolute `#!/usr/bin/python3` shebang (`librelane`, 
 
 Ported from `/hwde` with the domain swapped: `state.py` and `statelib` (state, freshness, snapshots, locks), `safelib` and `checklib`, `task_router.py` and the `tasks.yaml` format, `gate.py` (evaluate, record, commit on pass, waivers, strict mode), `fix_dispatch.py` and `cluster_violations.py` (the clustering key becomes file, module and finding kind), `attest.py`, `bench.py` and `benchlib`, `learnings.py`, `sim_run.py` and `simlib` (ngspice benches with `.bounds.json` sidecars, now through `eda ngspice -b`).
 
-New: `eda`, `check_env.py`, `jobs.py`, `faults.py` (corpus faults and per-run mutants), `holdout.py`, `optimise.py`, `release.py`, `speclib`, `corners.py`, `layout_gen.py`, `cosim_run.py`, and one `check_<gate>.py` per gate. `state_migrate.py`, `report_gen.py` and everything KiCad-specific do not port.
+New: `eda`, `check_env.py`, `jobs.py`, `faults.py` (corpus faults and per-run mutants), `holdout.py`, `optimise.py`, `release.py`, `design_doc.py`, `speclib`, `corners.py`, `layout_gen.py`, `cosim_run.py`, and one `check_<gate>.py` per gate. `state_migrate.py`, `report_gen.py` and everything KiCad-specific do not port.
 
 ### 1.4 Workspace and state
 
@@ -157,6 +157,8 @@ Formal finds what simulation skips. `formal` runs SymbiYosys with two engines, k
 Coverage says what the tests never reached. `cover` runs the same tests under Verilator with line and toggle coverage and refuses below the thresholds; exclusions need a reason in `spec.yaml`. Requirement coverage comes from the test tags.
 
 The record of what ran is the release. `attest.py` walks every gate that applies, checks each has a recorded pass whose input hashes match the files now, and writes `reports/checks.json`: gate, tool and version, inputs and hashes, result, timestamp, and for every gate that did not apply, the reason and who approved it. The package a person signs off carries that file, and the run's summary is generated from it, not from an agent's prose. A gate that could not run is a refusal, which answers the silent-failure class the proposal cites. Gate-level simulation and the shuttle's precheck then close the loop on the hardened netlist, because a design can be right in RTL and wrong after synthesis.
+
+Every block also gets a design document a person can read, built after release by `design_doc.py` as a pdf-material-builder PDF in the workspace's `doc/`: what the block is and its spec, the architecture with a block diagram and the recorded decisions behind it, a layout render, and one row per applicable gate with the numbers read from its recorded result (`state.json`, and `reports/recorded/gate-<g>.json`, which `gate.py` writes with every recorded run). A gate with no recorded result is a "not run" row, never left out, and no number in it is typed by hand. Only a released block in a project's own repo is filed in the document register (project 004, Chip design), each rebuild as the next revision; a draft, a corpus, eval or ladder run, a nested msde side and a test never file.
 
 ## 3. Evals
 
