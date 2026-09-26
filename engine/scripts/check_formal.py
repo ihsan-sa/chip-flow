@@ -57,15 +57,15 @@ Per-property (ASSERT-kind) verdict, applied per `property:` label:
            induction both report "pass" AND the pdr task's own DONE is PASS.
   bounded  smt's basecase reports "pass" (no counterexample within `depth`
            steps) but induction did not (an inconclusive/unproven induction
-           step, not a counterexample - a real counterexample at either
-           step always surfaces as this property's own XML <failure>,
-           caught by `failed` below first). Recorded with `depth` - "the
+           step, not a counterexample - sby also puts a <failure> on the
+           property whose induction step failed, with trace_induct.vcd,
+           and that is still bounded, never failed). Recorded with `depth` - "the
            gate never reports it as proven" (docs/design.md section 2) -
            a severity "info" finding, visible but never counted toward the
            gate's fail_severities: bounded to the spec's own asked depth is
            this gate's OWN passing outcome, just never claimed as a proof.
   failed   this property's own testcase carries a <failure> in the smt
-           task, OR the pdr task's overall DONE is FAIL while smt did not
+           task and smt's basecase did not pass, OR the pdr task's overall DONE is FAIL while smt did not
            already fail it (an engine disagreement - PDR is a sound method
            for a safety property, so a PDR counterexample the k-induction
            run did not also find is treated as a real failure, not
@@ -339,7 +339,10 @@ def classify_property(label: str, rid: str, smt_case: dict,
     real solver run - see this module's own header for what each rule
     means; CheckError here is the "sby genuinely never reached a verdict at
     all" case, never silently folded into any of the three outcomes."""
-    if smt_case["failed"]:
+    # sby marks the property <failure> for an induction-step trace too
+    # (trace_induct.vcd): an arbitrary, possibly unreachable start state,
+    # not a counterexample. Only a basecase that did not pass is one.
+    if smt_case["failed"] and smt_sub["basecase"] != "pass":
         return "failed", checklib.violation(
             "formal", "error", None, None, "property_failed", [rid],
             f"requirement {rid} (property {label}): sby found a "

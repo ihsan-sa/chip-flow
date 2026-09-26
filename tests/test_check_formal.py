@@ -235,6 +235,25 @@ def test_classify_property_failed_by_smtbmc():
     assert violation["severity"] == "error"
 
 
+def test_classify_property_induction_trace_is_not_a_counterexample():
+    # The uart run: basecase passed to depth 20, the induction step failed
+    # on p_start_ignored_while_busy (sby tags that property <failure> with
+    # trace_induct.vcd) and abc pdr proved it. An unreachable induction
+    # start state is bounded, not a counterexample.
+    verdict, violation = check_formal.classify_property(
+        "P", "REQ", CASE_FAILED, {"basecase": "pass", "induction": "FAIL"},
+        "PASS", 20)
+    assert verdict == "bounded"
+    assert violation["kind"] == "bounded_not_proven"
+    # The planted fault: the same <failure> with the basecase failed is a
+    # real counterexample and still fails the gate.
+    verdict, violation = check_formal.classify_property(
+        "P", "REQ", CASE_FAILED, {"basecase": "FAIL", "induction": None},
+        "PASS", 20)
+    assert verdict == "failed"
+    assert violation["kind"] == "property_failed"
+
+
 def test_classify_property_engine_disagreement():
     # smtbmc claims proven, but abc pdr found a counterexample it did not -
     # never trusted silently.
