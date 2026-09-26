@@ -314,6 +314,9 @@ def run_ngspice(eda_bin: Path, deck_path: Path, cwd: Path,
     NEVER interpreted here - every caller must run detect_engine_errors()
     and compare_bounds() over the text regardless of returncode (module
     docstring: the exit code lies)."""
+    # absolute: a relative deck path (a relative --workspace) would be
+    # resolved against cwd a second time and ngspice would open nothing
+    deck_path = Path(deck_path).resolve()
     try:
         proc = subprocess.run(
             [str(eda_bin), "ngspice", "-b", str(deck_path)], cwd=str(cwd),

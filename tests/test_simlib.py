@@ -354,3 +354,21 @@ def test_run_ngspice_timeout_is_reported_not_raised(monkeypatch, tmp_path):
                                       tmp_path, 5.0)
     assert rc == -1
     assert "timed out" in err
+
+
+def test_run_ngspice_relative_deck_with_cwd_resolves(tmp_path, monkeypatch):
+    """A relative deck path (from a relative --workspace) run with
+    cwd=its own dir must still name the deck ngspice can open - it used to
+    be resolved against cwd a second time (log/sim/log/sim/...), so every
+    measure read as sim_measure_missing."""
+    monkeypatch.chdir(tmp_path)
+    out_dir = Path("log") / "sim"
+    out_dir.mkdir(parents=True)
+    deck = out_dir / "d.cir"
+    deck.write_text("* deck\n", encoding="utf-8")
+    fake = tmp_path / "fake_eda"
+    fake.write_text('#!/bin/sh\ntest -f "$3" && echo found\n',
+                    encoding="utf-8")
+    fake.chmod(0o755)
+    out, _err, rc = simlib.run_ngspice(fake, deck, out_dir, timeout=10)
+    assert rc == 0 and "found" in out
