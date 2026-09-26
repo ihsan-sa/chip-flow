@@ -245,3 +245,20 @@ def test_size_doubled_falls_back_to_r_length_without_r_width():
              if m["kind"] == "size_doubled")
     assert m["id"] == "xr1_size_doubled_r_length"
     assert "r_length={(r_length)*2}" in m["apply"](text)
+
+
+def test_connection_removed_floats_a_three_terminal_resistors_first_terminal():
+    # ppolyf_u is `r0 r1 body`: the body carries only parasitics, so
+    # floating it changes nothing a bench can see (ring_osc_div's five
+    # survivors, deltas ~0). A resistor's first terminal is floated instead,
+    # the same stronger-mutant rule as a MOSFET's bulk tied to its source.
+    text = ("xr1 s1 vss vss ppolyf_u r_width={r_width} r_length={r_length}\n"
+            "xr2 s2 vss vss ppolyf_u r_width={r_width} r_length={r_length}\n")
+    m = next(m for m in netlistlib.device_mutants(text, ["xr1"])
+             if m["kind"] == "connection_removed")
+    assert m["id"] == "xr1_connection_removed"
+    assert m["describe"] == ("xr1: first terminal (a resistor's body carries "
+                             "only parasitics) disconnected")
+    out = m["apply"](text)
+    assert out.splitlines()[0].startswith("xr1 __floating_xr1__ vss vss ppolyf_u")
+    assert out.splitlines()[1] == text.splitlines()[1]
