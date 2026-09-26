@@ -15,8 +15,8 @@ picks the half from the target's suffix:
     optimise.py trial --workspace DIR --note "one line" [--out FILE]
     optimise.py finish --workspace DIR [--out FILE]
     optimise.py start --workspace DIR --target sizing/sizing.yaml
-                [--objective margin|power] [--out FILE]
-    optimise.py numeric --workspace DIR [--trials N] [--wall MIN]
+                [--objective margin] [--out FILE]
+    optimise.py numeric --workspace DIR [--timeout SEC]
                 [--popsize N] [--maxiter N] [--seed N] [--out FILE]
 
 RTL LOOP. The workspace must be a git repo with a clean tree, and the target
