@@ -107,7 +107,7 @@ P0 Intake - P1 Spec - P2 Topology -
 P3 Bench (before any netlist exists) -
 P4 Netlist, sizing + simulation gates -[H1: review]-
 P5 Layout + layout gates -[H2: sign-off]-
-P6 Release
+P6 Release, then the design document
 ```
 
 `state.py`'s phase list is shared with vde (P0..P8, done); an ade run goes

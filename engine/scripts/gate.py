@@ -40,7 +40,12 @@ scratch/corpus input with no workspace records nothing, and the result says
 so (`record_result.recorded: false` + reason); --no-record opts out
 explicitly. A REQUESTED-but-failed record is an operational error (exit 2),
 exactly like a requested-but-failed commit: a caller keying on exit 0 must
-not believe the evidence was preserved when it was not.
+not believe the evidence was preserved when it was not. With the record goes
+the run's whole result, to reports/recorded/gate-<g>.json stamped with the
+recorded ts (write_recorded_copy): state.json keeps only a few scalar facts,
+and the design document (design_doc.py) reads the rest from that copy. It is
+written before state.json is saved, so a copy that cannot be written leaves
+the result unrecorded (exit 2), never recorded without its detail.
 """
 from __future__ import annotations
 
@@ -231,6 +236,24 @@ def evaluate(gate_name: str, gate: dict, report: dict) -> dict:
 find_workspace = statelib.find_workspace
 
 
+RECORDED_DIR = Path("reports") / "recorded"
+
+
+def write_recorded_copy(ws: Path, gate_name: str, result: dict,
+                        g: dict) -> None:
+    """The recorded run's whole result, as reports/recorded/gate-<g>.json,
+    stamped with the `ts` and `attempts` state.json records for it. state.json
+    keeps only a few scalar facts per gate; design_doc.py reads the rest from
+    here, and only while `recorded_ts` is still the gate's last recorded ts."""
+    path = ws / RECORDED_DIR / f"gate-{gate_name}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = {**result, "recorded_ts": (g.get("last") or {}).get("ts"),
+            "attempts": g.get("attempts")}
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(body, indent=1), encoding="utf-8")
+    tmp.replace(path)
+
+
 def record_gate_result(skill: str, gate_name: str, gate: dict, result: dict,
                        workspace: Path | None) -> dict:
     """Record the result in the workspace's state.json.
@@ -267,6 +290,7 @@ def record_gate_result(skill: str, gate_name: str, gate: dict, result: dict,
         with safelib.writer_lock(state_path, what="state.json"):
             st = state_mod.State.load(state_path)
             g = st.record_gate(gate_name, result, gate.get("phase"))
+            write_recorded_copy(ws, gate_name, result, g)
             st.save()
     except Exception as exc:  # noqa: BLE001 - reported, never swallowed
         return {"ok": False, "recorded": False,

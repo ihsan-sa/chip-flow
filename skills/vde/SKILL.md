@@ -112,7 +112,7 @@ P4 RTL + design gates -[H1: review]-
 P5 Synthesis -
 P6 Harden + signoff -
 P7 Optimise (optional) -
-P8 Release -[H2: sign-off]-
+P8 Release -[H2: sign-off]- then the design document
 ```
 
 Gates (from `engine/reference/gates.yaml`, run via `gate.py --gate <name>
