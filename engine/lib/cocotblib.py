@@ -107,7 +107,7 @@ def required_ids(spec: dict, checks: tuple[str, ...] = ("sim", "both")) -> set[s
 def run_cocotb(build_dir: Path, test_dir: Path, sources: list[Path],
               hdl_toplevel: str, test_modules_: list[str], results_xml: Path,
               timescale: tuple[str, str] = ("1ns", "1ps"),
-              timeout_s: float | None = None) -> Path:
+              timeout_s: float | None = None, waves: bool = False) -> Path:
     """Build the design then run every module in test_modules_ as one cocotb
     regression over Icarus. Returns the results.xml path (results_xml is
     pinned explicitly - concurrent callers, e.g. check_mutate.py running one
@@ -146,7 +146,11 @@ def run_cocotb(build_dir: Path, test_dir: Path, sources: list[Path],
     never comes, say) would otherwise block forever with no exit code to
     time out on. CocotbTimeout propagates to the caller uncaught - check_
     *.py's cli_wrap (checklib.py) maps any exception to exit 2, the same
-    "this gate did not run" contract a hang should report."""
+    "this gate did not run" contract a hang should report.
+
+    waves=True has cocotb dump `<build_dir>/<hdl_toplevel>.fst` (Icarus
+    always gets -fst or -none, so never VCD); optimise.py's power metric
+    is the one caller, and converts it with `eda fst2vcd`."""
     from cocotb_tools.runner import get_runner
     build_dir = Path(build_dir).resolve()
     test_dir = Path(test_dir).resolve()
@@ -166,7 +170,7 @@ def run_cocotb(build_dir: Path, test_dir: Path, sources: list[Path],
         signal.alarm(max(1, int(timeout_s)))
     try:
         runner.build(sources=[str(s) for s in sources], hdl_toplevel=hdl_toplevel,
-                    build_dir=str(build_dir), waves=False, timescale=timescale,
+                    build_dir=str(build_dir), waves=waves, timescale=timescale,
                     log_file=log_file)
         try:
             # cocotb_tools.runner.test() itself does sys.exit(1) when any
@@ -178,7 +182,7 @@ def run_cocotb(build_dir: Path, test_dir: Path, sources: list[Path],
             # return code either way.
             return runner.test(hdl_toplevel=hdl_toplevel, test_module=test_modules_,
                                test_dir=str(test_dir), build_dir=str(build_dir),
-                               results_xml=str(results_xml), waves=False,
+                               results_xml=str(results_xml), waves=waves,
                                log_file=log_file)
         except SystemExit:
             return Path(results_xml)

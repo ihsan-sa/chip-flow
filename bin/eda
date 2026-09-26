@@ -528,6 +528,15 @@ case "$TOOL" in
     run_elf "$real" "$@"
     ;;
 
+  # gtkwave's fst2vcd needs libfst.so.1 from gtkwave's own lib dir, which is
+  # not on BASE_LIBPATH. optimise.py's power metric converts cocotb's FST
+  # dump with it, because OpenSTA's read_vcd reads VCD only.
+  fst2vcd)
+    real="$T/foss/tools/gtkwave/bin/fst2vcd"
+    exec "$LD" --library-path "$BASE_LIBPATH:$T/foss/tools/gtkwave/lib/x86_64-linux-gnu" \
+      "$real" "$@"
+    ;;
+
   verilator|verilator_coverage|verilator_gantt)
     # verilator_coverage is its own perl driver (verilator_entry's own
     # comment) - always execing the `verilator` entry here for it used to

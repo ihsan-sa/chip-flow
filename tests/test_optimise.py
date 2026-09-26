@@ -277,3 +277,294 @@ def test_real_r2r_dac_optimise_reaches_bounds_from_wrong_start(tmp_path):
     import check_sim_tt
     code = check_sim_tt.main(["--workspace", str(ws)])
     assert code == 0
+
+
+# ------------------------------------------------------------ RTL loop (M7)
+#
+# Fast tests: real git, real hashing, the real diff/revert and must_keep
+# check; only the tools are faked. run_constraints fails `sim` when the RTL
+# says SIMFAIL; run_metric's area is the RTL's line count and its netlist
+# holds one cell per `cellname u_name (` instance line, so deleting an
+# instance really does drop it from what must_keep_missing reads.
+
+import re  # noqa: E402
+import subprocess  # noqa: E402
+
+RTL_SPEC = """\
+top: blk
+requirements:
+  - {id: REQ-A, text: a, check: sim}
+ports:
+  clk: {dir: input, width: 1}
+  q: {dir: output, width: 1}
+clock: {period_ns: 20, domains: [clk]}
+must_keep: [u_ring]
+"""
+RTL_BASE = """\
+module blk (input wire clk, output reg q);
+  keeper u_ring (.a(q));
+  // pad 1
+  // pad 2
+  // pad 3
+  always @(posedge clk) q <= ~q;
+endmodule
+"""
+
+
+def git(ws: Path, *args: str) -> str:
+    return subprocess.run(["git", "-C", str(ws), *args], check=True,
+                          capture_output=True, text=True).stdout
+
+
+def make_rtl_ws(tmp_path: Path, monkeypatch) -> Path:
+    ws = tmp_path / "ws"
+    for sub in ("spec", "rtl", "tb", "formal", "holdout"):
+        (ws / sub).mkdir(parents=True)
+    (ws / "spec" / "spec.yaml").write_text(RTL_SPEC, encoding="utf-8")
+    (ws / "rtl" / "blk.v").write_text(RTL_BASE, encoding="utf-8")
+    (ws / "tb" / "test_blk.py").write_text("# req: REQ-A\n", encoding="utf-8")
+    (ws / "formal" / "blk_formal.sv").write_text("// f\n", encoding="utf-8")
+    (ws / "holdout" / "test_h.py").write_text("# h\n", encoding="utf-8")
+    git(ws, "init", "-q")
+    git(ws, "add", "-A")
+    git(ws, "-c", "user.name=t", "-c", "user.email=t@l", "commit", "-qm", "init")
+
+    lib_root = tmp_path / "tc"
+    lib = lib_root / optimise_check_synth().LIBERTY_REL
+    lib.parent.mkdir(parents=True)
+    lib.write_text("library (fake) {}\n", encoding="utf-8")
+    monkeypatch.setattr(optimise_check_synth(), "toolchain_root",
+                        lambda timeout=30.0: lib_root)
+
+    def fake_constraints(ew, detail):
+        text = (ew / "rtl" / "blk.v").read_text(encoding="utf-8")
+        sim = "fail" if "SIMFAIL" in text else "pass"
+        if sim == "fail":
+            detail.append("check_sim: test_blk failed")
+        return {"lint": "pass", "sim": sim,
+                "formal": "pass" if sim == "pass" else "skipped"}
+
+    def fake_metric(ew, ev, profile, with_power):
+        text = (ew / "rtl" / "blk.v").read_text(encoding="utf-8")
+        cells = {m: {} for m in re.findall(r"^\s*\w+ (u_\w+) \(", text, re.M)}
+        nl = {"modules": {"blk": {"cells": cells, "netnames": {}, "ports": {
+            "clk": {"direction": "input", "bits": [2]},
+            "q": {"direction": "output", "bits": [3]}}}}}
+        keep = json.loads((ev / "must_keep.json").read_text(encoding="utf-8"))
+        missing = optimise.must_keep_missing(nl, "blk", keep)
+        ports = json.loads((ev / "ports.json").read_text(encoding="utf-8"))
+        return {"area": float(len(text.splitlines())), "slack": 5.0,
+                "power": 1e-3, "synth": "pass",
+                "ports": "fail" if optimise.port_mismatch(nl, "blk", ports)
+                else "pass",
+                "must_keep": "fail" if missing else "pass",
+                "detail": [f"must_keep {n} removed" for n in missing]}
+
+    monkeypatch.setattr(optimise, "run_constraints", fake_constraints)
+    monkeypatch.setattr(optimise, "run_metric", fake_metric)
+    return ws
+
+
+def optimise_check_synth():
+    import check_synth
+    return check_synth
+
+
+def rtl_start(ws: Path, **kw) -> dict:
+    argv = ["--workspace", str(ws), "--target", "rtl/blk.v"]
+    for k, v in kw.items():
+        argv += [f"--{k}", str(v)]
+    payload, _ = optimise.run_rtl_start(argv)
+    return payload
+
+
+def rtl_trial(ws: Path, note: str = "t") -> dict:
+    payload, _ = optimise.run_trial(["--workspace", str(ws), "--note", note])
+    return payload
+
+
+def tsv_rows(ws: Path) -> list[dict]:
+    import csv
+    with open(ws / "optimise" / "trials.tsv", encoding="utf-8") as f:
+        return list(csv.DictReader(f, delimiter="\t"))
+
+
+def edit_target(ws: Path, old: str, new: str) -> None:
+    p = ws / "rtl" / "blk.v"
+    text = p.read_text(encoding="utf-8")
+    assert old in text
+    p.write_text(text.replace(old, new), encoding="utf-8")
+
+
+def test_rtl_start_freezes_evaluator_and_scores_the_baseline(tmp_path, monkeypatch):
+    ws = make_rtl_ws(tmp_path, monkeypatch)
+    payload = rtl_start(ws)
+    ev = ws / "optimise" / "evaluator"
+    for name in ("synth.ys", "design.sdc", "liberty.json", "ports.json",
+                 "must_keep.json", "holdout.json", "spec.yaml",
+                 "tb/test_blk.py", "formal/blk_formal.sv"):
+        assert (ev / name).is_file(), name
+    assert "create_clock -name clk -period 20" in (ev / "design.sdc").read_text()
+    meta = payload["meta"]
+    assert meta["evaluator_sha"] == optimise.hash_rtl_evaluator(ws)
+    assert meta["baseline"]["area"] == 7.0
+    rows = tsv_rows(ws)
+    assert list(rows[0]) == optimise.RTL_TSV_FIELDS
+    assert rows[0]["trial"] == "0" and rows[0]["kept"] == "True"
+
+
+def test_rtl_start_refuses_a_dirty_tree(tmp_path, monkeypatch):
+    ws = make_rtl_ws(tmp_path, monkeypatch)
+    (ws / "tb" / "test_blk.py").write_text("# changed\n", encoding="utf-8")
+    with pytest.raises(CheckError, match="uncommitted changes"):
+        rtl_start(ws)
+
+
+def test_rtl_kept_trial_is_committed_and_a_worse_one_reverted(tmp_path, monkeypatch):
+    ws = make_rtl_ws(tmp_path, monkeypatch)
+    rtl_start(ws)
+    edit_target(ws, "  // pad 1\n", "")
+    kept = rtl_trial(ws, "drop a pad line")
+    assert kept["kept"] is True and kept["area"] == 6.0
+    assert "optimise trial 1: drop a pad line" in git(ws, "log", "-1", "--format=%s")
+    edit_target(ws, "  // pad 2\n", "  // pad 2\n  // more\n  // more\n")
+    worse = rtl_trial(ws, "grow it")
+    assert worse["kept"] is False
+    assert "// more" not in (ws / "rtl" / "blk.v").read_text()
+    rows = tsv_rows(ws)
+    assert [r["kept"] for r in rows] == ["True", "True", "False"]
+
+
+def test_rtl_evaluator_edit_mid_loop_aborts_and_reverts(tmp_path, monkeypatch):
+    """M7 done-criterion: an evaluator edit mid-loop aborts and reverts."""
+    ws = make_rtl_ws(tmp_path, monkeypatch)
+    rtl_start(ws)
+    edit_target(ws, "  // pad 1\n", "")
+    assert rtl_trial(ws)["kept"] is True
+    kept_text = (ws / "rtl" / "blk.v").read_text()
+
+    edit_target(ws, "  // pad 2\n", "")
+    sdc = ws / "optimise" / "evaluator" / "design.sdc"
+    sdc.write_text(sdc.read_text().replace("-period 20", "-period 200"))
+    with pytest.raises(CheckError, match="evaluator changed"):
+        rtl_trial(ws, "loosen the clock")
+    assert (ws / "rtl" / "blk.v").read_text() == kept_text
+    rows = tsv_rows(ws)
+    assert rows[-1]["kept"] == "False" and "ABORTED" in rows[-1]["note"]
+    with pytest.raises(CheckError, match="aborted"):
+        rtl_trial(ws)
+
+
+def test_rtl_edit_outside_target_is_reverted(tmp_path, monkeypatch):
+    """M7 done-criterion: an edit outside the target is reverted."""
+    ws = make_rtl_ws(tmp_path, monkeypatch)
+    rtl_start(ws)
+    tb = ws / "tb" / "test_blk.py"
+    tb.write_text("# req: REQ-A\nassert True  # weakened\n", encoding="utf-8")
+    (ws / "spec" / "extra.yaml").write_text("x: 1\n", encoding="utf-8")
+    (ws / "holdout" / "test_h.py").unlink()
+    edit_target(ws, "  // pad 1\n", "")
+    payload = rtl_trial(ws, "shrink, and touch the tests")
+    assert sorted(payload["reverted_outside_target"]) == [
+        "holdout/test_h.py", "spec/extra.yaml", "tb/test_blk.py"]
+    assert tb.read_text() == "# req: REQ-A\n"
+    assert not (ws / "spec" / "extra.yaml").exists()
+    assert (ws / "holdout" / "test_h.py").read_text() == "# h\n"
+    # the target's own change was still scored, and kept
+    assert payload["kept"] is True
+    assert "tb/test_blk.py" not in git(ws, "show", "--stat", "HEAD")
+    assert "reverted outside target" in tsv_rows(ws)[-1]["note"]
+
+
+def test_rtl_trial_failing_sim_is_logged_not_kept(tmp_path, monkeypatch):
+    """M7 done-criterion: a trial failing `sim` is logged as not kept -
+    even though it is smaller."""
+    ws = make_rtl_ws(tmp_path, monkeypatch)
+    rtl_start(ws)
+    edit_target(ws, "  // pad 1\n  // pad 2\n", "  // SIMFAIL\n")
+    payload = rtl_trial(ws, "smaller but wrong")
+    assert payload["kept"] is False
+    assert payload["constraints"]["sim"] == "fail"
+    row = tsv_rows(ws)[-1]
+    assert row["sim"] == "fail" and row["kept"] == "False"
+    assert row["area"] == "" and "rejected (sim)" in row["note"]
+    assert "SIMFAIL" not in (ws / "rtl" / "blk.v").read_text()
+
+
+def test_rtl_trial_removing_must_keep_cell_is_rejected(tmp_path, monkeypatch):
+    """M7 done-criterion: a trial removing a `must_keep` cell is rejected,
+    even though it is smaller and passes sim."""
+    ws = make_rtl_ws(tmp_path, monkeypatch)
+    rtl_start(ws)
+    edit_target(ws, "  keeper u_ring (.a(q));\n", "")
+    payload = rtl_trial(ws, "the ring does nothing the tests see")
+    assert payload["kept"] is False
+    assert payload["constraints"]["sim"] == "pass"
+    assert payload["constraints"]["must_keep"] == "fail"
+    assert payload["area"] < 7.0  # smaller, and still rejected
+    row = tsv_rows(ws)[-1]
+    assert row["must_keep"] == "fail" and row["kept"] == "False"
+    assert "u_ring" in (ws / "rtl" / "blk.v").read_text()
+
+
+def test_must_keep_missing_reads_flattened_names():
+    nl = {"modules": {"top": {"cells": {"u_ring.inv0": {}, "$abc$1": {}},
+                              "netnames": {"\\sync_q": {}}}}}
+    assert optimise.must_keep_missing(nl, "top", ["u_ring", "sync_q"]) == []
+    assert optimise.must_keep_missing(nl, "top", ["inv0"]) == []
+    assert optimise.must_keep_missing(nl, "top", ["u_gone"]) == ["u_gone"]
+
+
+def test_port_mismatch_catches_a_dropped_or_narrowed_port():
+    ports = {"a": {"dir": "input", "width": 8}, "y": {"dir": "output"}}
+    nl = {"modules": {"t": {"ports": {
+        "a": {"direction": "input", "bits": list(range(4))}}}}}
+    diffs = optimise.port_mismatch(nl, "t", ports)
+    assert any(d.startswith("a:") for d in diffs)
+    assert any(d.startswith("y:") for d in diffs)
+
+
+def test_rtl_loop_stops_on_patience_and_trials(tmp_path, monkeypatch):
+    ws = make_rtl_ws(tmp_path, monkeypatch)
+    rtl_start(ws, trials=10, patience=2)
+    rtl_trial(ws, "no change")
+    payload = rtl_trial(ws, "no change again")
+    assert payload["stop"] and payload["stop"].startswith("patience")
+    with pytest.raises(CheckError, match="stopped"):
+        rtl_trial(ws)
+
+
+def test_rtl_head_moved_outside_the_loop_aborts(tmp_path, monkeypatch):
+    ws = make_rtl_ws(tmp_path, monkeypatch)
+    rtl_start(ws)
+    (ws / "tb" / "test_blk.py").write_text("# sneaky\n", encoding="utf-8")
+    git(ws, "-c", "user.name=t", "-c", "user.email=t@l", "commit", "-qam", "x")
+    with pytest.raises(CheckError, match="HEAD"):
+        rtl_trial(ws)
+
+
+def test_rtl_finish_discards_a_winner_failing_full_gates(tmp_path, monkeypatch):
+    """section 4: a winner that fails holdout/formal/mutate is discarded
+    and the last passing trial restored."""
+    ws = make_rtl_ws(tmp_path, monkeypatch)
+    rtl_start(ws)
+    edit_target(ws, "  // pad 1\n", "")
+    assert rtl_trial(ws, "first")["kept"]
+    first = (ws / "rtl" / "blk.v").read_text()
+    edit_target(ws, "  // pad 2\n", "  // DROPS_HOLDOUT\n")
+    edit_target(ws, "  // pad 3\n", "")
+    assert rtl_trial(ws, "second")["kept"]
+
+    def fake_full(ws_):
+        bad = "DROPS_HOLDOUT" in (ws_ / "rtl" / "blk.v").read_text()
+        return {"holdout": "fail" if bad else "pass", "formal": "pass",
+                "mutate": "pass"}
+
+    monkeypatch.setattr(optimise, "full_gates", fake_full)
+    payload, _ = optimise.run_finish(["--workspace", str(ws)])
+    assert payload["status"] == "pass"
+    assert payload["winner"]["trial"] == 1 and payload["discarded"] == [2]
+    assert (ws / "rtl" / "blk.v").read_text() == first
+    assert "restore trial 1" in git(ws, "log", "-1", "--format=%s")
+    notes = [r["note"] for r in tsv_rows(ws)[-2:]]
+    assert "holdout=fail" in notes[0] and "holdout=pass" in notes[1]
