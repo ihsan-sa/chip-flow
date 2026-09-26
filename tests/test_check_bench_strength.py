@@ -495,3 +495,190 @@ def test_a_below_spread_ruling_for_a_killed_mutant_is_refused(tmp_path, monkeypa
     code, out = run_gate(ws, capsys)
     assert code == 2, out
     assert "kills" in out["error"]
+
+
+# ---------------------------------------------------- sensitivity kills
+# The bench's bounds must equal the spec's (speclib), so a mutant that moves
+# a measure a long way but stays inside the spec cannot be killed by a
+# bound. A declared `sensitivity` kills it against the unmutated design's
+# own tt value instead, without the bound moving.
+
+def with_sensitivity(ws: Path, **sens) -> None:
+    bounds = [{"measure": "iout_ratio", "min": 1.8, "max": 2.2},
+              {"measure": "gain", "min": 9.0, "max": 11.0}]
+    for b in bounds:
+        if b["measure"] in sens:
+            b["sensitivity"] = sens[b["measure"]]
+    (ws / "tb" / "mirror_tb.bounds.json").write_text(json.dumps(bounds),
+                                                     encoding="utf-8")
+
+
+# xmref_size_doubled moves iout_ratio +5% - still inside the 1.8..2.2 spec
+IN_SPEC_5PC = {"iout_ratio": 2.1, "gain": 10.0}
+
+
+def test_an_in_spec_move_past_the_sensitivity_is_a_kill(tmp_path, monkeypatch, capsys):
+    ws = make_ruled_ws(tmp_path, monkeypatch,
+                       {"xmref_size_doubled_w": IN_SPEC_5PC}, None)
+    with_sensitivity(ws, iout_ratio=0.03)
+    code, out = run_gate(ws, capsys)
+    assert code == 0 and out["survived"] == 0, out
+    assert out["killed_by_sensitivity"] == 1
+    assert out["mutants"]["xmref_size_doubled_w"]["sensitivity_kill"] == {
+        "bench": "mirror_tb.cir", "measure": "iout_ratio", "delta": 0.05,
+        "sensitivity": 0.03}
+
+
+def test_without_a_sensitivity_the_same_move_still_survives(tmp_path, monkeypatch, capsys):
+    ws = make_ruled_ws(tmp_path, monkeypatch,
+                       {"xmref_size_doubled_w": IN_SPEC_5PC}, None)
+    code, out = run_gate(ws, capsys)
+    assert code == 1 and out["survived"] == 1, out
+    assert [v["kind"] for v in errors(out)] == ["survivor_size_doubled"]
+    assert out["killed_by_sensitivity"] == 0
+
+
+def test_a_move_inside_the_sensitivity_still_survives(tmp_path, monkeypatch, capsys):
+    # +1% on iout_ratio, gain untouched: inside 3%, so not told apart
+    ws = make_ruled_ws(tmp_path, monkeypatch,
+                       {"xmref_size_doubled_w": {"iout_ratio": 2.02,
+                                               "gain": 10.0}}, None)
+    with_sensitivity(ws, iout_ratio=0.03, gain=0.03)
+    code, out = run_gate(ws, capsys)
+    assert code == 1 and out["survived"] == 1, out
+    assert [v["kind"] for v in errors(out)] == ["survivor_size_doubled"]
+    assert "sensitivity_kill" not in out["mutants"]["xmref_size_doubled_w"]
+
+
+def test_a_move_in_an_undeclared_measure_does_not_kill(tmp_path, monkeypatch, capsys):
+    # gain moves 5% but only iout_ratio declares a sensitivity
+    ws = make_ruled_ws(tmp_path, monkeypatch,
+                       {"xmref_size_doubled_w": {"iout_ratio": 2.0,
+                                               "gain": 10.5}}, None)
+    with_sensitivity(ws, iout_ratio=0.03)
+    code, out = run_gate(ws, capsys)
+    assert code == 1 and out["survived"] == 1, out
+
+
+def test_a_sensitivity_below_the_spread_floor_is_refused(tmp_path, monkeypatch, capsys):
+    ws = make_ruled_ws(tmp_path, monkeypatch,
+                       {"xmref_size_doubled_w": IN_SPEC_5PC}, None)
+    with_sensitivity(ws, iout_ratio=0.01)
+    code, out = run_gate(ws, capsys)
+    assert code == 2 and "floor" in out["error"], out
+
+
+def test_a_sensitivity_on_a_bound_not_scored_at_tt_is_refused(tmp_path, monkeypatch, capsys):
+    ws = make_ruled_ws(tmp_path, monkeypatch,
+                       {"xmref_size_doubled_w": IN_SPEC_5PC}, None)
+    (ws / "tb" / "mirror_tb.bounds.json").write_text(json.dumps([
+        {"measure": "iout_ratio", "min": 1.8, "max": 2.2},
+        {"measure": "gain", "min": 9.0, "max": 11.0, "corners": ["ss"],
+         "sensitivity": 0.03}]), encoding="utf-8")
+    code, out = run_gate(ws, capsys)
+    assert code == 2 and "not scored at tt" in out["error"], out
+
+
+def test_a_below_spread_ruling_for_a_sensitivity_kill_is_stale(tmp_path, monkeypatch, capsys):
+    ws = make_ruled_ws(tmp_path, monkeypatch,
+                       {"xmref_connection_removed": IN_SPEC_5PC},
+                       below_ruling(delta=0.05, sigma=0.02))
+    with_sensitivity(ws, iout_ratio=0.03)
+    code, out = run_gate(ws, capsys)
+    assert code == 2 and "kills" in out["error"], out
+
+
+def test_an_unmutated_design_meeting_spec_passes_with_sensitivities(tmp_path, monkeypatch, capsys):
+    # the real deck path (fake ngspice): the baseline meets spec and is
+    # never failed by a sensitivity; every real mutant is still killed
+    ws = make_ws(tmp_path)
+    (ws / "tb" / "mirror_tb.bounds.json").write_text(json.dumps([
+        {"measure": "iout_ratio", "min": 1.8, "max": 2.2,
+         "sensitivity": 0.02}]), encoding="utf-8")
+    monkeypatch.setattr(sim_run, "EDA_BIN",
+                        make_reference_check_fake_eda(tmp_path))
+    code, out = run_gate(ws, capsys)
+    assert code == 0 and out["survived"] == 0, out
+
+
+def test_a_sensitivity_on_a_near_zero_measure_is_refused(tmp_path, monkeypatch, capsys):
+    # gain's unmutated value 0.1 is under 2% of its 11.0 bound: a relative
+    # move there is simulator tolerance, not a mutant
+    monkeypatch.setitem(BASE, "gain", 0.1)
+    ws = make_ruled_ws(tmp_path, monkeypatch,
+                       {"xmref_size_doubled_w": IN_SPEC_5PC}, None)
+    with_sensitivity(ws, gain=0.03)
+    code, out = run_gate(ws, capsys)
+    assert code == 2 and "near zero" in out["error"], out
+
+
+# ------------------------------------- below_spread and near-zero measures
+# A measure whose unmutated tt value sits near zero (under 2% of its bound's
+# magnitude - the rule check_sensitivity_baselines refuses a sensitivity by)
+# has a meaningless relative move, so a below_spread ruling is not refused
+# for it. A measure that is not near zero is still held to its spread.
+
+def with_v_low(ws: Path, monkeypatch, base_v_low: float) -> None:
+    (ws / "tb" / "mirror_tb.bounds.json").write_text(json.dumps([
+        {"measure": "iout_ratio", "min": 1.8, "max": 2.2},
+        {"measure": "gain", "min": 9.0, "max": 11.0},
+        {"measure": "v_low", "max": 0.2}]), encoding="utf-8")
+    monkeypatch.setitem(BASE, "v_low", base_v_low)
+
+
+def test_a_near_zero_measure_moving_a_lot_does_not_refuse_below_spread(tmp_path, monkeypatch, capsys):
+    # v_low 1 uV -> -51 uV is a -52x relative move, but 1 uV is under 2% of
+    # its 0.2 V bound; iout_ratio +0.5% sits inside its spread
+    ws = make_ruled_ws(tmp_path, monkeypatch,
+                       {"xmref_connection_removed":
+                        {**BELOW_MEASURES, "v_low": -51e-6}},
+                       below_ruling())
+    with_v_low(ws, monkeypatch, 1e-6)
+    code, out = run_gate(ws, capsys)
+    assert code == 1 and not errors(out), out
+    assert out["below_spread_ids"] == ["xmref_connection_removed"]
+    assert out["mutants"]["xmref_connection_removed"]["deltas"]["v_low"] == -52.0
+
+
+def test_the_same_move_on_a_measure_not_near_zero_is_still_refused(tmp_path, monkeypatch, capsys):
+    # v_low's baseline 0.1 V is half its 0.2 V bound: a +10% move is real
+    ws = make_ruled_ws(tmp_path, monkeypatch,
+                       {"xmref_connection_removed":
+                        {**BELOW_MEASURES, "v_low": 0.11}},
+                       below_ruling())
+    with_v_low(ws, monkeypatch, 0.1)
+    code, out = run_gate(ws, capsys)
+    assert code == 2 and "'v_low' moved" in out["error"], out
+
+
+def test_a_near_zero_measure_crossing_its_bound_still_kills(tmp_path, monkeypatch, capsys):
+    # the exemption only covers survivors: a mutant whose near-zero v_low
+    # crosses its bound is killed, so a below_spread ruling on it is stale
+    ws = make_ruled_ws(tmp_path, monkeypatch,
+                       {"xmref_connection_removed":
+                        {**BELOW_MEASURES, "v_low": 0.3}},
+                       below_ruling())
+    with_v_low(ws, monkeypatch, 1e-6)
+    faked = check_bench_strength.run_mutant
+
+    def bound_checked(eda_bin, ws_, mutant, *args, **kw):
+        res = faked(eda_bin, ws_, mutant, *args, **kw)
+        if (res["measures"].get("v_low") or 0.0) > 0.2:
+            res["violations"] = [{"kind": "bound_violation",
+                                  "severity": "error", "refs": ["v_low"]}]
+        return res
+
+    monkeypatch.setattr(check_bench_strength, "run_mutant", bound_checked)
+    code, out = run_gate(ws, capsys)
+    assert code == 2 and "kills" in out["error"], out
+
+
+def test_near_zero_measures_needs_every_bench_to_agree():
+    bounds = [{"measure": "v_low", "max": 0.2}]
+    tt = {"a.cir": {"v_low"}, "b.cir": {"v_low"}}
+    both = {"a.cir": {"v_low": 1e-6}, "b.cir": {"v_low": 1e-6}}
+    one = {"a.cir": {"v_low": 1e-6}, "b.cir": {"v_low": 0.1}}
+    by_bench = {"a.cir": bounds, "b.cir": bounds}
+    nz = check_bench_strength.near_zero_measures
+    assert nz(by_bench, both, tt) == {"v_low"}
+    assert nz(by_bench, one, tt) == set()

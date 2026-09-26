@@ -7,7 +7,7 @@
  "frozen_at": "2026-09-25T08:03:48+00:00",
  "files": {
   "spec/spec.md": "5046753596645e6c52860aee8e0de2ccce172def7337f86df3d5bc43ff53a938",
-  "spec/spec.yaml": "f72e08a8bfe4db4d75684f410b3ab5ae1ca62e5354175361ac0cd6071819164f",
+  "spec/spec.yaml": "fc76d55294202113ee6a429e19be5f8659fbbb3e9e3599f5f5ace4ed74601232",
   "tb/test_uart.py": "53ebfefa0f59ced1967a4b51e6d1d32308d0d82e849c7fc9bd972d5dc4d05b55",
   "tb/uart_model.py": "ed6c2a30bd3113a6118c21c94896bea9f5b6036201fc73aebb1a51f8ae7af611",
   "holdout/test_uart_holdout.py": "4e64ab77d1a7a6b59b33c4a34187ce331e6a1226b2bf6faf64568fb40fce8d7b",

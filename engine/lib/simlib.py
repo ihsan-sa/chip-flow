@@ -171,7 +171,9 @@ def load_bounds(path: Path) -> list[dict]:
     finite non-bool number when present, severity in {error, warning}
     (default error), corners "all" (the default) or a non-empty list of
     corner names the bound is scored at (a spec measure scored at `[tt]`
-    only)."""
+    only). An optional `sensitivity` (a finite number > 0, a relative
+    change) is not a pass bound: no sim gate reads it, only bench_strength
+    does (check_bench_strength.py)."""
     data = load_json(path, "bounds sidecar")
     if not isinstance(data, list) or not data:
         raise CheckError(f"{path}: bounds sidecar must be a non-empty JSON "
@@ -192,6 +194,12 @@ def load_bounds(path: Path) -> list[dict]:
                     or not math.isfinite(v):
                 raise CheckError(f"{path}[{i}] ({name}): {key!r} must be a "
                                  "finite number")
+        if "sensitivity" in entry:
+            v = entry["sensitivity"]
+            if isinstance(v, bool) or not isinstance(v, (int, float)) \
+                    or not math.isfinite(v) or v <= 0:
+                raise CheckError(f"{path}[{i}] ({name}): 'sensitivity' must "
+                                 "be a finite number > 0 (a relative change)")
         sev = entry.get("severity", "error")
         if sev not in ("error", "warning"):
             raise CheckError(f"{path}[{i}] ({name}): severity must be "
@@ -314,6 +322,9 @@ def run_ngspice(eda_bin: Path, deck_path: Path, cwd: Path,
     NEVER interpreted here - every caller must run detect_engine_errors()
     and compare_bounds() over the text regardless of returncode (module
     docstring: the exit code lies)."""
+    # absolute: a relative deck path (a relative --workspace) would be
+    # resolved against cwd a second time and ngspice would open nothing
+    deck_path = Path(deck_path).resolve()
     try:
         proc = subprocess.run(
             [str(eda_bin), "ngspice", "-b", str(deck_path)], cwd=str(cwd),

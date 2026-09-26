@@ -198,10 +198,11 @@ def device_mutants(netlist_text: str, device_refs: list[str],
         dev = devices.get(ref)
         if dev is not None:
             model = dev["model"]
-            if "w" in dev["params"]:
-                mutants.append(_size_mutant(ref, dev, "w"))
-            if "l" in dev["params"] and "w" not in dev["params"]:
-                mutants.append(_size_mutant(ref, dev, "l"))
+            # a MOSFET's w/l, or a gf180mcu_fd_pr resistor's r_width/r_length
+            w_key = next((k for k in ("w", "r_width") if k in dev["params"]), None)
+            l_key = next((k for k in ("l", "r_length") if k in dev["params"]), None)
+            if w_key or l_key:
+                mutants.append(_size_mutant(ref, dev, w_key or l_key))
             if len(dev["nodes"]) >= 2:
                 mutants.append(_disconnect_mutant(ref, dev))
             flip = _flip_target(model)
@@ -254,8 +255,13 @@ def _disconnect_target(dev: dict) -> tuple[int, str]:
     4-terminal device's bulk is the same node as its own source (compared
     case-insensitively, as spice does), floating the bulk changes nothing a
     simulation can see, so the drain (first terminal) is floated instead - a
-    stronger mutant, not an exclusion (owner ruling, 2026-09-25)."""
+    stronger mutant, not an exclusion (owner ruling, 2026-09-25). The same
+    rule covers a 3-terminal resistor (ppolyf_u's `r0 r1 body`): its body
+    carries only parasitics, so its first terminal is floated instead."""
     nodes = dev["nodes"]
+    if len(nodes) == 3 and ("r_width" in dev["params"]
+                            or "r_length" in dev["params"]):
+        return 0, "first terminal (a resistor's body carries only parasitics)"
     if len(nodes) == 4 and nodes[3].lower() == nodes[2].lower():
         return 0, "drain (bulk tied to its own source)"
     if len(nodes) == 4:

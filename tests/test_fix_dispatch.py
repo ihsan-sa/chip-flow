@@ -66,6 +66,50 @@ def test_orders_register_as_open_issues_when_state_given(tmp_path):
     assert wo["role_prompt"] == "skills/vde/agents/fixer.md"
 
 
+
+def test_vde_testbench_order_names_the_tb_writer(tmp_path):
+    """skills/vde/SKILL.md sends every `testbench` order (every mutate
+    survivor) to the tb-writer in work-order mode, never the generic fixer;
+    the work order's role_prompt must say the same."""
+    sys.path.insert(0, str(ENGINE / "scripts"))
+    import state as state_mod
+    ws = tmp_path / "ws"
+    state_mod.State.init(ws, "vde", "counter8")
+    findings = {"gate": "mutate", "violations": [
+        _v("survivor_other", "tb/counter8_tb.py", "testbench"),
+        _v("latch", "rtl/a.v", "rtl")]}
+    inp = tmp_path / "r.json"
+    inp.write_text(json.dumps(findings), encoding="utf-8")
+    payload, _ = fix_dispatch.run(["--input", str(inp), "--workspace", str(ws)])
+    roles = {o["fixer"]: json.loads(Path(o["work_order"]).read_text())
+             ["role_prompt"] for o in payload["orders"]}
+    assert roles["testbench"] == "skills/vde/agents/tb-writer.md"
+    assert roles["rtl"] == "skills/vde/agents/fixer.md"
+    assert fix_dispatch.role_prompt("msde", "testbench") == \
+        "skills/msde/agents/fixer.md"
+
+
+def test_vde_formal_order_names_the_property_writer(tmp_path):
+    """A `formal` domain order (e.g. cover_not_reached) must route to the
+    property-writer, never the generic fixer: fixer.md's domain table does
+    not include formal/*, only property-writer.md may touch spec.yaml's
+    `formal:` key."""
+    sys.path.insert(0, str(ENGINE / "scripts"))
+    import state as state_mod
+    ws = tmp_path / "ws"
+    state_mod.State.init(ws, "vde", "counter8")
+    findings = {"gate": "formal", "violations": [
+        _v("cover_not_reached", "formal/counter8_formal.sv", "formal"),
+        _v("latch", "rtl/a.v", "rtl")]}
+    inp = tmp_path / "r.json"
+    inp.write_text(json.dumps(findings), encoding="utf-8")
+    payload, _ = fix_dispatch.run(["--input", str(inp), "--workspace", str(ws)])
+    roles = {o["fixer"]: json.loads(Path(o["work_order"]).read_text())
+             ["role_prompt"] for o in payload["orders"]}
+    assert roles["formal"] == "skills/vde/agents/property-writer.md"
+    assert roles["rtl"] == "skills/vde/agents/fixer.md"
+
+
 def test_info_severity_findings_never_become_their_own_issue(tmp_path):
     """A gate result carrying `criteria.fail_severities` (gate.py's own
     evaluate() envelope) alongside info-severity findings (mutate survivor

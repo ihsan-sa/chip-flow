@@ -176,6 +176,29 @@ def test_load_bounds_not_a_list_raises(tmp_path):
         simlib.load_bounds(p)
 
 
+def test_load_bounds_keeps_a_sensitivity_and_refuses_a_bad_one(tmp_path):
+    p = tmp_path / "b.bounds.json"
+    p.write_text(json.dumps([{"measure": "f", "min": 1, "sensitivity": 0.03}]),
+                 encoding="utf-8")
+    assert simlib.load_bounds(p)[0]["sensitivity"] == 0.03
+    for bad in (0, -0.1, True, "0.05", float("inf")):
+        p.write_text(json.dumps([{"measure": "f", "min": 1,
+                                  "sensitivity": bad}]), encoding="utf-8")
+        with pytest.raises(CheckError, match="sensitivity"):
+            simlib.load_bounds(p)
+
+
+def test_a_sensitivity_never_changes_a_bound_check():
+    # a design that meets the spec still passes sim_tt/sim_pvt: the sim
+    # gates score min/max only
+    b = [{"measure": "f", "min": 8.0, "max": 12.0, "sensitivity": 0.02,
+          "severity": "error"}]
+    assert simlib.compare_bounds(b, {"f": 9.5}, "tb.cir", "tt",
+                                 check="sim_tt") == []
+    (v,) = simlib.compare_bounds(b, {"f": 12.5}, "tb.cir", "tt",
+                                 check="sim_tt")
+    assert v["kind"] == "sim_bound_fail"
+
 def test_load_bounds_empty_list_raises(tmp_path):
     p = tmp_path / "b.bounds.json"
     p.write_text("[]", encoding="utf-8")
@@ -354,3 +377,21 @@ def test_run_ngspice_timeout_is_reported_not_raised(monkeypatch, tmp_path):
                                       tmp_path, 5.0)
     assert rc == -1
     assert "timed out" in err
+
+
+def test_run_ngspice_relative_deck_with_cwd_resolves(tmp_path, monkeypatch):
+    """A relative deck path (from a relative --workspace) run with
+    cwd=its own dir must still name the deck ngspice can open - it used to
+    be resolved against cwd a second time (log/sim/log/sim/...), so every
+    measure read as sim_measure_missing."""
+    monkeypatch.chdir(tmp_path)
+    out_dir = Path("log") / "sim"
+    out_dir.mkdir(parents=True)
+    deck = out_dir / "d.cir"
+    deck.write_text("* deck\n", encoding="utf-8")
+    fake = tmp_path / "fake_eda"
+    fake.write_text('#!/bin/sh\ntest -f "$3" && echo found\n',
+                    encoding="utf-8")
+    fake.chmod(0o755)
+    out, _err, rc = simlib.run_ngspice(fake, deck, out_dir, timeout=10)
+    assert rc == 0 and "found" in out

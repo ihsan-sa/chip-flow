@@ -244,7 +244,9 @@ def lint_measures_vs_bench_bounds(spec: dict, bench_bounds: dict[str, list[dict]
     also equal its spec measure's own `corners` ("default" and "all" both
     count as "all") - bench_bound_corner_mismatch otherwise. Its `min`/`max`
     must equal the spec measure's own `bounds` - bench_bound_value_mismatch
-    otherwise (a looser bench passes a block that misses the spec).
+    otherwise (a looser bench passes a block that misses the spec). A
+    bound's optional `sensitivity` is not compared: it is no pass bound,
+    only bench_strength's kill threshold against the unmutated design.
 
     `bench_bounds` is {bench filename: [bounds sidecar entries, already
     simlib.load_bounds()-validated]} - built by the caller (this module

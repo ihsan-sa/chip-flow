@@ -235,6 +235,25 @@ def test_classify_property_failed_by_smtbmc():
     assert violation["severity"] == "error"
 
 
+def test_classify_property_induction_trace_is_not_a_counterexample():
+    # The uart run: basecase passed to depth 20, the induction step failed
+    # on p_start_ignored_while_busy (sby tags that property <failure> with
+    # trace_induct.vcd) and abc pdr proved it. An unreachable induction
+    # start state is bounded, not a counterexample.
+    verdict, violation = check_formal.classify_property(
+        "P", "REQ", CASE_FAILED, {"basecase": "pass", "induction": "FAIL"},
+        "PASS", 20)
+    assert verdict == "bounded"
+    assert violation["kind"] == "bounded_not_proven"
+    # The planted fault: the same <failure> with the basecase failed is a
+    # real counterexample and still fails the gate.
+    verdict, violation = check_formal.classify_property(
+        "P", "REQ", CASE_FAILED, {"basecase": "FAIL", "induction": None},
+        "PASS", 20)
+    assert verdict == "failed"
+    assert violation["kind"] == "property_failed"
+
+
 def test_classify_property_engine_disagreement():
     # smtbmc claims proven, but abc pdr found a counterexample it did not -
     # never trusted silently.
@@ -466,3 +485,141 @@ def test_resolve_labels_matches_leaf_and_refuses_ambiguity():
     ids, ambiguous = check_formal.resolve_labels(props, cases)
     assert ids == {"A": "A", "B": "dut.u_chk.B"}
     assert ambiguous == ["C"]
+
+
+# ------------------------------------------------ depth from the spec only
+# A depth nobody chose once let a cover needing ~1100 cycles come back "not
+# reached to depth 20" beside asserts "bounded to depth 20". The depth is
+# the design's to set (spec.yaml formal.depth); the gate never defaults it.
+
+SPEC_NO_DEPTH = SPEC.replace("formal:\n  depth: 12\n", "")
+
+
+def _spy_eda(tmp_path: Path) -> tuple[Path, Path]:
+    marker = tmp_path / "eda-called"
+    eda = tmp_path / "spy-eda.sh"
+    eda.write_text(f"#!/bin/sh\ntouch {marker}\necho 'DONE (PASS)'\nexit 0\n",
+                   encoding="utf-8")
+    eda.chmod(0o755)
+    return eda, marker
+
+
+def test_missing_formal_depth_is_refused_before_any_tool_runs(
+        tmp_path, capsys, monkeypatch):
+    ws = make_ws(tmp_path, RTL_OK)
+    (ws / "spec" / "spec.yaml").write_text(SPEC_NO_DEPTH, encoding="utf-8")
+    eda, marker = _spy_eda(tmp_path)
+    monkeypatch.setattr(check_formal, "EDA_BIN", eda)
+    code = check_formal.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 2, out
+    assert "formal.depth" in out["remediation"]
+    assert "at least the cycle length" in out["remediation"]
+    assert not marker.exists(), "sby/yosys ran on a depth nobody chose"
+
+
+@pytest.mark.parametrize("formal, needle", [
+    ({}, "no formal.depth"),
+    ({"depth": None}, "no formal.depth"),
+    ({"depth": 0}, "not a positive integer"),
+    ({"depth": -5}, "not a positive integer"),
+    ({"depth": "20"}, "not a positive integer"),
+    ({"depth": True}, "not a positive integer"),
+    ({"depth": 12.5}, "not a positive integer"),
+    ({"depth": 20, "cover_depth": 10}, "never shallower"),
+    ({"depth": 20, "cover_depth": 0}, "not a positive integer"),
+    ({"depth": 20, "timeout_s": 0}, "above 0"),
+    ({"depth": 20, "timeout_s": 1e9}, "at most"),
+    ({"depth": 20, "timeout_s": "long"}, "above 0"),
+])
+def test_formal_settings_refuses_bad_or_missing_depth(formal, needle):
+    from checklib import CheckError
+    with pytest.raises(CheckError, match=needle):
+        check_formal.formal_settings({"formal": formal})
+
+
+def test_formal_settings_refuses_a_non_mapping_formal_key():
+    from checklib import CheckError
+    with pytest.raises(CheckError, match="not a mapping"):
+        check_formal.formal_settings({"formal": 20})
+    with pytest.raises(CheckError, match="no formal.depth"):
+        check_formal.formal_settings({})
+
+
+def test_formal_settings_uses_the_spec_depth_and_scales_the_timeout():
+    s = check_formal.formal_settings({"formal": {"depth": 12}})
+    assert s["depth"] == s["cover_depth"] == 12
+    assert s["prove_timeout_s"] == s["cover_timeout_s"] == (
+        check_formal.TIMEOUT_BASE_S + check_formal.TIMEOUT_PER_STEP_S * 12)
+    deep = check_formal.formal_settings(
+        {"formal": {"depth": 40, "cover_depth": 1200}})
+    assert (deep["depth"], deep["cover_depth"]) == (40, 1200)
+    assert deep["cover_timeout_s"] > deep["prove_timeout_s"] > 180.0
+    huge = check_formal.formal_settings({"formal": {"depth": 10 ** 7}})
+    assert huge["prove_timeout_s"] == check_formal.TIMEOUT_MAX_S
+    fixed = check_formal.formal_settings(
+        {"formal": {"depth": 40, "cover_depth": 1200, "timeout_s": 900}})
+    assert fixed["prove_timeout_s"] == fixed["cover_timeout_s"] == 900.0
+
+
+def _fake_sby_run(monkeypatch, cov_failed: bool):
+    """Stub out every tool call so run() is exercised end to end without
+    sby: records each task's (depth, timeout) and hands back one ASSERT
+    that proves and one COVER that is (or is not) reached."""
+    seen: dict[str, tuple[int, float]] = {}
+    depths: dict[str, int] = {}
+    monkeypatch.setattr(check_formal, "pick_frontend",
+                        lambda *a: ("native", "stub", None))
+
+    def write_sby(path, sv, rtl, top, mode, engine, depth, *a):
+        depths[Path(path).stem] = depth
+    monkeypatch.setattr(check_formal, "write_sby", write_sby)
+
+    def run_sby(sby_dir, config, name, timeout_s):
+        seen[name] = (depths[name], timeout_s)
+        return ("returned pass for basecase\nreturned pass for induction\n"
+                "DONE (PASS)\n"), Path(sby_dir) / name
+    monkeypatch.setattr(check_formal, "run_sby", run_sby)
+
+    def parse_testcases(xml_path):
+        name = Path(xml_path).stem
+        return {"REQ_RESET": {"type": "ASSERT", "failed": False,
+                              "skipped": name == "cov"},
+                "COVER_MAX": {"type": "COVER",
+                              "failed": name == "cov" and cov_failed,
+                              "skipped": name != "cov"}}
+    monkeypatch.setattr(check_formal, "parse_testcases", parse_testcases)
+    return seen
+
+
+def test_explicit_depth_reaches_every_sby_task(tmp_path, capsys, monkeypatch):
+    ws = make_ws(tmp_path, RTL_OK)
+    (ws / "spec" / "spec.yaml").write_text(
+        SPEC.replace("depth: 12\n", "depth: 12\n  cover_depth: 300\n"),
+        encoding="utf-8")
+    seen = _fake_sby_run(monkeypatch, cov_failed=False)
+    code = check_formal.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0, out
+    assert (out["depth"], out["cover_depth"]) == (12, 300)
+    assert seen["smt"][0] == seen["pdr"][0] == 12
+    assert seen["cov"][0] == 300
+    assert seen["cov"][1] > seen["smt"][1]
+
+
+def test_unreached_cover_names_the_depth_and_the_key_to_raise(
+        tmp_path, capsys, monkeypatch):
+    ws = make_ws(tmp_path, RTL_OK)
+    _fake_sby_run(monkeypatch, cov_failed=True)
+    code = check_formal.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 1, out
+    v = [v for v in out["violations"] if v["kind"] == "cover_not_reached"]
+    assert len(v) == 1, out
+    assert v[0]["severity"] == "error"
+    assert "depth 12 (spec.yaml formal.depth)" in v[0]["msg"]
+    # The key to raise is always cover_depth: raising the prove depth to a
+    # long cover's reach makes smtbmc's k-induction infeasible.
+    assert "raise formal.cover_depth" in v[0]["msg"]
+    assert "raise formal.depth" not in v[0]["msg"]
+    assert v[0]["depth"] == 12

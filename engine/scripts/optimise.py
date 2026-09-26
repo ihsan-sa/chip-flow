@@ -15,8 +15,8 @@ picks the half from the target's suffix:
     optimise.py trial --workspace DIR --note "one line" [--out FILE]
     optimise.py finish --workspace DIR [--out FILE]
     optimise.py start --workspace DIR --target sizing/sizing.yaml
-                [--objective margin|power] [--out FILE]
-    optimise.py numeric --workspace DIR [--trials N] [--wall MIN]
+                [--objective margin] [--out FILE]
+    optimise.py numeric --workspace DIR [--timeout SEC]
                 [--popsize N] [--maxiter N] [--seed N] [--out FILE]
 
 RTL LOOP. The workspace must be a git repo with a clean tree, and the target
@@ -50,7 +50,10 @@ EVALUATOR (section 4: "freezes the evaluator... hashes it"): `start` copies
 tb/ (every bench + its .bounds.json sidecar) and the target file's OWN
 starting content into `optimise/evaluator/`, hashes that directory
 (statelib's dir_text norm - the same one invalidation.yaml uses for tb/) and
-records {target, objective, evaluator_sha} in `optimise/meta.json`.
+records {target, objective, evaluator_sha} in `optimise/meta.json` and in
+state.optimise (trials 0, best null) when the workspace has a state.json;
+`numeric` updates state.optimise with its trial count and best trial, so a
+session resuming from state.json alone sees the search ran.
 `numeric` re-hashes tb/ + the target's CURRENT content against that record
 and refuses (CheckError, exit 2 - never silently proceeds) on a mismatch,
 same as section 4's own per-trial check ("re-hashes the evaluator and
@@ -270,6 +273,7 @@ def run_start(argv=None):
     tsv_path.parent.mkdir(parents=True, exist_ok=True)
     with open(tsv_path, "w", newline="", encoding="utf-8") as f:
         csv.writer(f, delimiter="\t").writerow(TSV_FIELDS)
+    _record_state(ws, {"trials_run": 0, "evaluator_sha": ev_sha})
 
     payload = {"script": SCRIPT, "status": "pass", "meta": meta,
               "sizing_params": list(sizing)}
@@ -341,7 +345,7 @@ def run_numeric(argv=None):
     tsv_file = open(tsv_path, "a", newline="", encoding="utf-8")
     tsv_writer = csv.DictWriter(tsv_file, fieldnames=TSV_FIELDS, delimiter="\t")
     trial_counter = {"n": 0}
-    best = {"score": None, "sizing": None}
+    best = {"score": None, "sizing": None, "trial": None}
 
     def sizing_from_x(x) -> dict:
         return {n: {"value": float(v), "min": start_sizing[n]["min"],
@@ -357,7 +361,7 @@ def run_numeric(argv=None):
         n = trial_counter["n"]
         kept = best["score"] is None or score > best["score"]
         if kept:
-            best["score"], best["sizing"] = score, sizing
+            best["score"], best["sizing"], best["trial"] = score, sizing, n
         write_row(n, sizing, score, kept, note)
         trial_counter["n"] += 1
 
@@ -413,6 +417,9 @@ def run_numeric(argv=None):
         trial_counter["n"] += 1
     finally:
         tsv_file.close()
+    _record_state(ws, {"trials_run": trial_counter["n"],
+                       "evaluator_sha": meta["evaluator_sha"],
+                       "best": {"trial": best["trial"], "score": best["score"]}})
 
     # status stays keyed on the tt-only evaluator alone (design.md 4: "an
     # evaluator that is the spec bench at typical" - and the M8 done
@@ -768,6 +775,9 @@ def _eval_workspace(ws: Path, profile: dict) -> Path:
     formal = dict(spec.get("formal") or {})
     formal["depth"] = min(int(formal.get("depth", FAST_FORMAL_DEPTH)),
                           int(profile["fast_formal_depth"]))
+    # the fast screen's covers run at the capped depth too, never a deep
+    # formal.cover_depth meant for the real formal gate
+    formal.pop("cover_depth", None)
     spec["formal"] = formal
     (ew / "spec" / "spec.yaml").write_text(yaml.safe_dump(spec, sort_keys=False),
                                            encoding="utf-8")

@@ -91,7 +91,8 @@ verbs:
       - agent: property-writer
         tier: opus/high
         why: "formal/* - procedural assert/cover, never bind, never SVA
-              `assert property`. No web tools."
+              `assert property` - plus spec.yaml's formal.depth (the
+              formal gate has no default depth). No web tools."
       - do: "scripts/state.py holdout --workspace {ws} --written-by tb-writer"
         why: "pin state.holdout's hash now, before rtl-writer ever runs -
               a later holdout/ change becomes visible against this mark"

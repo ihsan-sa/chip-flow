@@ -375,3 +375,34 @@ def test_relative_workspace_reaches_the_check_absolute(tmp_path, capsys,
     code = gate.main(["--gate", "lint", "--workspace", "ws",
                       "--gates", str(gates_yaml), "--checks-dir", str(checks_dir)])
     assert code == 0, capsys.readouterr().out
+
+
+def test_commit_carries_this_runs_report_and_leaves_it_clean(tmp_path, capsys):
+    """`--out <ws>/reports/gate-<g>.json --commit`: the gate commit must hold
+    the report of the run that passed, and leave no modified report behind
+    (the out file used to be written after the commit, so the commit held
+    the previous run's report and the new one sat dirty in the tree)."""
+    import subprocess
+
+    def git(*a):
+        return subprocess.run(["git", *a], cwd=str(tmp_path), check=True,
+                              capture_output=True, text=True).stdout
+
+    git("init", "-q")
+    git("config", "user.email", "t@example.invalid")
+    git("config", "user.name", "t")
+    ws = make_ws(tmp_path)
+    checks_dir = make_checks_dir(tmp_path)
+    gates_yaml = make_gates_yaml(tmp_path)
+    out_path = ws / "reports" / "gate-lint.json"
+    for n in (1, 2):
+        code = gate.main(["--gate", "lint", "--workspace", str(ws),
+                          "--gates", str(gates_yaml),
+                          "--checks-dir", str(checks_dir),
+                          "--out", str(out_path),
+                          "--commit", f"lint pass {n}"])
+        assert code == 0
+        assert git("status", "--porcelain", "--", "ws") == ""
+        committed = json.loads(git("show", "HEAD:ws/reports/gate-lint.json"))
+        assert committed["status"] == "pass"
+        assert committed["record_result"]["attempts"] == n

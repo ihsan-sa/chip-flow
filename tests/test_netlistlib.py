@@ -225,3 +225,40 @@ def test_subckt_pins_follows_continuation_lines():
 def test_known_models_includes_standard_cells():
     models = netlistlib.known_models(PDK_ROOT)
     assert "gf180mcu_fd_sc_mcu7t5v0__buf_20" in models
+
+
+def test_size_doubled_covers_a_pdk_resistor_sized_by_r_width():
+    # gf180mcu_fd_pr resistors (rm1, ppolyf_u, ...) take r_width/r_length,
+    # not w/l: a resistor leg must still get its size_doubled mutant, or
+    # bench_strength scores a ratio-sized ladder on disconnects alone.
+    text = "xrmsb bmsb vout rm1 r_length={r_length} r_width=1e-6\n"
+    mutants = [m for m in netlistlib.device_mutants(text, ["xrmsb"])
+               if m["kind"] == "size_doubled"]
+    assert [m["id"] for m in mutants] == ["xrmsb_size_doubled_r_width"]
+    out = mutants[0]["apply"](text)
+    assert out.startswith("xrmsb bmsb vout rm1 r_length={r_length} r_width=2e-06")
+
+
+def test_size_doubled_falls_back_to_r_length_without_r_width():
+    text = "xr1 a b rm1 r_length={r_length}\n"
+    m = next(m for m in netlistlib.device_mutants(text, ["xr1"])
+             if m["kind"] == "size_doubled")
+    assert m["id"] == "xr1_size_doubled_r_length"
+    assert "r_length={(r_length)*2}" in m["apply"](text)
+
+
+def test_connection_removed_floats_a_three_terminal_resistors_first_terminal():
+    # ppolyf_u is `r0 r1 body`: the body carries only parasitics, so
+    # floating it changes nothing a bench can see (ring_osc_div's five
+    # survivors, deltas ~0). A resistor's first terminal is floated instead,
+    # the same stronger-mutant rule as a MOSFET's bulk tied to its source.
+    text = ("xr1 s1 vss vss ppolyf_u r_width={r_width} r_length={r_length}\n"
+            "xr2 s2 vss vss ppolyf_u r_width={r_width} r_length={r_length}\n")
+    m = next(m for m in netlistlib.device_mutants(text, ["xr1"])
+             if m["kind"] == "connection_removed")
+    assert m["id"] == "xr1_connection_removed"
+    assert m["describe"] == ("xr1: first terminal (a resistor's body carries "
+                             "only parasitics) disconnected")
+    out = m["apply"](text)
+    assert out.splitlines()[0].startswith("xr1 __floating_xr1__ vss vss ppolyf_u")
+    assert out.splitlines()[1] == text.splitlines()[1]

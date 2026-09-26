@@ -26,12 +26,26 @@ back to native. Under slang a property's sby id is its hierarchical name
 else the one id whose last dotted component it is (two is refused as
 ambiguous). The report carries `frontend` and `frontend_why`.
 
-spec.yaml names which wrapper module to prep (`formal: {top, depth}`) and which
-requirements that wrapper must prove (`check: formal|both` requirements
-each carry a `property:` label matching an assert's own Verilog statement
-label in formal/*.sv).
+spec.yaml names which wrapper module to prep (`formal: {top}`, default
+`<top>_formal`), how deep to look, and which requirements that wrapper must
+prove (`check: formal|both` requirements each carry a `property:` label
+matching an assert's own Verilog statement label in formal/*.sv).
 
-Three sby TASKS, same model, over the same depth:
+Depth comes from the design, never from this gate: `formal: {depth: N}` is
+required, and a missing or non-positive one is refused (formal_settings).
+`depth` is the PROVE depth only - the k of smt's k-induction and pdr's run -
+so it should be what the asserts need for induction to close, which is
+usually small: k-induction proves unboundedly, it does not have to walk a
+long window. A deep `depth` makes smt's basecase infeasible (each step
+costs seconds, so a ~1100-step basecase never finishes within the gate).
+The long reach - a measurement window, a full frame, a counter wrap - goes
+in `formal: {cover_depth: M}` (optional, M >= N), which only the cover task
+uses. A shallow `depth` is never a loophole: an assert whose induction does
+not close at it is still reported bounded, never proven.
+`formal: {timeout_s: T}` (optional, at most TIMEOUT_MAX_S) sets every sby
+task's timeout, which otherwise scales with that task's depth.
+
+Three sby TASKS, same model; smt and pdr at `depth`, cov at `cover_depth`:
   smt  mode prove, engine smtbmc yices  - k-induction: a PASSING basecase
        AND a passing induction step together are a full, unbounded proof.
        Per-property basecase/induction status comes from smtbmc's own
@@ -50,22 +64,24 @@ Three sby TASKS, same model, over the same depth:
        empirically: an intentionally-unreachable cover comes back
        DONE(FAIL) with the specific COVER testcase failing, not the
        ASSERT ones, which the cover task never evaluates - they're
-       <skipped> there instead).
+       <skipped> there instead). An unreached cover is an error
+       cover_not_reached naming the depth and telling the fixer to raise
+       formal.cover_depth, never the prove depth.
 
 Per-property (ASSERT-kind) verdict, applied per `property:` label:
   proven   smt task's own testcase has no <failure> AND smt's basecase AND
            induction both report "pass" AND the pdr task's own DONE is PASS.
   bounded  smt's basecase reports "pass" (no counterexample within `depth`
            steps) but induction did not (an inconclusive/unproven induction
-           step, not a counterexample - a real counterexample at either
-           step always surfaces as this property's own XML <failure>,
-           caught by `failed` below first). Recorded with `depth` - "the
+           step, not a counterexample - sby also puts a <failure> on the
+           property whose induction step failed, with trace_induct.vcd,
+           and that is still bounded, never failed). Recorded with `depth` - "the
            gate never reports it as proven" (docs/design.md section 2) -
            a severity "info" finding, visible but never counted toward the
            gate's fail_severities: bounded to the spec's own asked depth is
            this gate's OWN passing outcome, just never claimed as a proof.
   failed   this property's own testcase carries a <failure> in the smt
-           task, OR the pdr task's overall DONE is FAIL while smt did not
+           task and smt's basecase did not pass, OR the pdr task's overall DONE is FAIL while smt did not
            already fail it (an engine disagreement - PDR is a sound method
            for a safety property, so a PDR counterexample the k-induction
            run did not also find is treated as a real failure, not
@@ -78,7 +94,8 @@ formal gate with nothing to prove is not vacuously clean, it never ran);
 a `property:` label spec.yaml names is not found as an ASSERT testcase in
 sby's own model (the id sby echoes back, not a text search - a rename, or
 under slang an immediate assert outside a named block, leaves the id
-missing); a label that matches two ids; slang needed but unavailable or
+missing); a label that matches two ids; formal.depth missing or not a
+positive int, or cover_depth/timeout_s malformed (see Depth above); slang needed but unavailable or
 unable to read the design (see Frontend above); any sby task fails to reach a DONE line at all (a crashed
 launcher, a solver missing, a syntax error before the model even builds).
 """
@@ -102,8 +119,13 @@ from checklib import CheckError  # noqa: E402
 SCRIPT = "check_formal"
 EDA_BIN = REPO / "bin" / "eda"
 SBY_SUBDIR = "log/formal"
-DEFAULT_DEPTH = 20
-TIMEOUT_S = 180.0
+# No default depth: a depth nobody chose once let a cover that needed ~1100
+# cycles come back "not reached to depth 20" beside asserts "bounded to
+# depth 20". spec.yaml's formal.depth is required (formal_settings).
+PROBE_TIMEOUT_S = 180.0      # the yosys frontend probe - depth-independent
+TIMEOUT_BASE_S = 180.0       # sby: base + per-step * depth, unless
+TIMEOUT_PER_STEP_S = 1.0     # formal.timeout_s says otherwise
+TIMEOUT_MAX_S = 7200.0       # hard ceiling on one sby task either way
 
 DONE_RE = re.compile(r"DONE \((PASS|FAIL|ERROR|UNKNOWN)\b")
 TASK_STATUS_RE = re.compile(
@@ -146,6 +168,76 @@ def formal_requirements(spec: dict) -> dict[str, str]:
                              "formal/*.sv")
         out[prop] = rid
     return out
+
+
+DEPTH_REMEDIATION = (
+    "set spec.yaml `formal: {depth: N}` to the induction depth the asserts "
+    "need (usually small - a deep depth makes smtbmc's k-induction "
+    "infeasible), and put a long reach in `formal: {cover_depth: M}`, at "
+    "least the cycle length of the longest sequence a cover needs (a "
+    "measurement window, a full frame, a counter wrap) plus the cycles to "
+    "get out of reset")
+
+
+def _positive_int(value, key: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise CheckError(f"spec.yaml formal.{key} is {value!r}, not a "
+                         f"positive integer - {DEPTH_REMEDIATION}")
+    return value
+
+
+def formal_settings(spec: dict) -> dict:
+    """The depths and sby timeouts this run uses, all from spec.yaml's own
+    `formal:` key - never a default depth nobody chose. Pure, so the rules
+    are testable without sby.
+
+      depth        required, positive int: the prove depth (smt, pdr) -
+                   the induction depth the asserts need, kept small.
+      cover_depth  optional, positive int >= depth (deeper is stricter,
+                   never looser): the cover task's depth, so a long cover
+                   sequence need not make every prove run that deep.
+                   Defaults to depth.
+      timeout_s    optional, positive number <= TIMEOUT_MAX_S: every sby
+                   task's timeout. Default per task: TIMEOUT_BASE_S +
+                   TIMEOUT_PER_STEP_S * that task's depth, capped at
+                   TIMEOUT_MAX_S.
+
+    Refuses (CheckError) a missing or malformed formal.depth."""
+    cfg = spec.get("formal")
+    if cfg is None:
+        cfg = {}
+    if not isinstance(cfg, dict):
+        raise CheckError(f"spec.yaml formal is {cfg!r}, not a mapping - "
+                         + DEPTH_REMEDIATION)
+    if cfg.get("depth") is None:
+        raise CheckError("spec.yaml has no formal.depth - the formal gate "
+                         "never picks a depth for you; " + DEPTH_REMEDIATION)
+    depth = _positive_int(cfg["depth"], "depth")
+    cover_depth = depth
+    if cfg.get("cover_depth") is not None:
+        cover_depth = _positive_int(cfg["cover_depth"], "cover_depth")
+        if cover_depth < depth:
+            raise CheckError(
+                f"spec.yaml formal.cover_depth ({cover_depth}) is below "
+                f"formal.depth ({depth}) - a cover depth may only be deeper "
+                "than the prove depth, never shallower")
+
+    def scaled(d: int) -> float:
+        return min(TIMEOUT_MAX_S, TIMEOUT_BASE_S + TIMEOUT_PER_STEP_S * d)
+
+    timeout = cfg.get("timeout_s")
+    if timeout is not None:
+        if (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
+                or not 0 < timeout <= TIMEOUT_MAX_S):
+            raise CheckError(f"spec.yaml formal.timeout_s is {timeout!r} - "
+                             "it must be a number of seconds above 0 and at "
+                             f"most {TIMEOUT_MAX_S:g}")
+        prove_timeout = cover_timeout = float(timeout)
+    else:
+        prove_timeout, cover_timeout = scaled(depth), scaled(cover_depth)
+    return {"depth": depth, "cover_depth": cover_depth,
+            "prove_timeout_s": prove_timeout,
+            "cover_timeout_s": cover_timeout}
 
 
 def yosys_reads(frontend: str, sv_files: list[Path], rtl_files: list[Path],
@@ -222,7 +314,7 @@ def probe(frontend: str, sv_files: list[Path], rtl_files: list[Path],
         proc = subprocess.run([str(EDA_BIN), "yosys", "-p", script],
                               capture_output=True, text=True,
                               encoding="utf-8", errors="replace",
-                              timeout=TIMEOUT_S)
+                              timeout=PROBE_TIMEOUT_S)
     except subprocess.TimeoutExpired as exc:
         raise CheckError(f"yosys ({frontend} probe) timed out: {exc}") from exc
     return (proc.stdout or "") + (proc.stderr or "")
@@ -278,7 +370,8 @@ def pick_frontend(sv_files: list[Path], rtl_files: list[Path],
     return "slang", why, slang_so
 
 
-def run_sby(sby_dir: Path, config: Path, workdir_name: str) -> tuple[str, Path]:
+def run_sby(sby_dir: Path, config: Path, workdir_name: str,
+            timeout_s: float = TIMEOUT_BASE_S) -> tuple[str, Path]:
     """Run one sby task, -f'd to a fresh workdir under sby_dir. Returns
     (stdout+stderr text, the task's own workdir) - never raises on a
     property FAIL (that is a normal, parseable outcome via the workdir's
@@ -298,10 +391,12 @@ def run_sby(sby_dir: Path, config: Path, workdir_name: str) -> tuple[str, Path]:
         proc = subprocess.run(
             [str(EDA_BIN), "sby", "-f", str(config), "-d", str(workdir)],
             cwd=str(sby_dir), capture_output=True, text=True,
-            encoding="utf-8", errors="replace", timeout=TIMEOUT_S)
+            encoding="utf-8", errors="replace", timeout=timeout_s)
     except subprocess.TimeoutExpired as exc:
         raise CheckError(f"sby ({workdir_name}) timed out after "
-                         f"{TIMEOUT_S:g}s: {exc}") from exc
+                         f"{timeout_s:g}s - raise spec.yaml formal.timeout_s "
+                         f"(at most {TIMEOUT_MAX_S:g}) or shorten the "
+                         f"sequences the properties need: {exc}") from exc
     output = (proc.stdout or "") + (proc.stderr or "")
     if not DONE_RE.search(output):
         raise CheckError(
@@ -339,7 +434,10 @@ def classify_property(label: str, rid: str, smt_case: dict,
     real solver run - see this module's own header for what each rule
     means; CheckError here is the "sby genuinely never reached a verdict at
     all" case, never silently folded into any of the three outcomes."""
-    if smt_case["failed"]:
+    # sby marks the property <failure> for an induction-step trace too
+    # (trace_induct.vcd): an arbitrary, possibly unreachable start state,
+    # not a counterexample. Only a basecase that did not pass is one.
+    if smt_case["failed"] and smt_sub["basecase"] != "pass":
         return "failed", checklib.violation(
             "formal", "error", None, None, "property_failed", [rid],
             f"requirement {rid} (property {label}): sby found a "
@@ -366,7 +464,8 @@ def classify_property(label: str, rid: str, smt_case: dict,
         return "bounded", checklib.violation(
             "formal", "info", None, None, "bounded_not_proven", [rid],
             f"requirement {rid} (property {label}): no counterexample "
-            f"found to depth {depth}, but induction did not converge - "
+            f"found to depth {depth} (spec.yaml formal.depth), but "
+            "induction did not converge - "
             "recorded as bounded, never as proven", "sby-smtbmc", depth=depth)
     raise CheckError(
         f"sby (smt task) reached no verdict for property {label} "
@@ -449,9 +548,9 @@ def run(argv=None):
                          "for the formal gate to prove (an empty property "
                          "set is a refusal, never a pass)")
 
-    formal_cfg = spec.get("formal") or {}
-    formal_top = formal_cfg.get("top") or f"{top}_formal"
-    depth = int(formal_cfg.get("depth", DEFAULT_DEPTH))
+    settings = formal_settings(spec)
+    depth, cover_depth = settings["depth"], settings["cover_depth"]
+    formal_top = (spec.get("formal") or {}).get("top") or f"{top}_formal"
 
     sv_files = collect_sources(ws, "formal", (".sv", ".v"))
     rtl_files = collect_sources(ws, "rtl")
@@ -474,9 +573,12 @@ def run(argv=None):
     testcases: dict[str, dict[str, dict]] = {}
     for name, (mode, engine) in tasks.items():
         config = sby_dir / f"{name}.sby"
-        write_sby(config, sv_files, rtl_files, formal_top, mode, engine, depth,
-                  frontend, slang_so)
-        output, workdir = run_sby(sby_dir, config, name)
+        cover = mode == "cover"
+        write_sby(config, sv_files, rtl_files, formal_top, mode, engine,
+                  cover_depth if cover else depth, frontend, slang_so)
+        output, workdir = run_sby(
+            sby_dir, config, name,
+            settings["cover_timeout_s" if cover else "prove_timeout_s"])
         # DONE (ERROR) still matches DONE_RE - run_sby's own check only
         # catches a launcher that never reached DONE at all - but a task
         # that DID reach DONE and reached it as ERROR (a solver crash, an
@@ -554,6 +656,8 @@ def run(argv=None):
             violations.append(violation)
 
     cov_cases = testcases["cov"]
+    cover_key = ("cover_depth" if (spec.get("formal") or {}).get(
+        "cover_depth") is not None else "depth")
     covers = {pid: c for pid, c in testcases["smt"].items()
               if c["type"] == "COVER"}
     for pid in sorted(covers):
@@ -564,12 +668,18 @@ def run(argv=None):
         if cov_case["failed"]:
             violations.append(checklib.violation(
                 "formal", "error", None, None, "cover_not_reached", [],
-                f"cover point {pid} was not reached to depth {depth}",
-                "sby-smtbmc"))
+                f"cover point {pid} was not reached to depth {cover_depth} "
+                f"(spec.yaml formal.{cover_key}) - if the state is "
+                "reachable, raise formal.cover_depth (add it if absent) "
+                "to at least the cycles its sequence needs; leave "
+                "formal.depth at what the asserts need for induction - "
+                "a deep prove depth makes k-induction infeasible",
+                "sby-smtbmc",
+                depth=cover_depth))
 
     payload = checklib.report(
         SCRIPT, ws / "rtl", violations, top=top, formal_top=formal_top,
-        depth=depth, frontend=frontend, frontend_why=frontend_why,
+        depth=depth, cover_depth=cover_depth, frontend=frontend, frontend_why=frontend_why,
         proven=sorted(proven), bounded=sorted(bounded),
         failed=sorted(failed), smt_status=smt_status, pdr_status=pdr_status,
         cover_points=sorted(covers))

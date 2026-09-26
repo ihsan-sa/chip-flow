@@ -231,6 +231,17 @@ def _bench(corners):
     return {"osc_tb.cir": [b]}
 
 
+def test_a_sensitivity_is_no_pass_bound_and_changes_no_equality_rule():
+    # bench_strength's kill threshold rides on the bound but is not one:
+    # spec equality still holds on min/max, and still fails a looser bound
+    b = {"measure": "fosc", "min": 9e6, "max": 11e6, "sensitivity": 0.03}
+    assert speclib.lint_measures_vs_bench_bounds(
+        _spec_with_corners(None), {"osc_tb.cir": [b]}) == []
+    out = speclib.lint_measures_vs_bench_bounds(
+        _spec_with_corners(None), {"osc_tb.cir": [{**b, "min": 8e6}]})
+    assert [v["kind"] for v in out] == ["bench_bound_value_mismatch"]
+
+
 def test_bound_corner_scope_matching_spec_is_clean():
     assert speclib.lint_measures_vs_bench_bounds(
         _spec_with_corners(["tt"]), _bench(["tt"])) == []
