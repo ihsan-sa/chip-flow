@@ -1,0 +1,15 @@
+trial	timestamp	target_sha	lint	sim	formal	synth	ports	must_keep	timing	area	slack	power	score	kept	note
+0	1790397979.965	4071d5afece28f4d	pass	pass	pass	pass	pass	pass	pass	3197.7792	16.5991	0.0023301127	-3197.7792	True	baseline
+1	1790397995.322	87ff9fccee61cbdf	pass	pass	pass	pass	pass	pass	pass	2622.0096	16.8357	0.001838023	-2622.0096	True	drop bits_left: end the frame when only the stop bit is left in shift
+2	1790398009.793	88c7f5db58992836	pass	pass	pass	pass	pass	pass	pass	2472.4224	16.7175	0.0016152415	-2472.4224	True	clk_cnt needs no reset: start clears it before it is read
+3	1790398024.925	0f060231d2f5ebfd	pass	pass	pass	pass	pass	pass	pass	2506.2912	16.4733	0.002141122	-2506.2912	False	shift needs no reset: it is loaded on start and only read while busy
+4	1790398039.847	28ef60cfa82533af	pass	pass	pass	pass	pass	pass	pass	2447.0208	16.3486	0.0016823603	-2447.0208	True	drive tx from shift[0] combinationally while busy: drops the tx flop and its mux
+5	1790398054.776	2a4d89f943e6eac6	pass	pass	pass	pass	pass	pass	pass	2345.4144	16.3139	0.0013676782	-2345.4144	True	derive busy from shift != 0: shift empties exactly when the stop bit's hold ends, so the busy flop goes
+6	1790398069.289	e94b9f636d133479	pass	pass	pass	pass	pass	pass	pass	2345.4144	16.3139	0.0013686495	-2345.4144	False	clk_cnt wraps 3->0 on its own: one unconditional increment instead of a clear-or-increment mux
+7	1790398075.273	cef7aa56ee07a306	pass	fail	skipped	skipped	skipped	skipped	skipped					False	rejected (sim); busy from shift[10:1] only: the stop bit is 1 anyway, so one fewer OR input
+8	1790398091.056	cf7fb0998089ee55	pass	pass	pass	pass	pass	pass	pass	2252.2752	16.4347	0.0016153695	-2252.2752	True	fold the idle start check into one condition: else if (!busy && start)
+9	1790398106.379	38d3a19a794cf332	pass	pass	pass	pass	pass	pass	pass	2277.6768	16.8853	0.0014039247	-2277.6768	False	no busy guard on the bit-period branch: idle shift is 0, so shifting it and counting are harmless
+10	1790398120.845	29368ff6368a1776	pass	pass	pass	pass	pass	pass	pass	2249.4528	16.4811	0.0013902687	-2249.4528	True	clk_cnt wraps 3->0 by itself: increment unconditionally while busy, shift on 3
+11	1790398121.681	438d2e23e9be3756	fail	skipped	skipped	skipped	skipped	skipped	skipped					False	rejected (lint); clk_cnt == 3 as &clk_cnt; this trial also edits tb/, which the loop must revert [reverted outside target: tb/test_uart_tx.py]
+12	1790398136.355	d4332e54e61dcac0	pass	pass	pass	pass	pass	pass	pass	2249.4528	16.4811	0.0013902584	-2249.4528	False	clk_cnt == 3 as &clk_cnt, and drop the now-unused BIT_TICKS
+10	1790398216.639	29368ff6368a1776												True	full gates on trial 10: holdout=pass formal=pass mutate=pass
