@@ -17,9 +17,13 @@ What the document says, and where each part comes from:
     interface signals, and state.json's `decisions` (what, why, phase);
   - how it was verified: one row per gate gates.yaml owes the skill
     (attest.applicable_gates), numbers read from the gate's recorded result
-    in state.json, and from reports/gate-<g>.json only when that report
-    agrees with the recorded result (same status, every recorded fact equal)
-    - a report left by a later run is never read as the recorded one. A gate
+    in state.json, and the fuller detail from reports/recorded/gate-<g>.json
+    (gate.py writes it with every recorded run) while its recorded_ts is the
+    gate's last ts; for a run recorded before that copy existed, from
+    reports/gate-<g>.json only when that report agrees with the recorded
+    result (same status, every recorded fact equal, written 0-120 s after
+    the recorded ts) - a report left by another run is never read as the
+    recorded one. A gate
     with no recorded result is a row that says "not run", never left out;
     an msde block adds a section for each nested side;
   - PPA: synth area, timing slack per corner, analog measures against their
