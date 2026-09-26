@@ -198,10 +198,11 @@ def device_mutants(netlist_text: str, device_refs: list[str],
         dev = devices.get(ref)
         if dev is not None:
             model = dev["model"]
-            if "w" in dev["params"]:
-                mutants.append(_size_mutant(ref, dev, "w"))
-            if "l" in dev["params"] and "w" not in dev["params"]:
-                mutants.append(_size_mutant(ref, dev, "l"))
+            # a MOSFET's w/l, or a gf180mcu_fd_pr resistor's r_width/r_length
+            w_key = next((k for k in ("w", "r_width") if k in dev["params"]), None)
+            l_key = next((k for k in ("l", "r_length") if k in dev["params"]), None)
+            if w_key or l_key:
+                mutants.append(_size_mutant(ref, dev, w_key or l_key))
             if len(dev["nodes"]) >= 2:
                 mutants.append(_disconnect_mutant(ref, dev))
             flip = _flip_target(model)

@@ -225,3 +225,23 @@ def test_subckt_pins_follows_continuation_lines():
 def test_known_models_includes_standard_cells():
     models = netlistlib.known_models(PDK_ROOT)
     assert "gf180mcu_fd_sc_mcu7t5v0__buf_20" in models
+
+
+def test_size_doubled_covers_a_pdk_resistor_sized_by_r_width():
+    # gf180mcu_fd_pr resistors (rm1, ppolyf_u, ...) take r_width/r_length,
+    # not w/l: a resistor leg must still get its size_doubled mutant, or
+    # bench_strength scores a ratio-sized ladder on disconnects alone.
+    text = "xrmsb bmsb vout rm1 r_length={r_length} r_width=1e-6\n"
+    mutants = [m for m in netlistlib.device_mutants(text, ["xrmsb"])
+               if m["kind"] == "size_doubled"]
+    assert [m["id"] for m in mutants] == ["xrmsb_size_doubled_r_width"]
+    out = mutants[0]["apply"](text)
+    assert out.startswith("xrmsb bmsb vout rm1 r_length={r_length} r_width=2e-06")
+
+
+def test_size_doubled_falls_back_to_r_length_without_r_width():
+    text = "xr1 a b rm1 r_length={r_length}\n"
+    m = next(m for m in netlistlib.device_mutants(text, ["xr1"])
+             if m["kind"] == "size_doubled")
+    assert m["id"] == "xr1_size_doubled_r_length"
+    assert "r_length={(r_length)*2}" in m["apply"](text)
