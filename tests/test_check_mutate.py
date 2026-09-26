@@ -396,6 +396,77 @@ def test_output_difference_from_reset_is_not_proven(tmp_path):
     assert "base case" in why and not (tmp_path / "m" / "pdr").exists(), why
 
 
+# ---- two clocks at the top, one inside the mutated module --------------------
+# sub is EQ_RTL on its own clock; the top adds a second clock domain, so the
+# whole-top proof refuses every mutant on the clock model. Scoped to sub
+# alone, the bit-0 mutant is proven (as in test_equivalent_mutant_is_proven)
+# and the bit-1 one, a real change, is not.
+TWO_CLK_RTL = """\
+module sub (input wire clk, input wire [3:0] a, output reg y);
+  always @(posedge clk) y <= (a == 4'd5);
+endmodule
+module top (input wire clk_a, input wire clk_b, input wire [3:0] a,
+            input wire d, output wire y, output reg q);
+  sub u_sub (.clk(clk_a), .a(a), .y(y));
+  always @(posedge clk_b) q <= d;
+endmodule
+"""
+
+
+def make_two_clock_il(tmp_path: Path) -> tuple[Path, str]:
+    import re
+    import subprocess
+    (tmp_path / "two.v").write_text(TWO_CLK_RTL, encoding="utf-8")
+    il = tmp_path / "two.il"
+    subprocess.run([str(check_mutate.EDA_BIN), "yosys", "-q", "-p",
+                    f"read_verilog -sv {tmp_path / 'two.v'}; hierarchy -top "
+                    f"top; proc; write_rtlil {il}"], check=True)
+    return il, re.search(r"cell \$eq (\S+)", il.read_text()).group(1)
+
+
+@pytest.mark.slow
+def test_two_clock_top_equivalent_mutant_is_proven_at_its_module(tmp_path):
+    il, eq = make_two_clock_il(tmp_path)
+    mutation = f"mutate -mode const1 -module sub -cell {eq} -port B -portbit 0"
+    whole, why = check_mutate.prove_whole(il, mutation, tmp_path / "w")
+    assert not whole and why == check_mutate.CLOCK_REFUSED, why
+    proven, why = check_mutate.prove_equivalent(il, mutation, tmp_path / "m")
+    assert proven, why
+    assert why == (check_mutate.PROVEN + "signal induction"
+                   + check_mutate.MODULE_SCOPE.format("sub")), why
+
+
+@pytest.mark.slow
+def test_two_clock_top_real_difference_is_not_proven_at_its_module(tmp_path):
+    il, eq = make_two_clock_il(tmp_path)
+    proven, why = check_mutate.prove_equivalent(
+        il, f"mutate -mode const1 -module sub -cell {eq} -port B -portbit 1",
+        tmp_path / "m")
+    assert not proven, why
+    assert "module sub alone" in why and "base case" in why, why
+
+
+def test_mutant_in_the_top_itself_gets_no_module_retry(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_whole(design_il, mutation, work, timeout=0, pdr_timeout=0,
+                   top="-auto-top"):
+        calls.append(top)
+        return False, check_mutate.CLOCK_REFUSED
+
+    il = tmp_path / "d.il"
+    il.write_text("attribute \\top 1\nmodule \\top\nend\n", encoding="utf-8")
+    monkeypatch.setattr(check_mutate, "prove_whole", fake_whole)
+    monkeypatch.setattr(check_mutate, "clock_refusal",
+                        lambda work: check_mutate.CLOCK_REFUSED)
+    proven, _ = check_mutate.prove_equivalent(
+        il, "mutate -mode inv -module top -cell x -port A", tmp_path / "m")
+    assert not proven and calls == ["-auto-top"]
+    proven, why = check_mutate.prove_equivalent(
+        il, "mutate -mode inv -module sub -cell x -port A", tmp_path / "n")
+    assert not proven and calls[1:] == ["-auto-top", "-top sub"]
+    assert "module sub alone" in why
+
 def test_pdr_gets_thirty_minutes_by_default():
     # gate.py and jobs.py call run(["--workspace", ws]) with no options,
     # so this default is what a jobs.py-launched mutate gate gets.

@@ -147,9 +147,14 @@ SIDECARS = ["spec/spec.yaml"]
 # three ways (docs/design.md 1.9, 5): layout findings go to the layout-fixer
 # (generator code only), bench findings to the bench-writer (a
 # bench_strength survivor is the BENCH's fault, like a mutate survivor), and
-# everything else to the fixer.
+# everything else to the fixer. /vde sends every testbench order (every
+# mutate survivor, every requirement-coverage gap) to the tb-writer in
+# work-order mode (skills/vde/SKILL.md, fix loop step 4), and rtl/formal/
+# synth/harden/review to the fixer. /msde has no split: every msde order
+# goes to its own fixer (skills/msde/SKILL.md, fix loop), so no entry.
 ROLE_BY_DOMAIN: dict[str, dict[str, str]] = {
     "ade": {"layout": "layout-fixer", "testbench": "bench-writer"},
+    "vde": {"testbench": "tb-writer"},
 }
 
 

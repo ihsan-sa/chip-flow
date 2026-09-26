@@ -58,7 +58,13 @@ run bounded by EQUIV_TIMEOUT_S), and, only if the base case held but the inducti
 did not, an unbounded model check over reachable states (sby `abc pdr`, up
 to --pdr-timeout, default PDR_TIMEOUT_S = 30 minutes per mutant). The proof
 also assumes a single clock straight from an input and asynchronous resets
-acting at clock granularity; a design or mutant outside that model, a
+acting at clock granularity. When the whole top is outside that clock
+model (two clock domains, say) the same proof runs once more on the mutated
+module alone - the `-module` mcy names, reference against mutant at that
+module's own ports - and a PASS there stands for the top, since a module
+whose outputs never differ cannot change anything around it; the reason
+then ends "(module <m> alone, at its own ports)". A mutant in the top
+module itself gets no such retry. A design or mutant outside the model, a
 counterexample, a timeout or a tool error all leave the mutant a normal
 survivor. Only a complete proof moves it - or the owner's ruling on that
 one mutant: a survivor listed by id under `equivalent` in the workspace's
@@ -114,6 +120,7 @@ EQUIV_TIMEOUT_S = 60.0
 EQUIV_DEPTH = 8
 PDR_TIMEOUT_S = 1800.0
 PROVEN = "proven equivalent by "  # + "signal induction", "induction" or "pdr"
+# ...and, for a proof scoped to the mutated module alone, + MODULE_SCOPE
 RULED = "accepted by owner ruling: "  # + the entry's own `ruling`
 # every FF type yosys's own `proc`/`opt` produce with a single CLK edge
 # (docs: yosys "Flip-flop cells"); anything else sequential (latches, $sr,
@@ -125,6 +132,8 @@ SEQ_HINTS = ("dff", "latch", "$sr", "$ff", "$mem", "$fsm")
 MODE_RE = re.compile(r"-mode (\S+)")
 WIRE_RE = re.compile(r"-wire (\S+)")
 SRC_RE = re.compile(r"-src (\S+)")
+MODULE_RE = re.compile(r"-module (\S+)")
+TOP_IL_RE = re.compile(r"^attribute \\top 1\nmodule (\S+)$", re.M)
 
 
 def toolchain_root(timeout: float = 30.0) -> Path:
@@ -281,7 +290,7 @@ def read_mutants(db_path: Path, output_ports: set[str]) -> list[dict]:
 
 EQUIV_SCRIPT = """\
 read_rtlil {design}
-hierarchy -auto-top
+hierarchy {top}
 flatten
 rename -top ref
 hierarchy -top ref
@@ -291,7 +300,7 @@ write_rtlil ref.il
 async2sync
 design -stash ref
 read_rtlil {design}
-hierarchy -auto-top
+hierarchy {top}
 {mutation}
 flatten
 rename -top uut
@@ -367,6 +376,9 @@ uut.il
 """
 
 
+CLOCK_REFUSED = "not a single, unmodified clock - outside the proof"
+
+
 def clock_refusal(work: Path) -> str | None:
     """None if ref.json and uut.json (written by EQUIV_SCRIPT) are both
     inside single_clock()'s model on the same clock, else why not."""
@@ -376,7 +388,7 @@ def clock_refusal(work: Path) -> str | None:
     except (OSError, ValueError) as exc:
         return f"could not read the netlists back: {exc}"
     if ref is None or uut is None or ref != uut:
-        return "not a single, unmodified clock - outside the proof"
+        return CLOCK_REFUSED
     return None
 
 
@@ -441,14 +453,15 @@ equiv_status -assert equiv
 
 
 def prove_signal_induction(design_il: Path, mutation: str, work: Path,
-                           timeout: float = EQUIV_TIMEOUT_S) -> bool:
+                           timeout: float = EQUIV_TIMEOUT_S,
+                           top: str = "-auto-top") -> bool:
     """True when SIGNAL_EQUIV_SCRIPT proves every matched signal equal from
     reset and the clock check holds; any failure, timeout or error is
     False, never a proof."""
     sig = work / "signal"
     sig.mkdir(parents=True, exist_ok=True)
     (sig / "equiv.ys").write_text(SIGNAL_EQUIV_SCRIPT.format(
-        design=design_il.resolve(), mutation=mutation, depth=EQUIV_DEPTH,
+        top=top, design=design_il.resolve(), mutation=mutation, depth=EQUIV_DEPTH,
         timeout=int(timeout), base_held=BASE_HELD), encoding="utf-8")
     try:
         proc = subprocess.run(
@@ -460,9 +473,57 @@ def prove_signal_induction(design_il: Path, mutation: str, work: Path,
     return proc.returncode == 0 and clock_refusal(sig) is None
 
 
+MODULE_SCOPE = " (module {} alone, at its own ports)"
+
+
+def design_top(design_il: Path) -> str | None:
+    """The module design.il marks as its top (`attribute \\top 1`), without
+    RTLIL's leading backslash; None when it marks none."""
+    try:
+        m = TOP_IL_RE.search(design_il.read_text(encoding="utf-8",
+                                                 errors="replace"))
+    except OSError:
+        return None
+    return m.group(1).lstrip("\\") if m else None
+
+
 def prove_equivalent(design_il: Path, mutation: str, work: Path,
                      timeout: float = EQUIV_TIMEOUT_S,
                      pdr_timeout: float = PDR_TIMEOUT_S) -> tuple[bool, str]:
+    """prove_whole() over the whole top first. When that is not a proof
+    and the top is outside the one-clock model (clock_refusal() on the
+    top's own netlists - a design with two clock domains, say), the same
+    proof runs once more on the mutated module alone (`-module` in the mcy
+    mutation string): the reference module against the mutated one, at
+    that module's own ports, with that module as the top. mcy mutates the
+    module's definition, so every instance of it carries the mutation; if
+    every instance's outputs equal the reference's for every input
+    sequence, the top around them cannot tell the difference either - so
+    a PASS there is a proof for the top. The module's own proof keeps
+    every assumption of the whole-top one (its own single clock included),
+    and anything short of a PASS leaves the mutant a survivor, reported
+    with both reasons. A mutant in the top module itself has no smaller
+    scope and gets no second try."""
+    proven, why = prove_whole(design_il, mutation, work, timeout,
+                              pdr_timeout)
+    if proven or clock_refusal(work) != CLOCK_REFUSED:
+        return proven, why
+    mod_m = MODULE_RE.search(mutation)
+    module = mod_m.group(1).lstrip("\\") if mod_m else None
+    if not module or module == design_top(design_il):
+        return proven, why
+    m_proven, m_why = prove_whole(design_il, mutation, work / "module",
+                                  timeout, pdr_timeout,
+                                  top=f"-top {module}")
+    if m_proven:
+        return True, m_why + MODULE_SCOPE.format(module)
+    return False, f"{why}; module {module} alone: {m_why}"
+
+
+def prove_whole(design_il: Path, mutation: str, work: Path,
+                timeout: float = EQUIV_TIMEOUT_S,
+                pdr_timeout: float = PDR_TIMEOUT_S,
+                top: str = "-auto-top") -> tuple[bool, str]:
     """Try to PROVE one mutant equivalent to the unmutated design:
     started from reset (every FF at zero, or its declared init), the two
     give the same PRIMARY OUTPUTS on every cycle for every input sequence.
@@ -491,15 +552,19 @@ def prove_equivalent(design_il: Path, mutation: str, work: Path,
     a timeout, an error or a clock refusal - prove_reachable() gets one
     more try over reachable states (pdr_timeout).
 
+    `top` is the `hierarchy` argument that picks the design under proof:
+    the whole top by default, `-top <module>` for prove_equivalent()'s
+    module-scoped retry.
+
     Returns (proven, reason); a proof's reason is PROVEN + the method
     ("signal induction", "induction" or "pdr"). Anything short of a full
     proof is (False,
     why), never a proof."""
     work.mkdir(parents=True, exist_ok=True)
-    if prove_signal_induction(design_il, mutation, work, timeout):
+    if prove_signal_induction(design_il, mutation, work, timeout, top):
         return True, PROVEN + "signal induction"
     (work / "equiv.ys").write_text(EQUIV_SCRIPT.format(
-        design=design_il.resolve(), mutation=mutation, depth=EQUIV_DEPTH,
+        top=top, design=design_il.resolve(), mutation=mutation, depth=EQUIV_DEPTH,
         timeout=int(timeout), base_held=BASE_HELD), encoding="utf-8")
     try:
         proc = subprocess.run(
