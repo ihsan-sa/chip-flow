@@ -32,4 +32,14 @@ clock:
 #                                        remove these
 
 # mutate: {size: 24, seed: 1}          # optional - defaults live in
-# formal: {depth: 20}                  # check_mutate.py / check_formal.py
+#                                        check_mutate.py
+
+# formal: {depth: <N>}                 # REQUIRED once any requirement is
+#                                        check: formal|both - N is the prove
+#                                        (k-induction) depth the asserts need,
+#                                        usually small; a deep N makes the
+#                                        proof infeasible. Optional:
+#                                        cover_depth (>= N, covers only) for a
+#                                        long cover's reach, timeout_s (per
+#                                        sby task). The property-writer sets
+#                                        them.

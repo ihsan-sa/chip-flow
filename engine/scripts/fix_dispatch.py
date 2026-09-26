@@ -154,7 +154,7 @@ SIDECARS = ["spec/spec.yaml"]
 # goes to its own fixer (skills/msde/SKILL.md, fix loop), so no entry.
 ROLE_BY_DOMAIN: dict[str, dict[str, str]] = {
     "ade": {"layout": "layout-fixer", "testbench": "bench-writer"},
-    "vde": {"testbench": "tb-writer"},
+    "vde": {"testbench": "tb-writer", "formal": "property-writer"},
 }
 
 

@@ -112,10 +112,21 @@ section 2's mutate rule, analog form).
 - **Inputs:** the work order JSON - `cluster.violations` and
   `remediations`. READ THE REMEDIATIONS FIRST. The work order is the whole
   brief.
-- **bench_strength:** tighten the bound in `tb/*.bounds.json` to the
-  spec's own tolerance, or fix the `.measure` to score what the device
-  mutant actually moves. Never resize the design to make a mutant fail -
-  that is the analog-designer's file, out of scope here.
+- **bench_strength:** a bound's `min`/`max` must equal the spec's
+  (spec_lint), so first make any looser bound match the spec. When the
+  bounds already match, read the survivor's `deltas` in the gate's facts:
+  a spec measure that moved but stayed inside the spec gets a
+  `sensitivity` on its bound in `tb/*.bounds.json` - the relative move
+  against the unmutated design's own tt value that counts as a kill.
+  Declare max(3 sigma, 2%) of that measure's mc spread, 2% when no sigma
+  is known. The gate refuses less than 2%, and any sensitivity on a
+  measure that sits near zero (v_low, an off current), where a relative
+  move is only simulator tolerance. It is not a pass bound
+  (sim_tt/sim_pvt never read it). If no spec measure moves, fix the
+  `.measure` to score what the device actually sets; a measure the spec
+  doesn't declare is a spec change, so put it under OPEN. Never resize
+  the design to make a mutant fail - that is the analog-designer's file,
+  out of scope here.
 - **pex_sim measure_missing:** the bench printed nothing for a name its
   own `.bounds.json` lists - fix the `.measure`/`print` line in
   `layout_ref/<block>_pex_tb.cir`, or the bounds file's name if it drifted

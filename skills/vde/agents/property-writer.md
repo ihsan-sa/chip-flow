@@ -58,10 +58,27 @@ requirement names as reachable.
 2. Add a `cover` for every state or transition the spec calls out as
    something the design must actually reach (a wrap event, a full frame,
    an edge case) - labeled `COVER_<NAME>`.
-3. If a requirement's natural property needs more than the spec's default
-   induction depth to settle, note it in OPEN rather than silently trusting
-   a shallow default; `spec.yaml`'s `formal: {depth}` is the architect's/
-   spec-writer's knob, not yours to change unasked.
+3. Set the depths. `formal` has no default depth and refuses a spec without
+   one. There are two, and they mean different things:
+   - `depth` is the prove depth: the k of smtbmc's k-induction (and pdr's
+     run). Induction proves an assert for all time, so it does not need to
+     walk a long window; set `depth` to what the asserts need for induction
+     to close - usually a handful of cycles past reset. Write asserts so
+     they are inductive (assert the counter/state invariants that make a
+     long-window property follow step by step) rather than raising `depth`.
+     A deep `depth` makes the proof infeasible: each basecase step costs
+     seconds, so a `depth` near a 1000-cycle window never finishes.
+   - `cover_depth` is how far the cover task looks. For every cover you
+     wrote, count the cycles its sequence needs from reset (a measurement
+     window, a full frame, a counter wrap - read the numbers from the
+     spec) and set `cover_depth: M` (M >= depth) to at least that count
+     plus the reset cycles.
+   If `spec.yaml` has no `formal: {depth: N}`, add it (with `cover_depth`
+   when a cover needs more) - the one edit to `spec.yaml` you may make. A
+   shallow `depth` hides nothing: an assert whose induction does not close
+   is reported bounded, never proven. If a `formal.cover_depth` (or `depth`
+   when no cover_depth is set) is already there and a cover needs more, do
+   not work around it: raise it and say so in SUMMARY.
 4. You cannot run `formal` yourself - it needs `rtl/`, which does not
    exist yet. Read your own file back once: every `check: formal|both`
    requirement id has an assert whose label matches its `property:` field
@@ -76,9 +93,10 @@ requirement names as reachable.
 - Never add `bind`-based instrumentation, ever, for any reason.
 
 ## Output contract (end your final message with exactly this block)
-FILES: formal/*.sv
+FILES: formal/*.sv, spec/spec.yaml (its `formal:` key only, if you set it)
 GATE: none yet (formal needs rtl/, which does not exist)
 SUMMARY: <up to 10 lines: property count, which requirement each proves,
-  cover points added>
-OPEN: <a requirement you think needs more than the spec's default depth,
-  or any ambiguity, or "none">
+  cover points added, formal.depth (and cover_depth) and the sequence
+  that sets it>
+OPEN: <a requirement whose sequence length you could not work out from the
+  spec, or any ambiguity, or "none">

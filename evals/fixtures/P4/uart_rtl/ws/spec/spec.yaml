@@ -82,3 +82,8 @@ tt_pins:
   start: "uio_in[0]"
   tx:    "uo_out[0]"
   busy:  "uo_out[1]"
+
+# formal.depth: the depth the formal gate used implicitly when this
+# fixture was frozen; the gate no longer defaults it.
+formal:
+  depth: 20

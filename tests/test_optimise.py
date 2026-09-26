@@ -662,3 +662,18 @@ def test_sizing_start_and_numeric_record_state_optimise(tmp_path, monkeypatch):
     assert rec["evaluator_sha"] == meta["evaluator_sha"]
     assert rec["best"]["score"] == pytest.approx(payload["best_score"], abs=1e-6)
     assert rec["best"]["trial"] > 0  # -3 is out of bounds; DE beat it
+
+
+def test_eval_workspace_caps_both_formal_depths(tmp_path):
+    # the fast screen never inherits a deep cover_depth meant for the real
+    # formal gate (check_formal.formal_settings: cover runs at cover_depth)
+    ws = tmp_path / "ws"
+    ev = ws / optimise.EVALUATOR_SUBDIR
+    ev.mkdir(parents=True)
+    (ev / "spec.yaml").write_text(
+        "top: t\nformal:\n  depth: 40\n  cover_depth: 1200\n",
+        encoding="utf-8")
+    ew = optimise._eval_workspace(ws, {"rtl": [], "fast_formal_depth": 10})
+    import yaml
+    spec = yaml.safe_load((ew / "spec" / "spec.yaml").read_text())
+    assert spec["formal"] == {"depth": 10}

@@ -32,3 +32,8 @@ tt_pins:
   clk: clk
   rst: "~rst_n"
   count: "uo_out[7:0]"
+
+# formal.depth: the depth the formal gate used implicitly when this
+# fixture was frozen; the gate no longer defaults it.
+formal:
+  depth: 20

@@ -775,6 +775,9 @@ def _eval_workspace(ws: Path, profile: dict) -> Path:
     formal = dict(spec.get("formal") or {})
     formal["depth"] = min(int(formal.get("depth", FAST_FORMAL_DEPTH)),
                           int(profile["fast_formal_depth"]))
+    # the fast screen's covers run at the capped depth too, never a deep
+    # formal.cover_depth meant for the real formal gate
+    formal.pop("cover_depth", None)
     spec["formal"] = formal
     (ew / "spec" / "spec.yaml").write_text(yaml.safe_dump(spec, sort_keys=False),
                                            encoding="utf-8")
