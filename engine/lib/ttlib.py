@@ -55,8 +55,8 @@ and the spec may carry `tiles:`. A spec with any `ua` pin is an ANALOG tile:
 its pin template is the vendored `def/analog/tt_analog_<tiles>.def` (the
 digital pins plus ua[7:0] on Metal4), `tiles` defaults to the vendored
 ttgf-analog-template's own `tiles` value, the wrapper gains the template's
-`inout wire [7:0] ua` port with each pin wired straight to ua[k], and
-the resizer never touches a ua[k] net (RSZ_DONT_TOUCH_RX), and
+`inout wire [7:0] ua` port with each pin wired straight to ua[k], the
+resizer never touches a ua[k] net (RSZ_DONT_TOUCH_RX), and
 info.yaml carries `analog_pins` and the ua pinout that precheck.py's
 analog pin check reads. The ua indices must be 0..n-1 with n no more than
 the template allows: precheck fails any ua[k] below analog_pins that has
