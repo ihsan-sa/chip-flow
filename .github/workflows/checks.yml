@@ -4,9 +4,11 @@
 # here turns a gate that did not run into a pass.
 name: checks
 
+# A PR runs them on its head; push is main only, so a PR branch is not run twice.
 on:
   pull_request:
   push:
+    branches: [main]
 
 permissions:
   contents: read
@@ -37,12 +39,10 @@ jobs:
       - uses: ./.github/actions/toolchain
       - name: tests/check-slow.sh
         env:
-          # -vv prints a failed assertion's whole violation, and a fixed
-          # basetemp lets the step below keep a failed run's logs.
-          PYTEST_ADDOPTS: -vv --basetemp=/mnt/pytest
+          # -vv prints a failed assertion's whole violation.
+          PYTEST_ADDOPTS: -vv
         run: |
           set +e
-          sudo install -d -o "$(id -u)" -g "$(id -g)" /mnt/pytest
           start=$SECONDS
           bash tests/check-slow.sh
           rc=$?
@@ -54,7 +54,7 @@ jobs:
         with:
           name: check-slow-logs
           path: |
-            /mnt/pytest/**/*.log
-            /mnt/pytest/**/*.json
+            /tmp/pytest-of-*/**/*.log
+            /tmp/pytest-of-*/**/*.json
           retention-days: 7
           if-no-files-found: ignore
