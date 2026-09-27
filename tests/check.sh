@@ -6,6 +6,15 @@
 # thing that proves it actually ran, not just that it exited 0. Meant to
 # run in well under two minutes; the slow, full LibreLane hardening flow
 # lives in tests/smoke-librelane.sh instead.
+#
+# Every smoke that used to sit under a fixed `timeout N` now runs under
+# `capped` (below): N is a budget of CPU seconds, not wall seconds, with a
+# wall-clock backstop of ten times that, because on this box wall time
+# measures the box's load (python-imports' 30 s once failed at load
+# 130-290). A smoke over its CPU budget fails saying "FAIL slow"; one still
+# running at its backstop fails saying "FAIL hang". CHECK_CPU_S and
+# CHECK_WALL_S, when set, replace every smoke's budget and backstop (the
+# test does that, to plant a slow smoke and a hang cheaply).
 
 set -uo pipefail
 
@@ -21,6 +30,24 @@ PDK="$T/foss/pdks/gf180mcuD"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/chip-flow-check.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 cd "$WORK" || exit 1
+
+# shellcheck source=tests/lib/cpu-cap.sh
+. "$HERE/lib/cpu-cap.sh"
+
+# capped NAME CPU_S CMD [ARGS...] -- run CMD (stdin /dev/null) under
+# cpu_cap with CPU_S of CPU and a 10x wall backstop. Its stdout and stderr
+# land in $out; on slow or hang the verdict is appended to $out, so a
+# failing row's detail says which. One stderr line of CPU/wall either way.
+capped() {
+  local name="$1" cpu="${CHECK_CPU_S:-$2}" rc=0
+  shift 2
+  local wall="${CHECK_WALL_S:-$((cpu * 10))}"
+  cpu_cap "$cpu" "$wall" "$@" >"$WORK/.capped.out" 2>&1 </dev/null || rc=$?
+  out="$(cat "$WORK/.capped.out")"
+  echo "$name: $CPU_CAP_NOTE" >&2
+  if [ -n "$CPU_CAP_VERDICT" ]; then out+=$'\n'"$name: $CPU_CAP_NOTE"; fi
+  return "$rc"
+}
 
 PASS=0
 FAIL=0
@@ -102,9 +129,9 @@ int main(int argc, char** argv) {
     return ok ? 0 : 1;
 }
 EOF
-if out="$(timeout 240 "$EDA" verilator --cc --exe --build -j 4 -Wno-fatal \
+if capped verilator 240 "$EDA" verilator --cc --exe --build -j 4 -Wno-fatal \
      --top-module counter -CFLAGS "-std=c++14 -O0" counter_main.cpp counter.v \
-     --Mdir vobj 2>&1)" \
+     --Mdir vobj \
    && runout="$(./vobj/Vcounter 2>&1)"; then
   report "verilator-binary" true "built and ran: $runout"
 else
@@ -161,7 +188,7 @@ prep -top prop
 [files]
 prop.sv
 EOF
-if out="$(timeout 60 "$EDA" sby -f prop.sby 2>&1)" && echo "$out" | grep -q "DONE (PASS"; then
+if capped sby 60 "$EDA" sby -f prop.sby && echo "$out" | grep -q "DONE (PASS"; then
   report "sby-yices-bmc" true "reset property proved: $(echo "$out" | grep -m1 'summary: engine_0')"
 else
   report "sby-yices-bmc" false "$(echo "$out" | tail -c 300)"
@@ -196,7 +223,7 @@ runner = get_runner("icarus")
 runner.build(sources=[proj / "counter.v"], hdl_toplevel="counter", build_dir=proj / "sim_build")
 runner.test(hdl_toplevel="counter", test_module="test_counter", test_dir=proj)
 EOF
-if out="$(timeout 60 "$EDA" python3 run_cocotb.py 2>&1)" && echo "$out" | grep -q "TESTS=1 PASS=1 FAIL=0"; then
+if capped cocotb 60 "$EDA" python3 run_cocotb.py && echo "$out" | grep -q "TESTS=1 PASS=1 FAIL=0"; then
   report "cocotb-icarus" true "$(echo "$out" | grep -m1 'TESTS=')"
 else
   report "cocotb-icarus" false "$(echo "$out" | tail -c 300)"
@@ -217,7 +244,7 @@ print v(d) i(vd)
 .end
 EOF
 rows=0
-if out="$(timeout 60 "$EDA" ngspice -b nfet_dc.spice 2>&1)"; then
+if capped ngspice 60 "$EDA" ngspice -b nfet_dc.spice; then
   rows="$(echo "$out" | grep -cE '^[[:space:]]*[0-9]+[[:space:]]+[0-9.e+-]+[[:space:]]+[0-9.e+-]+[[:space:]]+-?[0-9.e+-]+')"
 fi
 if [ "$rows" -ge 5 ] 2>/dev/null && ! echo "$out" | grep -qi "^Error"; then
@@ -252,7 +279,7 @@ puts stdout "MAGIC_DRC_DONE"
 flush stdout
 quit
 EOF
-if [ -f tiny.gds ] && out="$(timeout 60 "$EDA" magic magic_drc.tcl < /dev/null 2>&1)" \
+if [ -f tiny.gds ] && capped magic 60 "$EDA" magic magic_drc.tcl \
    && echo "$out" | grep -q "MAGIC_DRC_DONE"; then
   detail="$(echo "$out" | grep -m1 'Total DRC errors found:')"
   report "magic-drc" true "${detail:-DRC ran to completion (no summary line this run)}"
@@ -262,10 +289,10 @@ fi
 
 # -------------------------------------------------------------------------- klayout
 DRC_DECK="$PDK/libs.tech/klayout/tech/drc/gf180mcu.drc"
-if [ -f tiny.gds ] && out="$(timeout 240 "$EDA" klayout -b -r "$DRC_DECK" \
+if [ -f tiny.gds ] && capped klayout 240 "$EDA" klayout -b -r "$DRC_DECK" \
      -rd input=tiny.gds -rd topcell=TOP -rd report=tiny.lyrdb -rd run_mode=flat \
      -rd verbose=false -rd variant=A -rd 'decks=all,-beol,-density,-antenna' \
-     -rd threads=2 -rd workers=1 2>&1)" && [ -f tiny.lyrdb ]; then
+     -rd threads=2 -rd workers=1 && [ -f tiny.lyrdb ]; then
   report "klayout-drc-gf180mcu" true "DRC deck ran to completion, report written"
 else
   report "klayout-drc-gf180mcu" false "$(echo "$out" | tail -c 300)"
@@ -290,18 +317,18 @@ mp y a vdd vdd pmos w=2u l=0.5u
 mn y a vss vss nmos w=0.5u l=0.5u
 .ends
 EOF
-if out="$(timeout 30 "$EDA" netgen -batch "lvs {inv_a.spice inv_a} {inv_b_match.spice inv_b} {} lvs_match.log" 2>&1)" \
+if capped netgen-match 30 "$EDA" netgen -batch "lvs {inv_a.spice inv_a} {inv_b_match.spice inv_b} {} lvs_match.log" \
    && grep -q "Circuits match uniquely" lvs_match.log 2>/dev/null \
    && ! grep -q "Property errors" lvs_match.log 2>/dev/null; then
   report "netgen-lvs-match" true "matching pair: circuits match uniquely"
 else
   report "netgen-lvs-match" false "$(echo "$out" | tail -c 300)"
 fi
-if timeout 30 "$EDA" netgen -batch "lvs {inv_a.spice inv_a} {inv_c_mismatch.spice inv_c} {} lvs_mismatch.log" >/dev/null 2>&1 \
+if capped netgen-mismatch 30 "$EDA" netgen -batch "lvs {inv_a.spice inv_a} {inv_c_mismatch.spice inv_c} {} lvs_mismatch.log" \
    && grep -qE "Property errors were found|do not match|Netlists do not match" lvs_mismatch.log 2>/dev/null; then
   report "netgen-lvs-mismatch" true "mismatched pair correctly flagged (property/topology mismatch)"
 else
-  report "netgen-lvs-mismatch" false "mismatch was not flagged as expected"
+  report "netgen-lvs-mismatch" false "mismatch was not flagged as expected${CPU_CAP_VERDICT:+ ($CPU_CAP_NOTE)}"
 fi
 
 # ------------------------------------------------------------------------- OpenSTA
@@ -316,7 +343,7 @@ report_checks
 report_tns
 exit
 EOF
-  if out="$(timeout 30 "$EDA" sta sta_timing.tcl 2>&1)" && echo "$out" | grep -q "slack"; then
+  if capped sta 30 "$EDA" sta sta_timing.tcl && echo "$out" | grep -q "slack"; then
     report "opensta-timing" true "$(echo "$out" | grep -m1 slack)"
   else
     report "opensta-timing" false "$(echo "$out" | tail -c 300)"
@@ -346,8 +373,17 @@ for name in names:
     else:
         print(f"{'true' if r.get('ok') else 'false'}\t{r.get('detail') or ''}")
 PY
-"$EDA" check-env --out "$CHECKENV_JSON" >/dev/null 2>&1
-if [ -s "$CHECKENV_JSON" ]; then
+# check-env's own --timeout (30 s per tool by default) is wall time, so it is
+# raised to the backstop here and the whole run is held to a CPU budget
+# instead: measured 6.5 s of CPU (51 s wall at load 142) for all its rows.
+CHECKENV_CPU_S="${CHECK_CPU_S:-60}"
+CHECKENV_WALL_S="${CHECK_WALL_S:-$((CHECKENV_CPU_S * 10))}"
+capped check-env "$CHECKENV_CPU_S" "$EDA" check-env \
+  --timeout "$CHECKENV_WALL_S" --out "$CHECKENV_JSON"
+if [ -n "$CPU_CAP_VERDICT" ]; then
+  checkenv_rows=("false"$'\t'"check-env: $CPU_CAP_NOTE")
+  checkenv_rows+=("${checkenv_rows[0]}")
+elif [ -s "$CHECKENV_JSON" ]; then
   mapfile -t checkenv_rows < <("$EDA" python3 "$CHECKENV_PARSE" "$CHECKENV_JSON" python-imports mcy)
 else
   checkenv_rows=()

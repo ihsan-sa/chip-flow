@@ -43,6 +43,7 @@ def run_gate(tmp_path: Path, mode: str, cpu_s: int = 1, wall_s: int = 300):
     (root / "tests").mkdir(parents=True)
     (root / "bin").mkdir()
     shutil.copy(REPO / "tests" / "check-engine.sh", root / "tests")
+    shutil.copytree(REPO / "tests" / "lib", root / "tests" / "lib")
     eda = root / "bin" / "eda"
     eda.write_text(STUB)
     eda.chmod(0o755)
