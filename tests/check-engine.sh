@@ -20,9 +20,8 @@
 #     is ended and this exits 124, saying "FAIL hang". The backstop is
 #     generous on purpose; it only has to catch waiting, not working.
 #   * otherwise pytest's own exit code, after one stderr line of CPU/wall.
-# CPU is read from /proc every CHECK_ENGINE_POLL_S (default 2) seconds and
-# settled at the end from this shell's own cutime. A process that leaves
-# the tree (reparented to init) stops counting; the suite does not do that.
+# CPU is read from /proc every CHECK_ENGINE_POLL_S (default 2) seconds by
+# tests/lib/cpu-cap.sh, which says how it counts.
 # tests/test_check_engine.py plants a slow suite and a hung one.
 #
 # The launcher (bin/eda) is not on main yet (M0 lands it separately). This
@@ -60,97 +59,26 @@ for v in "$CPU_S" "$WALL_S" "$POLL_S"; do
       exit 2 ;;
   esac
 done
-TCK="$(getconf CLK_TCK)"
-CPU_TICKS=$((CPU_S * TCK))
+# The CPU/wall monitor is tests/lib/cpu-cap.sh, shared with tests/check.sh.
+# shellcheck source=tests/lib/cpu-cap.sh
+. "$REPO_ROOT/tests/lib/cpu-cap.sh"
 
-# tree_ticks PID: add to TREE_TICKS the CPU ticks PID and its live
-# descendants have used, each including what it has reaped (cutime and
-# cstime), so a finished child is counted once, in its parent. No subshell
-# per poll: this runs every few seconds for the whole suite.
-tree_ticks() {
-  local line f kid
-  local -a fields kids
-  { read -r line < "/proc/$1/stat"; } 2>/dev/null || return 0
-  read -r -a fields <<<"${line##*) }"
-  # fields[0] is stat field 3 (state); utime, stime, cutime, cstime are
-  # stat fields 14-17.
-  TREE_TICKS=$((TREE_TICKS + fields[11] + fields[12] + fields[13] + fields[14]))
-  for f in /proc/"$1"/task/*/children; do
-    # The file ends without a newline, so `read` returns 1 even when it
-    # filled kids; an empty array is the only sign of nothing read.
-    kids=()
-    { read -r -d '' -a kids < "$f"; } 2>/dev/null || true
-    for kid in "${kids[@]}"; do tree_ticks "$kid"; done
-  done
-}
-
-# reaped_ticks: set REAPED_TICKS to the CPU ticks of everything this shell
-# has reaped (its own cutime + cstime), i.e. the finished suite and all it
-# waited for. Read in this shell, not a subshell: a fork starts at zero.
-reaped_ticks() {
-  local line
-  local -a fields
-  read -r line < "/proc/$$/stat"
-  read -r -a fields <<<"${line##*) }"
-  REAPED_TICKS=$((fields[13] + fields[14]))
-}
-
-secs() { awk -v t="$1" -v k="$TCK" 'BEGIN { printf "%.1f", t / k }'; }
-
-# The suite gets its own process group, so ending it ends its whole tree.
-set -m
-"$EDA_BIN" python -m pytest tests/ -q -m "not slow" &
-SUITE=$!
-set +m
-trap 'kill -KILL -- "-$SUITE" 2>/dev/null || true' EXIT
-
-end_suite() {
-  kill -TERM -- "-$SUITE" 2>/dev/null || true
-  sleep 2
-  kill -KILL -- "-$SUITE" 2>/dev/null || true
-  wait "$SUITE" 2>/dev/null || true
-}
-
-verdict=""
 rc=0
-start=$SECONDS
-while kill -0 "$SUITE" 2>/dev/null; do
-  TREE_TICKS=0
-  tree_ticks "$SUITE"
-  if [ "$TREE_TICKS" -gt "$CPU_TICKS" ]; then
-    verdict=slow; break
-  fi
-  if [ $((SECONDS - start)) -ge "$WALL_S" ]; then
-    verdict=hang; break
-  fi
-  sleep "$POLL_S"
-done
-wall=$((SECONDS - start))
+CPU_CAP_POLL_S="$POLL_S" cpu_cap "$CPU_S" "$WALL_S" \
+  "$EDA_BIN" python -m pytest tests/ -q -m "not slow" || rc=$?
 
-if [ -n "$verdict" ]; then
-  used="$TREE_TICKS"
-  end_suite
-else
-  wait "$SUITE" || rc=$?
-  reaped_ticks
-  used="$REAPED_TICKS"
-  # It can cross the budget between the last poll and its exit.
-  if [ "$used" -gt "$CPU_TICKS" ]; then verdict=slow; fi
-fi
-trap - EXIT
-
-case "$verdict" in
+case "$CPU_CAP_VERDICT" in
   slow)
-    echo "check-engine.sh: FAIL slow - the suite used $(secs "$used") s of" \
-         "CPU, over its ${CPU_S} s budget (${wall} s wall). That is the" \
+    echo "check-engine.sh: FAIL slow - the suite used $CPU_CAP_USED s of" \
+         "CPU, over its ${CPU_S} s budget (${CPU_CAP_WALL} s wall). That is the" \
          "suite's own work, not the box's load." >&2
     exit 125 ;;
   hang)
     echo "check-engine.sh: FAIL hang - the suite was still running at the" \
-         "${WALL_S} s wall-clock backstop, having used only $(secs "$used") s" \
+         "${WALL_S} s wall-clock backstop, having used only $CPU_CAP_USED s" \
          "of its ${CPU_S} s CPU budget: it is waiting, not working." >&2
     exit 124 ;;
 esac
-echo "check-engine.sh: suite used $(secs "$used") s CPU of its ${CPU_S} s" \
-     "budget in ${wall} s wall (pytest exit $rc)" >&2
+echo "check-engine.sh: suite used $CPU_CAP_USED s CPU of its ${CPU_S} s" \
+     "budget in ${CPU_CAP_WALL} s wall (pytest exit $rc)" >&2
 exit "$rc"
