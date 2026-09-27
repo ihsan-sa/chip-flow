@@ -144,6 +144,58 @@ def test_tb_that_does_not_import_fails_via_the_baseline(tmp_path, capsys):
     assert "unmutated design fails the visible tests" in out.get("remediation", "")
 
 
+# the ece298a PLL PFD's shape: a PDK delay cell (and its port stub) only
+# under SYNTHESIS, a behavioural stand-in otherwise. Sim never defines
+# SYNTHESIS; yosys's read_verilog does unless told -nosynthesis.
+CELL_STUB = """\
+(* blackbox *)
+module gf180mcu_fd_sc_mcu7t5v0__dlya_1 (input wire I, output wire Z);
+endmodule
+"""
+RTL_CELL_BODY = """\
+module top (input wire clk, input wire rst, output wire [3:0] count);
+  reg [3:0] q;
+  wire b0;
+  always @(posedge clk) q <= rst ? 4'd0 : q + 4'd1;
+{cell}
+  assign count = {{q[3:1], b0}};
+endmodule
+"""
+CELL = "  gf180mcu_fd_sc_mcu7t5v0__dlya_1 dly0 (.I(q[0]), .Z(b0));"
+RTL_CELL_UNDER_SYNTHESIS = RTL_CELL_BODY.format(
+    cell=f"`ifdef SYNTHESIS\n{CELL}\n`else\n  assign b0 = q[0];\n`endif"
+) + f"`ifdef SYNTHESIS\n{CELL_STUB}`endif\n"
+RTL_CELL_ALWAYS = RTL_CELL_BODY.format(cell=CELL) + CELL_STUB
+
+
+@pytest.mark.slow
+def test_pdk_cell_under_synthesis_mutates_the_behavioural_model(tmp_path, capsys):
+    # before -nosynthesis every mutant, baseline included, kept the cell
+    # and died in Icarus with "Unknown module type".
+    ws = make_ws(tmp_path, TB_STRONG)
+    (ws / "rtl" / "top.v").write_text(RTL_CELL_UNDER_SYNTHESIS, encoding="utf-8")
+    code = check_mutate.main(["--workspace", str(ws), "--size", str(SMALL_SIZE),
+                              "--seed", "1"])
+    out = json.loads(capsys.readouterr().out)
+    assert code in (0, 1), out
+    assert out["total_mutants"] > 0, out
+    assert out["kill_rate"] >= 0.5, out
+
+
+@pytest.mark.slow
+def test_baseline_that_does_not_build_says_so(tmp_path, capsys):
+    ws = make_ws(tmp_path, TB_STRONG)
+    (ws / "rtl" / "top.v").write_text(RTL_CELL_ALWAYS, encoding="utf-8")
+    code = check_mutate.main(["--workspace", str(ws), "--size", str(SMALL_SIZE),
+                              "--seed", "1"])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 2, out
+    rem = out.get("remediation", "")
+    assert "unmutated design did not build" in rem, out
+    assert "Icarus" in rem, out
+    assert "fails the visible tests" not in rem, out
+
+
 def test_no_tb_modules_is_an_error(tmp_path, capsys):
     ws = make_ws(tmp_path, TB_STRONG)
     (ws / "tb" / "test_top.py").unlink()
