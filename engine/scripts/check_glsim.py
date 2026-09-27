@@ -77,9 +77,20 @@ ZERO_INTERCONNECT_RE = re.compile(
     r"(?:\s+\(\s*0(?:\.0*)?(?::0(?:\.0*)?){0,2}\s*\))+\s*\)\s*$")
 UNSUPPORTED_PATH_RE = re.compile(
     r"^(\S+?):(\d+): sorry: ifnone with an edge-sensitive path is not supported")
-UNMATCHED_MODPATH_RE = re.compile(r"Unable to match ModPath .* in (\S+)\s*$")
+# An SDF error is attributed by the SDF file and line Icarus names, never by
+# the instance at the end of its text: cocotb's stdout shares the sim log
+# and can tear a line anywhere after that. The text is only checked to be
+# (a prefix of) the unmatched-ModPath message, far enough in to tell it from
+# Icarus's other "Unable to ..." errors, and, when the line is intact, to
+# name the same instance the line number points at.
+SDF_ERROR_AT_RE = re.compile(r"SDF ERROR: (\S+?):(\d+): (.*)$")
+UNMATCHED_MODPATH = "Unable to match ModPath "
+UNMATCHED_MODPATH_MIN = len("Unable to m")
+UNMATCHED_MODPATH_RE = re.compile(
+    r"^Unable to match ModPath \S+ -> \S+ in (\S+)\s*$")
+CELLTYPE_RE = re.compile(r'\(CELLTYPE\s+"([^"]+)"\)')
+INSTANCE_RE = re.compile(r"\(INSTANCE\s+([^)\s]*)\s*\)")
 MODULE_RE = re.compile(r"^\s*module\s+(\w+)")
-CELL_RE = re.compile(r'\(CELLTYPE\s+"([^"]+)"\)\s*\(INSTANCE\s+([^)\s]*)\s*\)')
 
 
 def sdf_for_icarus(src: Path, dest: Path) -> int:
@@ -127,6 +138,50 @@ def unsupported_cells(build_log_text: str) -> set[str]:
     return cells
 
 
+def sdf_cell_at(sdf_lines: list[str], lineno: int) -> tuple[str, str] | None:
+    """(instance, celltype) of the CELL block holding 1-based line lineno of
+    the SDF, when that line is an IOPATH entry; None otherwise."""
+    if not 1 <= lineno <= len(sdf_lines) or "IOPATH" not in sdf_lines[lineno - 1]:
+        return None
+    cell = inst = None
+    for line in sdf_lines[:lineno]:
+        m = CELLTYPE_RE.search(line)
+        if m:
+            cell, inst = m.group(1), None
+        m = INSTANCE_RE.search(line)
+        if m and cell is not None:
+            inst = m.group(1)
+    return (inst, cell) if inst and cell else None
+
+
+def waivable_sdf_error(line: str, sdf: Path, sdf_lines: list[str],
+                       refused: set[str]) -> str | None:
+    """"inst (celltype)" when this SDF ERROR line is an unmatched ModPath on
+    an instance of a cell Icarus refused at build time, else None."""
+    m = SDF_ERROR_AT_RE.search(line)
+    if not m:
+        return None
+    path, lineno, rest = m.group(1), int(m.group(2)), m.group(3)
+    try:
+        if Path(path).resolve() != sdf.resolve():
+            return None
+    except OSError:
+        return None
+    k = 0
+    while (k < len(rest) and k < len(UNMATCHED_MODPATH)
+           and rest[k] == UNMATCHED_MODPATH[k]):
+        k += 1
+    if k < UNMATCHED_MODPATH_MIN:
+        return None
+    at = sdf_cell_at(sdf_lines, lineno)
+    if at is None or at[1] not in refused:
+        return None
+    whole = UNMATCHED_MODPATH_RE.match(rest)
+    if whole and whole.group(1).rsplit(".", 1)[-1] != at[0]:
+        return None
+    return f"{at[0]} ({at[1]})"
+
+
 def check_sdf_logs(name: str, sdf: Path, build_log: Path,
                    sim_log: Path) -> list[str]:
     """CheckError when this pass's logs show the SDF was not applied, bar
@@ -141,18 +196,16 @@ def check_sdf_logs(name: str, sdf: Path, build_log: Path,
             if SDF_OMITTED in line:
                 raise CheckError(f"{name} pass: the SDF was not applied "
                                  f"({log.name}: {line.strip()})")
-    celltype = {inst: cell for cell, inst in
-                CELL_RE.findall(sdf.read_text(encoding="utf-8", errors="replace"))}
+    sdf_lines = sdf.read_text(encoding="utf-8", errors="replace").splitlines()
     refused = unsupported_cells(build_text)
     waived = []
     for log, text in ((build_log, build_text), (sim_log, sim_text)):
         for line in text.splitlines():
             if SDF_ERROR not in line:
                 continue
-            m = UNMATCHED_MODPATH_RE.search(line)
-            inst = m.group(1).rsplit(".", 1)[-1] if m else None
-            if inst and celltype.get(inst) in refused:
-                waived.append(f"{inst} ({celltype[inst]})")
+            ok = waivable_sdf_error(line, sdf, sdf_lines, refused)
+            if ok:
+                waived.append(ok)
                 continue
             raise CheckError(f"{name} pass: the SDF was not fully applied "
                              f"({log.name}: {line.strip()})")

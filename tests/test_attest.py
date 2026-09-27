@@ -150,6 +150,26 @@ def test_build_refuses_with_an_escalated_issue(tmp_path):
     assert any("open issue" in p for p in problems)
 
 
+def test_build_counts_superseded_closed_only_while_its_replacement_is_fixed(tmp_path):
+    ws = make_ws(tmp_path)
+    pass_every_gate(ws, "msde")
+    st = state_mod.State.load(ws / "state.json")
+    old = st.open_issue({"gate": "cosim", "fixer": "review"})
+    new = st.open_issue({"gate": "cosim", "fixer": "review"})
+    st.update_issue(new["id"], status="fixed")
+    st.update_issue(old["id"], status="superseded", by=new["id"])
+    st.save()
+    att, problems = attest_mod.build(ws)
+    assert problems == [] and att is not None
+
+    st = state_mod.State.load(ws / "state.json")
+    st.update_issue(new["id"], status="escalated")
+    st.save()
+    att, problems = attest_mod.build(ws)
+    assert att is None
+    assert any("2 open issue" in p for p in problems)
+
+
 def test_build_refuses_when_a_gate_edit_marks_it_stale(tmp_path):
     ws = make_ws(tmp_path)
     pass_every_gate(ws, "msde")

@@ -37,8 +37,8 @@ Schema (version 3):
                            stale: [mark]?}},
       "open_issues": [{id, gate, phase, fixer, kinds[], severity, count,
                        work_order, status: open|fixing|fixed|escalated|
-                       waived, agent, attempts, opened, closed,
-                       note?, approved_by?}],
+                       waived|superseded, agent, attempts, opened, closed,
+                       note?, approved_by?, superseded_by?}],
       "next_issue_id": int, "next_job_id": int,
       "budgets": {"fix_loops": {gate_name: remaining}, ...},
       "decisions": [{what, why, phase, ts}],
@@ -84,6 +84,11 @@ CLI (docs/design.md 1.1 script contract: argparse, JSON to stdout, exit 0 ok
         "Scoped-out dimensions". check_sim_pvt.py pins it at typical)
     state.py issue --id 3 --status fixed [--agent fixer-1] [--bump-attempts] ...
     state.py issue --id 3 --status waived --note TEXT --approved-by WHO ...
+    state.py issue --id 3 --status superseded --by 4 [--note TEXT] ...
+        (the same finding went through again as issue 4 - a re-dispatched
+        work order - and issue 4 is `fixed`. Refused unless 4 is another
+        issue of the same gate and is itself `fixed`; issue 3 counts as
+        closed only while that stays true - statelib.issue_unresolved)
     state.py budget --path fix_loops.lint [--consume] ...
     state.py log --event name [--data JSON] ...
     state.py snapshot --label L [--files F ...] / restore --label L ...
@@ -878,13 +883,22 @@ class State:
     def update_issue(self, iid: int, status: str | None = None,
                      agent: str | None = None, bump: bool = False,
                      note: str | None = None,
-                     approved_by: str | None = None) -> dict:
+                     approved_by: str | None = None,
+                     by: int | None = None) -> dict:
+        if by is not None and status != "superseded":
+            raise CheckError("issue --by names the replacement of a "
+                             "superseded issue; it goes only with "
+                             "--status superseded")
         for rec in self.data["open_issues"]:
             if rec["id"] == iid:
                 if status:
-                    if status not in ("open", "fixing", "fixed", "escalated",
-                                      "waived"):
+                    if status not in statelib.ISSUE_STATUSES:
                         raise CheckError(f"bad issue status {status!r}")
+                    if status == "superseded":
+                        self._check_superseded_by(rec, by)
+                        rec["superseded_by"] = by
+                    else:
+                        rec.pop("superseded_by", None)
                     if status == "waived" and not (
                             (note or rec.get("note"))
                             and (approved_by or rec.get("approved_by"))):
@@ -895,7 +909,7 @@ class State:
                             "approver is exactly the silent-waive this "
                             "field pair exists to refuse")
                     rec["status"] = status
-                    if status in ("fixed", "waived"):
+                    if status in ("fixed", "waived", "superseded"):
                         rec["closed"] = now()
                 if agent:
                     rec["agent"] = agent
@@ -909,6 +923,31 @@ class State:
                           agent=rec["agent"], attempts=rec["attempts"])
                 return rec
         raise CheckError(f"no issue with id {iid}")
+
+    def _check_superseded_by(self, rec: dict, by: int | None) -> None:
+        """Refuse `superseded` unless `by` names another issue of the same
+        gate that is itself fixed: the only route that closes an issue with
+        neither a fix of its own nor a waiver is pointing at the fix that
+        replaced it."""
+        if by is None:
+            raise CheckError("issue --status superseded requires --by <id>: "
+                             "the issue whose fix replaced this one")
+        if by == rec["id"]:
+            raise CheckError("an issue cannot be superseded by itself")
+        other = next((o for o in self.data["open_issues"]
+                      if o["id"] == by), None)
+        if other is None:
+            raise CheckError(f"issue --by {by}: no issue with id {by}")
+        if other.get("gate") != rec.get("gate"):
+            raise CheckError(
+                f"issue --by {by}: it is an issue of gate "
+                f"{other.get('gate')!r}, not {rec.get('gate')!r} - only a "
+                "fix of the same gate's finding can supersede it")
+        if other.get("status") != "fixed":
+            raise CheckError(
+                f"issue --by {by}: its status is {other.get('status')!r}, "
+                "not 'fixed' - an issue is superseded only by one whose "
+                "fix went through")
 
     def budget(self, dotted: str, consume: bool = False, default: int = 3) -> int:
         node = self.data["budgets"]
@@ -1097,9 +1136,11 @@ class State:
         # be closed by looping again (docs/design.md, "Escalate: ... a
         # human decides") - the single most important thing for a resumed
         # session to see, not less. Only "fixed"/"waived" are genuinely
-        # closed and belong out of this list.
-        open_issues = [i for i in self.data["open_issues"]
-                       if i["status"] in ("open", "fixing", "escalated")]
+        # closed and belong out of this list, and "superseded" only while
+        # its replacement is fixed (statelib.issue_unresolved).
+        issues = self.data["open_issues"]
+        open_issues = [i for i in issues
+                       if statelib.issue_unresolved(i, issues)]
         running_jobs = [jid for jid, j in self.data["jobs"].items()
                         if j.get("status") == "running"]
         last = self.data["history"][-1] if self.data["history"] else None
@@ -1279,6 +1320,9 @@ def run(argv=None):
     p.add_argument("--note", help="required with --status waived: why")
     p.add_argument("--approved-by", dest="approved_by",
                    help="required with --status waived: who")
+    p.add_argument("--by", type=int,
+                   help="required with --status superseded: the id of the "
+                        "fixed issue of the same gate that replaced it")
 
     p = sub.add_parser("budget")
     common(p)
@@ -1405,7 +1449,7 @@ def _mutate(st: "State", args, result: dict):
     elif args.cmd == "issue":
         rec = st.update_issue(args.id, args.status, args.agent,
                               args.bump_attempts, args.note,
-                              args.approved_by)
+                              args.approved_by, args.by)
         result.update(issue=rec)
     elif args.cmd == "budget":
         remaining = st.budget(args.bpath, args.consume)

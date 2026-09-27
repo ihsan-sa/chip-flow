@@ -388,3 +388,36 @@ def freshness_report(data: dict, ws: Path,
         "summary": {"fresh": fresh, "stale": stale, "unknown": unknown,
                     "human_hold_pending": max(holds, default=0)},
     }
+
+
+# ---------------------------------------------------------------------------
+# issue statuses
+# ---------------------------------------------------------------------------
+ISSUE_STATUSES = ("open", "fixing", "fixed", "escalated", "waived",
+                  "superseded")
+ISSUE_UNRESOLVED = ("open", "fixing", "escalated")
+
+
+def superseded_closed(rec: dict, issues: list[dict]) -> bool:
+    """True when a `superseded` issue's replacement (its `superseded_by`) is
+    another issue of the same gate that is itself `fixed` - checked on the
+    record every time, so a replacement reopened later reopens this one."""
+    by = rec.get("superseded_by")
+    for other in issues:
+        if other is not rec and other.get("id") == by and by != rec.get("id"):
+            return (other.get("gate") == rec.get("gate")
+                    and other.get("status") == "fixed")
+    return False
+
+
+def issue_unresolved(rec: dict, issues: list[dict]) -> bool:
+    """Whether an issue still counts as open: open/fixing/escalated always
+    do (escalated is a human decision pending), and so does a `superseded`
+    one whose replacement is not a fixed issue of the same gate. The one
+    rule state.py resume, attest.py and task_router.py all count by."""
+    status = rec.get("status")
+    if status in ISSUE_UNRESOLVED:
+        return True
+    if status == "superseded":
+        return not superseded_closed(rec, issues)
+    return False

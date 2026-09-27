@@ -220,6 +220,19 @@ def test_resume_view_and_no_open_issues_precondition_treat_escalated_as_open():
     assert problems[0]["ok"] is False
 
 
+def test_resume_view_counts_superseded_open_unless_replaced_by_a_fixed_issue():
+    data = {"open_issues": [
+        {"id": 3, "gate": "glsim", "status": "superseded", "superseded_by": 4},
+        {"id": 4, "gate": "glsim", "status": "fixed"},
+        {"id": 5, "gate": "glsim", "status": "superseded", "superseded_by": 6},
+        {"id": 6, "gate": "glsim", "status": "fixing"},
+        {"id": 7, "gate": "lint", "status": "superseded", "superseded_by": 4},
+        {"id": 8, "gate": "glsim", "status": "superseded"},
+    ], "gates": {}}
+    view = tr.resume_view({"workspace": ".", "state": data})
+    assert sorted(view["open_issues"]) == [5, 6, 7, 8]
+
+
 def test_list_shows_every_msde_verb():
     payload, _ = tr.run(["--skill", "msde", "--list"])
     assert {v["verb"] for v in payload["verbs"]} == {

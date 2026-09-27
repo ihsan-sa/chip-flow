@@ -139,6 +139,52 @@ def test_resume_summary_open_issues_includes_escalated_not_fixed_or_waived(tmp_p
     assert ids == {a["id"]}
 
 
+def test_issue_superseded_by_a_fixed_issue_of_the_same_gate(tmp_path):
+    """A finding re-dispatched as a new issue (the first work order refused
+    by a guard) closes the old one only by pointing at the fixed
+    replacement - never without a fix or a waiver of its own."""
+    ws = ws_empty(tmp_path)
+    st = state_mod.State.init(ws, "vde", "uart")
+    old = st.open_issue({"gate": "glsim", "fixer": "rtl"})
+    new = st.open_issue({"gate": "glsim", "fixer": "rtl"})
+    other = st.open_issue({"gate": "lint", "fixer": "rtl"})
+    st.update_issue(other["id"], status="fixed")
+    for kw in ({},                          # no --by
+               {"by": 999},                 # no such issue
+               {"by": old["id"]},           # itself
+               {"by": other["id"]},         # fixed, but another gate
+               {"by": new["id"]}):          # same gate, but not fixed yet
+        with pytest.raises(CheckError):
+            st.update_issue(old["id"], status="superseded", **kw)
+    with pytest.raises(CheckError, match="--by"):
+        st.update_issue(old["id"], status="fixed", by=new["id"])
+    assert old["status"] == "open"
+
+    st.update_issue(new["id"], status="fixed")
+    rec = st.update_issue(old["id"], status="superseded", by=new["id"])
+    assert rec["superseded_by"] == new["id"] and rec["closed"]
+    assert st.resume_summary()["open_issues"] == []
+
+    # the replacement reopened: the superseded one counts as open again
+    st.update_issue(new["id"], status="fixing")
+    ids = {i["id"] for i in st.resume_summary()["open_issues"]}
+    assert ids == {old["id"], new["id"]}
+
+
+def test_issue_superseded_through_the_cli(tmp_path):
+    ws = ws_empty(tmp_path)
+    st = state_mod.State.init(ws, "vde", "uart")
+    old = st.open_issue({"gate": "glsim", "fixer": "rtl"})
+    new = st.open_issue({"gate": "glsim", "fixer": "rtl"})
+    st.update_issue(new["id"], status="fixed")
+    st.save()
+    r, _ = state_mod.run(["issue", "--workspace", str(ws), "--id",
+                          str(old["id"]), "--status", "superseded",
+                          "--by", str(new["id"]), "--note", "re-dispatched"])
+    assert r["issue"]["status"] == "superseded"
+    assert r["issue"]["superseded_by"] == new["id"]
+
+
 def test_formal_gate_hash_covers_a_spec_yaml_depth_edit(tmp_path):
     """invalidation.yaml's `formal: [rtl, formal, spec_yaml]` (M5 - commit
     "invalidation: formal's own depth is a real gate input"):

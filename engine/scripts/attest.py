@@ -329,8 +329,11 @@ def build(ws: Path, max_report_age_h: float = 24.0) -> tuple[dict | None, list[s
     # state.json, or a waiver written before that requirement landed,
     # close an issue with no recorded reason or approver, which is exactly
     # the kind of gap release exists to refuse.
-    open_issues = [i for i in data.get("open_issues", [])
-                   if i.get("status") in ("open", "fixing", "escalated")
+    # A "superseded" issue is closed only while the issue that replaced
+    # it is a fixed one of the same gate (statelib.issue_unresolved).
+    issues = data.get("open_issues", [])
+    open_issues = [i for i in issues
+                   if statelib.issue_unresolved(i, issues)
                    or (i.get("status") == "waived"
                        and not (i.get("note") and i.get("approved_by")))]
     if open_issues:

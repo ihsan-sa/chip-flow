@@ -162,7 +162,10 @@ On gate fail (exit 1, `failing` findings with `kind`/`file`/`module`):
    `testbench` orders to the bench-writer in WORK-ORDER MODE, everything
    else (`netlist`, `sizing`, `review`) to the fixer. Orders inside one
    `parallel_groups` entry may run concurrently; groups run in sequence.
-   Mark issues `fixing` -> `fixed`/`escalated` (`state.py issue`).
+   Mark issues `fixing` -> `fixed`/`escalated` (`state.py issue`). An
+   issue whose finding went through again as a later issue's order closes
+   only as `--status superseded --by <that issue>`, a `fixed` issue of the
+   same gate.
 5. Declare what the fix actually changed:
 
    | fixer domain | files | declare | then re-run |

@@ -202,7 +202,10 @@ On gate fail (exit 1, result JSON has `failing` with a `kind`/`file`/
    entry (from the dispatch summary) may run concurrently since their
    files don't overlap; groups run in sequence. When in doubt, serialize -
    correctness beats wall clock. Mark issues `fixing` ->
-   `fixed`/`escalated` (`state.py issue`).
+   `fixed`/`escalated` (`state.py issue`). An issue whose finding went
+   through again as a later issue's order (say the first order was refused)
+   closes only as `--status superseded --by <that issue>`, which must be a
+   `fixed` issue of the same gate.
 5. Declare what the fix actually changed: `state.py edit --workspace <ws>
    --class <c> --note "fix <gate>"`. The domain -> class table:
 
