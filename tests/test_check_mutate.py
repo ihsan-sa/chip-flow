@@ -196,6 +196,107 @@ def test_baseline_that_does_not_build_says_so(tmp_path, capsys):
     assert "fails the visible tests" not in rem, out
 
 
+# sensor_counted_digital's shape: one process updates data, then valid, and
+# the tb reads data on RisingEdge(valid) - right on the RTL, where the two
+# nonblocking updates land in statement order. Through the yosys round trip
+# each flop got its own always block and Icarus ran valid's first, so the
+# unmutated design read the old data and the gate could never pass it.
+RTL_STROBE = """\
+module top (input wire clk, input wire rst, output reg [3:0] data,
+            output reg valid);
+  always @(posedge clk) begin
+    if (rst) begin
+      data  <= 4'd0;
+      valid <= 1'b0;
+    end else begin
+      data  <= data + 4'd1;
+      valid <= (data == 4'd4);
+    end
+  end
+endmodule
+"""
+TB_STROBE = """\
+import cocotb
+from cocotb.clock import Clock
+from cocotb.triggers import FallingEdge, RisingEdge
+
+# req: REQ-WRAP
+# bounded: a mutant that never raises valid must fail, not hang the run
+@cocotb.test(timeout_time=2, timeout_unit="us")
+async def test_data_on_valid(dut):
+    cocotb.start_soon(Clock(dut.clk, 10, unit="ns").start())
+    dut.rst.value = 1
+    await FallingEdge(dut.clk)
+    await FallingEdge(dut.clk)
+    dut.rst.value = 0
+    await RisingEdge(dut.valid)
+    assert int(dut.data.value) == {want}, int(dut.data.value)
+"""
+
+
+@pytest.mark.slow
+def test_output_read_on_another_outputs_edge_passes_the_baseline(tmp_path, capsys):
+    ws = make_ws(tmp_path, TB_STROBE.format(want=5))
+    (ws / "rtl" / "top.v").write_text(RTL_STROBE, encoding="utf-8")
+    # this tb checks one moment, so mutants survive: keep their proofs short
+    code = check_mutate.main(["--workspace", str(ws), "--size", str(SMALL_SIZE),
+                              "--seed", "1", "--pdr-timeout", "5"])
+    out = json.loads(capsys.readouterr().out)
+    assert code in (0, 1), out
+    assert out["total_mutants"] > 0, out
+
+
+@pytest.mark.slow
+def test_strobed_baseline_that_really_fails_is_still_refused(tmp_path, capsys):
+    ws = make_ws(tmp_path, TB_STROBE.format(want=9))
+    (ws / "rtl" / "top.v").write_text(RTL_STROBE, encoding="utf-8")
+    code = check_mutate.main(["--workspace", str(ws), "--size", str(SMALL_SIZE),
+                              "--seed", "1"])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 2, out
+    assert "unmutated design fails the visible tests" in out["remediation"]
+
+
+REGROUP_RTL = """\
+module top (input wire clk, input wire rst, output reg [1:0] data,
+            output reg valid, output reg other);
+  always @(posedge clk) begin
+    data  <= 2'd1;
+    valid <= 1'b1;
+  end
+  always @(negedge clk) other <= 1'b1;
+endmodule
+"""
+
+
+def test_regroup_flops_orders_one_clock_by_the_rtl(tmp_path):
+    import mutate_runner
+    rtl = tmp_path / "top.v"
+    rtl.write_text(REGROUP_RTL, encoding="utf-8")
+    src = f'  (* src = "{rtl}:3.3-6.6" *)'
+    net = "\n".join([
+        "module top(clk, rst, data, valid, other);",
+        src, "  always @(posedge clk)", "    valid <= 1'h1;",
+        src, "  always @(posedge clk)", "    data[1] <= 1'h0;",
+        f'  (* src = "{rtl}:7.3-7.42" *)',
+        "  always @(negedge clk)", "    other <= 1'h1;",
+        src, "  always @(posedge clk)", "    data[0] <= 1'h1;",
+        "  always @*", "    t = data;",
+        "  always @(posedge clk)", "    t2 = data;",
+        "endmodule", ""])
+    got = mutate_runner.regroup_flops(net)
+    # kept: the posedge flops are one block, data (line 4) before valid (5)
+    assert ("  always @(posedge clk) begin\n    data[1] <= 1'h0;\n"
+            "    data[0] <= 1'h1;\n    valid <= 1'h1;\n  end") in got
+    # suppressed: another edge, a combinational block and a blocking
+    # assignment each stay as they were
+    assert "  always @(negedge clk) begin\n    other <= 1'h1;\n  end" in got
+    assert "  always @*\n    t = data;" in got
+    assert "  always @(posedge clk)\n    t2 = data;" in got
+    assert got.count("always @(posedge clk) begin") == 1
+    assert "src" not in got
+
+
 def test_no_tb_modules_is_an_error(tmp_path, capsys):
     ws = make_ws(tmp_path, TB_STRONG)
     (ws / "tb" / "test_top.py").unlink()
