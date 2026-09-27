@@ -189,3 +189,99 @@ def test_real_mirror_passes_every_default_corner(tmp_path, capsys):
     assert set(out["corners"]) == {"tt", "ss", "ff", "sf", "fs"}
     for r in out["results"]:
         assert 18e-6 <= r["measures"]["iout_raw"] <= 32e-6, r
+
+
+# --- passive spread: poly resistor and MIM cap corners ----------------------
+
+PASSIVE_CORNERS = {"tt_pss", "tt_pff"}
+
+
+def _passive_ws(tmp_path: Path, device_line: str, lib_line: str) -> Path:
+    ws = make_ws(tmp_path)
+    (ws / "netlist" / "mirror.cir").write_text(
+        f"* netlist\n{device_line}\n", encoding="utf-8")
+    (ws / "tb" / "mirror_tb.cir").write_text(
+        BENCH_TEMPLATE.replace(".temp", lib_line + "\n.temp"),
+        encoding="utf-8")
+    return ws
+
+
+def _fake_eda_failing_on(tmp_path: Path, needle: str) -> Path:
+    """Like make_corner_sensitive_fake_eda, but the out-of-bounds ratio
+    comes back only for a deck holding `needle` - a passive section."""
+    eda = make_corner_sensitive_fake_eda(tmp_path)
+    eda.write_text(eda.read_text(encoding="utf-8").replace(
+        "sm141064.spice' ss\"", f"sm141064.spice' {needle}\""),
+        encoding="utf-8")
+    assert f"' {needle}\"" in eda.read_text(encoding="utf-8")
+    return eda
+
+
+def test_resistor_design_sweeps_the_passive_corners(tmp_path, monkeypatch,
+                                                    capsys):
+    # Red before passive corners: the sweep was the five MOS corners, R
+    # moved only with them, and a loop filter that fails at typical
+    # transistors with low R passed.
+    ws = _passive_ws(tmp_path, "xr1 a b vss ppolyf_u_1k r_width=2e-6 "
+                     "r_length=1e-5",
+                     ".lib '{{PDK}}/libs.tech/ngspice/sm141064.spice' "
+                     "{{RES_CORNER}}")
+    monkeypatch.setattr(sim_run, "EDA_BIN",
+                        _fake_eda_failing_on(tmp_path, "res_ff"))
+    code = check_sim_pvt.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert set(out["corners"]) == {"tt", "ss", "ff", "sf", "fs"} | PASSIVE_CORNERS
+    assert code == 1, out
+    # res_ff: the ff corner (R with the transistors) and tt_pff
+    failed = {r["corner"] for r in out["results"] if r["violations"]}
+    assert failed == {"ff", "tt_pff"}, out
+    passive = {r["corner"]: r["passive"] for r in out["results"]}
+    assert passive["tt_pff"] == "ff" and passive["sf"] == "typical"
+
+
+def test_a_spec_opts_into_the_passive_skew_corners(tmp_path, monkeypatch,
+                                                   capsys):
+    ws = _passive_ws(tmp_path, "xr1 a b vss ppolyf_u_1k r_width=2e-6 "
+                     "r_length=1e-5",
+                     ".lib '{{PDK}}/libs.tech/ngspice/sm141064.spice' "
+                     "{{RES_CORNER}}")
+    spec = ws / "spec" / "spec.yaml"
+    spec.write_text(spec.read_text() + "corners: [ss_pff, ff_pss]\n")
+    monkeypatch.setattr(sim_run, "EDA_BIN",
+                        _fake_eda_failing_on(tmp_path, "res_ff"))
+    code = check_sim_pvt.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert {"ss_pff", "ff_pss"} | PASSIVE_CORNERS <= set(out["corners"])
+    failed = {r["corner"] for r in out["results"] if r["violations"]}
+    assert code == 1 and failed == {"ff", "tt_pff", "ss_pff"}, out
+
+
+def test_mim_bench_that_hardcodes_typical_is_a_finding(tmp_path, monkeypatch,
+                                                      capsys):
+    ws = _passive_ws(tmp_path, "xc1 a vss cap_mim_2f0fF c_width=1e-5 "
+                     "c_length=1e-5",
+                     ".lib '{{PDK}}/libs.tech/ngspice/sm141064.spice' "
+                     "mimcap_typical")
+    monkeypatch.setattr(sim_run, "EDA_BIN",
+                        _fake_eda_failing_on(tmp_path, "no-such-section"))
+    code = check_sim_pvt.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert PASSIVE_CORNERS <= set(out["corners"])
+    assert code == 1, out
+    kinds = [(v["kind"], v["refs"]) for v in out["violations"]]
+    assert kinds == [("passive_corner_unselected", ["MIM_CORNER"])], out
+
+
+def test_mim_bench_with_the_placeholder_passes(tmp_path, monkeypatch, capsys):
+    ws = _passive_ws(tmp_path, "xc1 a vss cap_mim_2f0fF c_width=1e-5 "
+                     "c_length=1e-5",
+                     ".lib '{{PDK}}/libs.tech/ngspice/sm141064.spice' "
+                     "{{MIM_CORNER}}")
+    monkeypatch.setattr(sim_run, "EDA_BIN",
+                        _fake_eda_failing_on(tmp_path, "no-such-section"))
+    code = check_sim_pvt.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0, out
+    decks = {r["corner"]: Path(r["deck"]).read_text() for r in out["results"]}
+    assert "mimcap_ss" in decks["tt_pss"] and "mimcap_ff" in decks["tt_pff"]
+    assert "mimcap_typical" in decks["fs"]

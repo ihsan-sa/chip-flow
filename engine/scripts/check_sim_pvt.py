@@ -18,7 +18,10 @@ cannot skip a default corner (say, drop `ss` and have 'meets at typical,
 loses headroom at slow and hot' go uncaught) by simply not naming it. A
 `{grid: ...}` replaces the five with a PVT grid the spec declares, and
 corners.grid_corners() refuses one that does not still span typical/ss/ff
-and both temperature extremes.
+and both temperature extremes. A design whose netlist uses a poly/diffusion
+resistor or a MIM cap also sweeps corners.yaml's passive_corners (the
+resistor and MIM spread the PDK keeps in its own sections), whatever form
+the spec's `corners` takes.
 """
 from __future__ import annotations
 
@@ -48,8 +51,11 @@ def run(argv=None):
 
     ws = Path(args.workspace)
     spec = speclib.load_spec(ws / "spec" / "spec.yaml")
+    passives = corners_mod.passive_devices(sim_run.find_netlist(ws).read_text(
+        encoding="utf-8", errors="replace"))
     corner_list = corners_mod.spec_corners(corners_mod.load(),
-                                           spec.get("corners", "default"))
+                                           spec.get("corners", "default"),
+                                           passives)
 
     result = sim_run.run_workspace_benches(
         ws, corners=corner_list, timeout=args.timeout, check="sim_pvt")

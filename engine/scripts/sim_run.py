@@ -12,11 +12,15 @@ For every `tb/*.cir` with a matching `tb/*.bounds.json` sidecar, at every
 requested corner (default: corners.py's own default_corners(), design.md
 5's "the four extremes with typical, never fewer"), materializes a runnable
 deck - the bench file's own `{{PDK}}`/`{{CORNER}}`/`{{TEMP_C}}`/`{{VDD}}`/
-`{{NETLIST}}`/`{{SIZING}}` placeholders filled in (simlib.materialize) -
+`{{NETLIST}}`/`{{SIZING}}`/`{{RES_CORNER}}`/`{{MIM_CORNER}}` placeholders
+filled in (simlib.materialize) -
 runs it through `eda ngspice -b`, and scores it against the sidecar
 (simlib.compare_bounds; a bound whose optional `corners` list does not
 name this corner is skipped there) after checking for a known ngspice failure
-signature regardless of exit code (simlib.detect_engine_errors).
+signature regardless of exit code (simlib.detect_engine_errors). A bench
+over a netlist with a poly resistor or MIM cap that hard-codes the typical
+passive section while the sweep moves it is a passive_corner_unselected
+error (unselected_passives).
 
 check_netlist_lint.py, check_sim_tt.py, check_sim_pvt.py and
 check_bench_strength.py call run_workspace_benches()/run_bench_at_corner()
@@ -122,13 +126,25 @@ def load_sizing(ws: Path) -> dict:
 # `.lib <corner> ... .endl` block {{CORNER}} already selects (confirmed by
 # reading the real file while wiring up corpus/ade/r2r_dac's bench: `rm1`'s
 # own default r_rsh0=rsh_rm1 is undefined - a real "Formula() error" from
-# ngspice, not a guess - unless one of these is also entered). Only
-# typical/ss/ff have their own resistor corner section; sf/fs (mixed
-# transistor-threshold corners) have no resistor-side equivalent, so a
-# resistor-only bench at either falls back to res_typical - there is no
-# other sane choice the PDK itself offers.
-RES_LIB_SECTION = {"typical": "res_typical", "ss": "res_ss", "ff": "res_ff",
-                   "sf": "res_typical", "fs": "res_typical"}
+# ngspice, not a guess - unless one of these is also entered), and a MIM
+# cap's in `.lib mimcap_<corner>`. {{RES_CORNER}} and {{MIM_CORNER}} pick
+# them from corners.passive_of(corner): the corner's own `passive` key (a
+# passive corner), else its process where the PDK has a passive section
+# (typical/ss/ff), else typical (sf/fs have none).
+PASSIVE_PLACEHOLDERS = {"resistor": "RES_CORNER", "mim_cap": "MIM_CORNER"}
+
+
+def unselected_passives(bench_text: str, passives: list[str],
+                        corner_list: list[dict]) -> list[str]:
+    """The placeholders a bench must use and does not: when the sweep
+    moves a passive off typical, a bench over a netlist with that passive
+    that hard-codes `res_typical`/`mimcap_typical` instead of
+    {{RES_CORNER}}/{{MIM_CORNER}} would simulate every passive corner at
+    typical and pass them all unseen. Pure."""
+    if all(corners_mod.passive_of(c) == "typical" for c in corner_list):
+        return []
+    return [PASSIVE_PLACEHOLDERS[d] for d in passives
+            if "{{" + PASSIVE_PLACEHOLDERS[d] + "}}" not in bench_text]
 
 
 def build_subs(t_root: Path, netlist_path: Path, corner: dict,
@@ -139,7 +155,8 @@ def build_subs(t_root: Path, netlist_path: Path, corner: dict,
         # from a relative --workspace would not resolve there
         "NETLIST": str(Path(netlist_path).resolve()),
         "CORNER": corner["process"],
-        "RES_CORNER": RES_LIB_SECTION.get(corner["process"], "res_typical"),
+        "RES_CORNER": f"res_{corners_mod.passive_of(corner)}",
+        "MIM_CORNER": f"mimcap_{corners_mod.passive_of(corner)}",
         "TEMP_C": corner["temp_c"],
         "VDD": f"{corners_mod.resolve_vdd(corner, nominal_vdd):.6g}",
         "SIZING": simlib.sizing_param_line(sizing),
@@ -195,6 +212,7 @@ def run_bench_at_corner(eda_bin: Path, bench_name: str,
 
     return {
         "bench": bench_name, "corner": corner["name"], "process": corner["process"],
+        "passive": corners_mod.passive_of(corner),
         "temp_c": corner["temp_c"], "vdd": subs["VDD"], "returncode": rc,
         "measures": measures, "engine_errors": err_kinds,
         "violations": violations, "deck": str(deck_path),
@@ -234,18 +252,32 @@ def run_workspace_benches(ws: Path, eda_bin: Path | None = None,
 
     out_dir = ws / out_subdir
     shutil.rmtree(out_dir, ignore_errors=True)
+    passives = corners_mod.passive_devices(
+        netlist_path.read_text(encoding="utf-8", errors="replace"))
 
     results = []
+    unselected = []
     for bench_path, bounds_path in find_benches(ws):
         bounds = simlib.load_bounds(bounds_path)
         template_text = bench_path.read_text(encoding="utf-8")
+        for token in unselected_passives(template_text, passives, corner_list):
+            unselected.append(checklib.violation(
+                check, "error", f"tb/{bench_path.name}", None,
+                "passive_corner_unselected", [token],
+                f"{bench_path.name}: the netlist uses a device whose spread "
+                f"lives in the PDK's passive sections, and the sweep moves it "
+                f"off typical, but the bench never uses {{{{{token}}}}} - "
+                f"every passive corner would simulate at typical. Replace "
+                f"the bench's hard-coded `.lib ... res_typical` / "
+                f"`mimcap_typical` line with `.lib ... {{{{{token}}}}}`",
+                "sim_run"))
         for corner in corner_list:
             subs = build_subs(t_root, netlist_path, corner, nominal_vdd, sizing)
             results.append(run_bench_at_corner(
                 eda_bin, bench_path.name, template_text, bounds, subs,
                 corner, out_dir, timeout, check=check))
 
-    violations = [v for r in results for v in r["violations"]]
+    violations = unselected + [v for r in results for v in r["violations"]]
     return {"top": spec.get("top"), "corners": [c["name"] for c in corner_list],
            "results": results, "violations": violations}
 

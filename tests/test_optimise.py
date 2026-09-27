@@ -334,7 +334,8 @@ def make_rtl_ws(tmp_path: Path, monkeypatch) -> Path:
     git(ws, "-c", "user.name=t", "-c", "user.email=t@l", "commit", "-qm", "init")
 
     lib_root = tmp_path / "tc"
-    lib = lib_root / optimise_check_synth().LIBERTY_REL
+    cs = optimise_check_synth()
+    lib = cs.liberty_path(lib_root, cs.DEFAULT_STD_CELL)
     lib.parent.mkdir(parents=True)
     lib.write_text("library (fake) {}\n", encoding="utf-8")
     monkeypatch.setattr(optimise_check_synth(), "toolchain_root",

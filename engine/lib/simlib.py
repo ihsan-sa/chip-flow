@@ -38,7 +38,8 @@ Deck templating (materialize, new at M8): a bench/netlist file is plain
 SPICE with `{{TOKEN}}` placeholders - `{{PDK}}` (the PDK root, e.g. for a
 `.lib '{{PDK}}/libs.tech/ngspice/sm141064.spice' {{CORNER}}` line),
 `{{CORNER}}` (an ngspice `.lib` section name from corners.yaml: typical,
-ss, ff, sf, fs), `{{TEMP_C}}`, `{{VDD}}`, and `{{SIZING}}` (a generated
+ss, ff, sf, fs), `{{RES_CORNER}}`/`{{MIM_CORNER}}` (the PDK's passive
+sections, res_<p>/mimcap_<p>, p from corners.passive_of), `{{TEMP_C}}`, `{{VDD}}`, and `{{SIZING}}` (a generated
 `.param name=value ...` line built from a block's optional sizing/
 sizing.yaml, section 4's optimise target - empty when the block has none).
 Double braces are deliberate: ngspice's OWN expression syntax is a single
