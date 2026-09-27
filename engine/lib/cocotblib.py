@@ -194,7 +194,7 @@ def run_cocotb(build_dir: Path, test_dir: Path, sources: list[Path],
 
 def parse_results_xml(xml_path: Path) -> dict[str, dict]:
     """{test_function_name: {"passed": bool, "skipped": bool, "message":
-    str|None}} from a JUnit-shaped results.xml (cocotb_tools.runner's own
+    str|None, "type": str|None, "traceback": str}} from a JUnit-shaped results.xml (cocotb_tools.runner's own
     output format - <testcase name="module.function"> with a
     <failure>/<error>/<skipped> child). Only the function part of `name` is
     kept, matching scan_requirement_tags's keys.
@@ -228,5 +228,9 @@ def parse_results_xml(xml_path: Path) -> dict[str, dict]:
             "skipped": False,
             "message": (bad.attrib.get("message") or (bad.text or "").strip()
                        if bad is not None else None),
+            # the exception class and its traceback, for check_holdout's
+            # stimulus-fault split; never put in a finding as they stand.
+            "type": bad.attrib.get("type") if bad is not None else None,
+            "traceback": (bad.text or "") if bad is not None else "",
         }
     return out

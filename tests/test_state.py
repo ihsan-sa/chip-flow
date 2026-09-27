@@ -858,3 +858,52 @@ def test_init_of_a_nested_msde_side_refuses_a_name_the_split_did_not_give(
     state_mod.State.init(parent / "digital", "vde", "r2r_dac")
     # outside an msde workspace a directory called analog is just a name
     state_mod.State.init(tmp_path / "analog", "ade", "analog")
+
+
+# ---- holdout_stimulus_edit: a held-out stimulus fix is declared only when
+# check_holdout_edit.py proves nothing that judges moved.
+
+STIM_BASE = """\
+import cocotb
+from helpers import setup
+
+# req: REQ-1
+@cocotb.test()
+async def test_a(dut):
+    fb, rises = await setup(dut)
+    assert len(rises) >= 2, "stalled"
+"""
+
+
+def _stimulus_ws(tmp_path):
+    ws, st = _pinned_holdout(tmp_path)
+    (ws / "holdout" / "t1.py").write_text(STIM_BASE, encoding="utf-8")
+    st.apply_edit("holdout_edit")
+    st.record_holdout("tb-writer")
+    st.snapshot("pre-fix-holdout-a1", ["holdout/t1.py"])
+    return ws, st
+
+
+def test_stimulus_edit_that_only_moves_stimulus_is_declared(tmp_path):
+    ws, st = _stimulus_ws(tmp_path)
+    (ws / "holdout" / "t1.py").write_text(
+        STIM_BASE.replace("fb, rises =", "fb, rises, _ ="), encoding="utf-8")
+    rec = st.apply_edit("holdout_stimulus_edit",
+                        baseline="pre-fix-holdout-a1")
+    assert rec["human_hold"] == 1 and rec["baseline"] == "pre-fix-holdout-a1"
+    assert st.holdout_drift()["declared"]["class"] == "holdout_stimulus_edit"
+
+
+def test_stimulus_edit_that_loosens_an_assert_is_refused(tmp_path):
+    ws, st = _stimulus_ws(tmp_path)
+    (ws / "holdout" / "t1.py").write_text(
+        STIM_BASE.replace("fb, rises =", "fb, rises, _ =")
+        .replace(">= 2", ">= 1"), encoding="utf-8")
+    with pytest.raises(CheckError, match="holdout_judgement_changed"):
+        st.apply_edit("holdout_stimulus_edit", baseline="pre-fix-holdout-a1")
+    assert st.holdout_drift()["declared"] is None
+    # and it cannot be declared without a baseline at all
+    with pytest.raises(CheckError, match="--baseline"):
+        st.apply_edit("holdout_stimulus_edit")
+    with pytest.raises(CheckError, match="holdout_stimulus_edit only"):
+        st.apply_edit("tb_edit", baseline="pre-fix-holdout-a1")

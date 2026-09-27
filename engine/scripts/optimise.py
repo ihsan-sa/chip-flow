@@ -672,7 +672,10 @@ def run_rtl_start(argv=None):
     rtl_rels = sorted(p.relative_to(ws).as_posix()
                       for p in (ws / "rtl").iterdir()
                       if p.is_file() and p.suffix in RTL_SUFFIXES)
-    liberty = check_synth.toolchain_root() / check_synth.LIBERTY_REL
+    # the same liberty the synth gate picks for this spec (check_synth
+    # choose_std_cell), so a trial's area is the area synth will report
+    liberty = check_synth.liberty_path(check_synth.toolchain_root(),
+                                       check_synth.choose_std_cell(spec))
     if not liberty.is_file():
         raise CheckError(f"liberty file not found: {liberty}")
 

@@ -60,6 +60,9 @@ CLI (docs/design.md 1.1 script contract: argparse, JSON to stdout, exit 0 ok
     state.py record-gate --gate NAME --result gate_result.json [--phase PN] ...
     state.py artifact --name rtl --path rtl ...
     state.py edit --class rtl_edit [--refs U1 U2] [--note TEXT] ...
+    state.py edit --class holdout_stimulus_edit --baseline LABEL ...
+        (refused unless check_holdout_edit.py finds holdout/ still judges
+        exactly as state_snapshots/LABEL/holdout did - stimulus only)
     state.py rehash [--names rtl tb] ...
     state.py spawn --role fixer --model opus [--effort high] [--tokens N] ...
     state.py toolchain --image PATH [--versions-sha SHA] [--pdk NAME] [--pdk-sha SHA]
@@ -155,6 +158,7 @@ DEFAULT_BUDGETS = {
     "fix_loops": {},   # populated per gate on first budget touch, see budget()
 }
 SNAP_DIR = "state_snapshots"
+STIMULUS_EDIT_CLASS = "holdout_stimulus_edit"
 # Standard workspace layout (docs/design.md 1.4): init owns the scaffold so
 # every block starts with the full set regardless of skill (rtl/ for /vde,
 # netlist/ for /ade, both harmless if unused).
@@ -511,7 +515,8 @@ class State:
         self._log("artifact", name=name, path=rel)
 
     def apply_edit(self, edit_class: str, refs: list[str] | None = None,
-                   note: str | None = None) -> dict:
+                   note: str | None = None,
+                   baseline: str | None = None) -> dict:
         """Record a declared edit: stamp the invalidation map's stale set.
         Marks land on RECORDED gates (an unrun gate has no result to
         distrust) and on the mapped derived artifacts (registry entries are
@@ -524,6 +529,10 @@ class State:
             raise CheckError(
                 f"unknown edit class {edit_class!r} for skill "
                 f"{self._skill()!r} (known: {', '.join(sorted(skill_classes))})")
+        if edit_class == STIMULUS_EDIT_CLASS:
+            self._check_stimulus_edit(baseline)
+        elif baseline is not None:
+            raise CheckError(f"--baseline is for {STIMULUS_EDIT_CLASS} only")
         ts = now()
         mark = {"ts": ts, "edit_class": edit_class, "refs": refs or [],
                 "human_hold": ec["human_hold"]}
@@ -547,10 +556,29 @@ class State:
                "note": note, "human_hold": ec["human_hold"],
                "gates": list(ec["gates"]), "gates_marked": marked_gates,
                "stale_artifacts": list(ec["stale_artifacts"])}
+        if baseline is not None:
+            rec["baseline"] = baseline
         self.data["edits"].append(rec)
         self._log("edit", edit_class=edit_class, refs=refs or [],
                   human_hold=ec["human_hold"])
         return rec
+
+    def _check_stimulus_edit(self, baseline: str | None) -> None:
+        """holdout_stimulus_edit may only move stimulus: refuse it unless
+        holdout/ still judges exactly as the pre-fix snapshot did."""
+        if not baseline:
+            raise CheckError(
+                f"{STIMULUS_EDIT_CLASS} needs --baseline <the pre-fix "
+                "snapshot label>: it is declared only after "
+                "check_holdout_edit.py proves no assert, bound or expected "
+                "value moved")
+        import check_holdout_edit
+        found = check_holdout_edit.check(self.path.parent, baseline)
+        if found:
+            raise CheckError(
+                f"{STIMULUS_EDIT_CLASS} refused - the edit changes what the "
+                "held-out tests judge, not only their stimulus: "
+                + "; ".join(f"{v['kind']}: {v['msg']}" for v in found[:5]))
 
     def rehash(self, names: list[str] | None = None) -> dict:
         """Re-hash artifacts. Explicit --names = "I regenerated these": their
@@ -1120,6 +1148,8 @@ def run(argv=None):
     p.add_argument("--refs", nargs="*", default=None,
                    help="module/file names the edit touches (for the record)")
     p.add_argument("--note")
+    p.add_argument("--baseline", help="holdout_stimulus_edit only: the "
+                   "pre-fix snapshot label its holdout/ is checked against")
 
     p = sub.add_parser("rehash", help="re-hash artifacts; --names = "
                        "force-clear their stale marks (regenerated)")
@@ -1273,7 +1303,8 @@ def _mutate(st: "State", args, result: dict):
         result.update(name=args.name, path=args.path,
                       sha256=st.data["artifacts"][args.name]["sha256"])
     elif args.cmd == "edit":
-        rec = st.apply_edit(args.edit_class, args.refs, args.note)
+        rec = st.apply_edit(args.edit_class, args.refs, args.note,
+                            args.baseline)
         result.update(edit=rec)
     elif args.cmd == "rehash":
         result.update(artifacts=st.rehash(args.names))

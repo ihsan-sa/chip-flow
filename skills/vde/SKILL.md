@@ -189,6 +189,10 @@ On gate fail (exit 1, result JSON has `failing` with a `kind`/`file`/
    coverage gap - `requirement_no_test`, `untagged_holdout_test`, a
    `cover` line/toggle gap) goes to the tb-writer in WORK-ORDER MODE
    (`skills/vde/agents/tb-writer.md`), never the generic fixer; a
+   `holdout_stimulus` order (`holdout_stimulus_fault`: a held-out test
+   died in its own stimulus code, no RTL at fault) goes to the tb-writer
+   too, with the snapshot label from step 2 so it can prove its edit left
+   every assert, bound and expected value alone; a
    `formal` order (`property_failed`, `cover_not_reached`, a bounded
    property, a formal depth to set) goes to the property-writer in
    WORK-ORDER MODE (`skills/vde/agents/property-writer.md`); every other
@@ -206,6 +210,7 @@ On gate fail (exit 1, result JSON has `failing` with a `kind`/`file`/
    |---|---|---|
    | rtl | rtl_edit | the design's own text moved |
    | testbench | tb_edit | tb/ moved - re-run sim, mutate, cover |
+   | holdout_stimulus | holdout_stimulus_edit | holdout/ stimulus moved; `--baseline pre-fix-holdout-a<attempt>` is required, and the edit is refused if an assert, bound or expected value moved (check_holdout_edit.py) |
    | formal | formal_edit | formal/ moved - re-run formal, mutate |
    | formal | spec_formal_edit | only spec.yaml's `formal:` key moved (depth, cover_depth) - re-run formal, cover; declare both classes when formal/ moved too |
    | synth | rtl_edit | a synth finding is almost always an RTL fix (fix_dispatch's own guidance) - the edit still lands in rtl/ |

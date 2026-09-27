@@ -16,11 +16,27 @@ id ... never the held-out test"). An untagged holdout test can be named by
 FILE (which file lacks a tag is a structural fact about the corpus, not the
 test's hidden behavior) but never by its content.
 
+A held-out test that dies in its OWN stimulus code is not a design fault:
+held-out tests import the visible tb/ helpers, so a helper that changes
+shape (returns three values where the test unpacks two) breaks them with
+no RTL at fault. Such a failure is `holdout_stimulus_fault`, routed to the
+test's writer (who may adapt stimulus and helper calls, and nothing that
+judges - check_holdout_edit.py and state.py's `holdout_stimulus_edit`
+enforce that), never to the rtl fixer. It is one only when all three hold:
+the exception is not an AssertionError; the innermost traceback frame is a
+file inside the workspace (holdout/ or tb/), not cocotb or the simulator;
+and that frame's line is neither an `assert` nor a `raise` (an `int()` of
+an X-valued signal inside an assert raises ValueError from cocotb's own
+code, and a tb helper's `raise TimeoutError("no lock")` is a helper judging
+the design - both are the design's). Anything else stays `holdout_failed`. The finding names the
+exception class only, never the test, its file or its message.
+
 Fault this gate must catch (gates.yaml): "UART parity inverted where the
 visible tests do not look" - a bug only a held-out test, not tb/, exercises.
 """
 from __future__ import annotations
 
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -34,6 +50,7 @@ import speclib  # noqa: E402
 from checklib import CheckError  # noqa: E402
 
 SCRIPT = "check_holdout"
+FRAME_RE = re.compile(r'^\s*File "([^"]+)", line \d+, in \S+\s*$')
 BUILD_SUBDIR = "log/holdout_build"
 RESULTS_NAME = "holdout_results.xml"
 
@@ -44,6 +61,30 @@ def collect_sources(ws: Path) -> list[Path]:
     if not files:
         raise CheckError(f"no .v/.sv files under {rtl_dir}")
     return files
+
+
+def stimulus_fault(res: dict, ws: Path) -> str | None:
+    """The exception class when a failed held-out test died in its own
+    stimulus code (see the module docstring), else None."""
+    etype = res.get("type") or ""
+    if not etype or etype.rsplit(".", 1)[-1] == "AssertionError":
+        return None
+    lines = (res.get("traceback") or "").splitlines()
+    frames = [(i, m.group(1)) for i, line in enumerate(lines)
+              if (m := FRAME_RE.match(line))]
+    if not frames:
+        return None
+    i, path = frames[-1]
+    try:
+        inside = Path(path).resolve().is_relative_to(ws.resolve())
+    except OSError:
+        return None
+    code = lines[i + 1].strip() if i + 1 < len(lines) else ""
+    # an assert or a raise in workspace code is a judgement of the design
+    # (check_holdout_edit.py counts a raise as one too), not stimulus
+    if not inside or re.match(r"(assert|raise)\b", code):
+        return None
+    return etype.rsplit(".", 1)[-1]
 
 
 def run(argv=None):
@@ -93,6 +134,14 @@ def run(argv=None):
                 "holdout", "error", None, None, "test_skipped", refs,
                 f"a held-out test for requirement(s) {', '.join(refs)} was "
                 "skipped - it never ran, so it cannot cover them", "cocotb"))
+            continue
+        etype = stimulus_fault(res, ws)
+        if etype:
+            violations.append(checklib.violation(
+                "holdout", "error", None, None, "holdout_stimulus_fault",
+                refs, f"a held-out test for requirement(s) {', '.join(refs)} "
+                f"died in its own stimulus code ({etype}) before any assert "
+                "judged the design", "cocotb"))
             continue
         violations.append(checklib.violation(
             "holdout", "error", None, None, "holdout_failed", refs,

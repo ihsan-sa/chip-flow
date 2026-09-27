@@ -227,6 +227,16 @@ edit_classes:
       stale_artifacts: []
       gates: [holdout]
       human_hold: 2
+    holdout_stimulus_edit:
+      # the fix for a holdout_stimulus_fault: holdout/ stimulus and helper
+      # calls only. state.py refuses to declare it without --baseline (the
+      # pre-fix snapshot label) and runs check_holdout_edit.py against it,
+      # so an edit that moved an assert, bound or expected value is never
+      # recorded as this class. That check is why it holds 1, not 2.
+      mutates: [holdout]
+      stale_artifacts: []
+      gates: [holdout]
+      human_hold: 1
     harden_config_edit:
       mutates: [harden_config, harden_override, harden_info]
       stale_artifacts: []
