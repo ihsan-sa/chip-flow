@@ -130,6 +130,24 @@ def test_declared_device_missing_from_netlist(tmp_path, monkeypatch, capsys):
     assert "declared_device_missing" in kinds
 
 
+def test_a_declared_b_source_is_not_a_missing_device(tmp_path, monkeypatch, capsys):
+    # the declared-device check read only `x` lines, so declaring a
+    # behavioural source (which bench_strength mutates) failed lint
+    netlist = GOOD_NETLIST.replace(
+        ".ends", "bcmp iout vss v='v(iref) > 1 ? 3.3 : 0'\n.ends")
+    ws = make_ws(tmp_path, netlist_text=netlist)
+    (ws / "spec" / "spec.yaml").write_text(
+        SPEC_YAML.replace("[xmref, xmout]", "[xmref, xmout, bcmp]"),
+        encoding="utf-8")
+    eda = make_fake_eda(tmp_path, CLEAN_STDOUT)
+    monkeypatch.setattr(sim_run, "EDA_BIN", eda)
+    check_netlist_lint.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    missing = [v for v in out["violations"]
+               if v["kind"] == "declared_device_missing"]
+    assert not missing, out
+
+
 def test_floating_node_static_scan(tmp_path, monkeypatch, capsys):
     netlist = GOOD_NETLIST + "xmextra iout unused_gate 0 0 nfet_03v3 w=1e-6 l=1e-6\n"
     ws = make_ws(tmp_path, netlist_text=netlist)

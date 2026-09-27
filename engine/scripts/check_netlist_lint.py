@@ -65,7 +65,9 @@ def static_violations(ws: Path, spec: dict, netlist_path: Path,
                 "subcircuits", "netlistlib"))
 
     declared = spec.get("devices") or []
-    device_refs = {d["ref"] for d in devices}
+    # every element counts, not only `x` lines: a declared behavioural
+    # source (`b...`) is a real device bench_strength mutates
+    device_refs = {e["ref"] for e in netlistlib.parse_elements(text)}
     for ref in declared:
         if ref not in device_refs:
             violations.append(checklib.violation(

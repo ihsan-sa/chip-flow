@@ -130,6 +130,21 @@ def _norm_json_canonical(path: Path) -> bytes:
                       separators=(",", ":")).encode("utf-8")
 
 
+def _norm_json_canonical_sans_formal(path: Path) -> bytes:
+    """json_canonical of spec.yaml without its top-level `formal:` key - the
+    spec as every vde gate that never reads `formal:` sees it (only
+    check_formal.py does), so a formal-depth-only edit leaves their recorded
+    passes fresh while any other edit still changes this hash. A document
+    that is not a mapping raises, so hash_artifact's raw fallback takes
+    over (fail-safe: over-invalidates, never under)."""
+    doc = yaml.safe_load(_text(path.read_bytes()))
+    if not isinstance(doc, dict):
+        raise ValueError(f"{path} is not a mapping")
+    doc = {k: v for k, v in doc.items() if k != "formal"}
+    return json.dumps(doc, sort_keys=True, ensure_ascii=True,
+                      separators=(",", ":")).encode("utf-8")
+
+
 def _norm_dir_text(path: Path) -> bytes:
     """All files under a directory, name-sorted, each EOL-normalized. Only
     defined for directories (rtl/, tb/, holdout/, ...); a file input raises
@@ -156,6 +171,7 @@ def _norm_dir_text(path: Path) -> bytes:
 NORMALIZERS = {
     "text_eol": _norm_text_eol,
     "json_canonical": _norm_json_canonical,
+    "json_canonical_sans_formal": _norm_json_canonical_sans_formal,
     "dir_text": _norm_dir_text,
 }
 

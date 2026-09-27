@@ -16,6 +16,8 @@ SCRIPTS = ENGINE / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(ENGINE / "lib"))
 
+import pytest  # noqa: E402
+
 import check_bench_strength  # noqa: E402
 import sim_run  # noqa: E402
 
@@ -682,3 +684,119 @@ def test_near_zero_measures_needs_every_bench_to_agree():
     nz = check_bench_strength.near_zero_measures
     assert nz(by_bench, both, tt) == {"v_low"}
     assert nz(by_bench, one, tt) == set()
+
+
+# ------------------------------------------------ devices no mutant covers
+# A device the mutant generator cannot see (a behavioural B source, an E/G
+# controlled source, ...) must be named in the report, never dropped from
+# it, and never counted in the killed tally.
+
+BSRC_LINE = "bcmp flag vss v='v(iout) > 1 ? 3.3 : 0'"
+
+
+def make_lines_fake_eda(tmp_path: Path, lines: list[str]) -> Path:
+    """make_reference_check_fake_eda's detector over any reference lines:
+    the ratio is 2.0 only while every line survives verbatim."""
+    fake_root = tmp_path / "fake_toolchain"
+    (fake_root / "foss" / "pdks" / "gf180mcuD").mkdir(parents=True)
+    checks = "".join(
+        f"grep -qF -- {json.dumps(ln)} \"$combo\" || ok=0\n" for ln in lines)
+    script = tmp_path / "fake_eda"
+    script.write_text(
+        "#!/usr/bin/env bash\n"
+        "if [ \"$1\" = --print-toolchain-root ]; then\n"
+        f"  echo '{fake_root}'\n  exit 0\nfi\n"
+        "deck=\"$3\"\n"
+        "inc=$(grep -oE \"\\.include '[^']+'\" \"$deck\" | tail -1 | "
+        "sed -E \"s/\\.include '//; s/'$//\")\n"
+        "combo=$(mktemp)\n"
+        "cat \"$deck\" \"$inc\" > \"$combo\" 2>/dev/null\n"
+        "ok=1\n" + checks +
+        "rm -f \"$combo\"\n"
+        "if [ \"$ok\" = 1 ]; then ratio=2.0; else ratio=9.0; fi\n"
+        "echo\n"
+        "echo '  Measurements for Transient Analysis'\n"
+        "echo \"iout_ratio            =  $ratio\"\n",
+        encoding="utf-8")
+    script.chmod(script.stat().st_mode | stat.S_IEXEC)
+    return script
+
+
+REF_LINES = ["xmref iref_node iref_node vss vss nfet_03v3 w=4e-6 l=5e-7",
+             "xmout iout iref_node vss vss nfet_03v3 w=8e-6 l=5e-7",
+             "iref vdd iref_node dc 10e-6"]
+
+
+def run_with_extra(tmp_path, monkeypatch, capsys, extra: str,
+                   devices: str = "[xmout]"):
+    # xmout alone keeps each run to a few mutants (fast); xmref is then an
+    # undeclared device the report must name too
+    ws = make_ws(tmp_path, NETLIST.replace(".ends", extra + "\n.ends"))
+    (ws / "spec" / "spec.yaml").write_text(
+        SPEC_YAML.replace("[xmref, xmout, iref]", devices), encoding="utf-8")
+    ref = [ln for ln in [*REF_LINES, *extra.splitlines()]
+           if not ln.startswith("+")]
+    monkeypatch.setattr(sim_run, "EDA_BIN", make_lines_fake_eda(tmp_path, ref))
+    code = check_bench_strength.main(["--workspace", str(ws)])
+    return code, json.loads(capsys.readouterr().out)
+
+
+def test_a_declared_b_source_is_mutated_and_killed(tmp_path, monkeypatch, capsys):
+    code, out = run_with_extra(tmp_path, monkeypatch, capsys, BSRC_LINE,
+                               "[xmref, xmout, bcmp]")
+    assert code == 0, out
+    assert out["mutants"]["bcmp_output_stuck"]["killed"], out
+    assert out["mutants"]["bcmp_gain_halved"]["killed"], out
+    assert out["devices_total"] == out["devices_mutated"] == 3, out
+    assert out["unmutated"] == [], out
+
+
+def test_b_source_mutants_keep_the_expression_delimiters():
+    import netlistlib
+    text = BSRC_LINE + "\nbx a 0 i={v(b)*2} tc1=0\n"
+    got = {m["id"]: m["apply"](text).splitlines()
+           for m in netlistlib.device_mutants(text, ["bcmp", "bx"])}
+    assert got["bcmp_output_stuck"][0] == "bcmp flag vss v=0"
+    assert got["bcmp_gain_halved"][0] == \
+        "bcmp flag vss v='(v(iout) > 1 ? 3.3 : 0)*0.5'"
+    assert got["bx_gain_halved"][1] == "bx a 0 i={(v(b)*2)*0.5} tc1=0"
+
+
+def test_an_undeclared_b_source_is_named_not_counted(tmp_path, monkeypatch, capsys):
+    code, out = run_with_extra(tmp_path, monkeypatch, capsys, BSRC_LINE)
+    assert code == 1 and not errors(out), out
+    warn = [v for v in out["violations"] if v["kind"] == "device_undeclared"]
+    assert sorted(v["refs"] for v in warn) == [["bcmp"], ["xmref"]], out
+    assert {"device": "bcmp", "kind": "behavioural_source",
+            "reason": "not in spec.yaml devices"} in out["unmutated"], out
+    assert (out["devices_total"], out["devices_mutated"]) == (3, 1), out
+    assert not any(m.startswith("bcmp") for m in out["mutants"]), out
+    assert out["killed"] == out["total_mutants"], out
+
+
+@pytest.mark.parametrize("extra, ref, kind, why", [
+    ("egain flag vss iout vss 2", "egain", "vcvs", "no mutation class"),
+    ("bml flag vss v='v(iout)\n+ *2'", "bml", "behavioural_source",
+     "'+' line"),
+    ("bamb flag vss v = v(iout) * 2", "bamb", "behavioural_source",
+     "ambiguous"),
+])
+def test_a_declared_device_no_mutant_covers_fails_the_gate(
+        tmp_path, monkeypatch, capsys, extra, ref, kind, why):
+    code, out = run_with_extra(tmp_path, monkeypatch, capsys, extra,
+                               f"[xmout, {ref}]")
+    assert code == 1, out
+    errs = [v for v in errors(out) if v["kind"] == "device_not_mutated"]
+    assert [v["refs"] for v in errs] == [[ref]], out
+    (u,) = [u for u in out["unmutated"] if u["device"] == ref]
+    assert u["kind"] == kind and why in u["reason"], out
+    assert (out["devices_total"], out["devices_mutated"]) == (3, 1), out
+    assert not any(m.startswith(ref) for m in out["mutants"]), out
+
+
+def test_a_declared_ref_found_nowhere_fails_the_gate(tmp_path, monkeypatch, capsys):
+    code, out = run_with_extra(tmp_path, monkeypatch, capsys, "",
+                               "[xmout, ighost]")
+    assert code == 1, out
+    assert [v["refs"] for v in errors(out)
+            if v["kind"] == "device_not_mutated"] == [["ighost"]], out

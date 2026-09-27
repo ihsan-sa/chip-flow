@@ -14,12 +14,20 @@ fail_severities exceeds max_count. On pass, --commit MSG git-adds and
 commits the block's own workspace directory, never the whole repo; it never
 commits on failure and never pushes.
 
-JSON to stdout (or --out): {script, gate, skill, status:pass|fail, counts,
-criteria, failing:[findings that triggered], record_result, commit_result?}.
+JSON to stdout (or --out): {script, gate, skill, status:pass|fail|
+not_applicable, counts, criteria, failing:[findings that triggered],
+record_result, commit_result?}.
 An error goes to --out as well, as {script, gate, status:error, error,
 remediation}, so a caller reading --out never finds an earlier run there.
-Exit 0 = pass, 1 = fail, 2 = error (bad gate name, missing tool, unreadable
-workspace, or a requested record/commit that did not happen).
+Exit 0 = pass or not applicable, 1 = fail, 2 = error (bad gate name,
+missing tool, unreadable workspace, or a requested record/commit that did not
+happen).
+
+NOT APPLICABLE is its own answer, never a pass. A check that reports
+`applicable: false` (check_mc.py on a spec with no `mc.enabled: true`) makes
+the gate's status "not_applicable": it is not recorded in state.json (release
+re-reads the spec for it every build, attest.not_applicable_reason) and
+--commit commits nothing, because the caller's message titles a pass.
 
 Ported from /hwde's scripts/gate.py (docs/design.md 1.3), generalized: hwde
 dispatched per KiCad tool (erc/drc/verify/place/dfm/sim, each its own
@@ -198,13 +206,20 @@ def evaluate(gate_name: str, gate: dict, report: dict) -> dict:
     violations = report.get("violations", [])
     failing = [v for v in violations if v.get("severity") in fail_sev]
     passed = len(failing) <= max_count
+    # "An mc gate that doesn't apply ... should say not applicable, and must
+    # never say pass" - `applicable: false` is checked BEFORE pass/fail, and
+    # only an explicit False counts (a report without the key applies).
+    if report.get("applicable") is False:
+        status = "not_applicable"
+    else:
+        status = "pass" if passed else "fail"
     result = {
         "script": "gate",
         "gate": gate_name,
         "phase": gate.get("phase"),
         "tool": gate.get("tool"),
         "input_digest": report.get("input_digest"),
-        "status": "pass" if passed else "fail",
+        "status": status,
         "criteria": {"fail_severities": sorted(fail_sev), "max_count": max_count},
         "counts": report.get("counts", {}),
         "failing_count": len(failing),
@@ -438,7 +453,21 @@ def main(argv: list[str] | None = None) -> int:
 
         result = evaluate(args.gate, gate, report)
 
-        if not args.no_record:
+        if result["status"] == "not_applicable":
+            # Never recorded: a result keyed on this gate's inputs would stay
+            # fresh after the spec turned the gate on (check_mc.py's own
+            # comment); release asks the spec again instead.
+            if not args.no_record:
+                result["record_result"] = {
+                    "ok": True, "recorded": False,
+                    "reason": "not applicable is never recorded - release "
+                              "re-reads spec.yaml for it"}
+            if args.commit:
+                result["commit_result"] = {
+                    "committed": False, "ok": True,
+                    "reason": "gate not applicable - nothing committed under "
+                              "a pass message"}
+        elif not args.no_record:
             result["record_result"] = record_gate_result(
                 skill, args.gate, gate, result,
                 Path(args.workspace) if args.workspace else None)
@@ -485,6 +514,11 @@ def main(argv: list[str] | None = None) -> int:
         print(text)
 
     n = result.get("failing_count", 0)
+    if result["status"] == "not_applicable":
+        print(f"gate {args.gate}: NOT APPLICABLE - "
+              f"{(result.get('facts') or {}).get('reason') or 'the check says it does not apply'}",
+              file=sys.stderr)
+        return 0
     print(f"gate {args.gate}: {result['status'].upper()} "
           f"({n} failing / {result['counts'].get('total', 0)} total)",
           file=sys.stderr)
