@@ -257,10 +257,13 @@ def test_not_applicable_answer_cannot_be_recorded_as_a_pass(
     assert payload["applicable"] is False
     row = gate_mod.load_gates(gate_mod.DEFAULT_GATES)["ade"]["mc"]
     result = gate_mod.evaluate("mc", row, payload)
-    assert result["status"] == "pass"
+    assert result["status"] == "not_applicable"
     st = state_mod.State.load(ws / "state.json")
-    with pytest.raises(CheckError, match="input_digest"):
+    with pytest.raises(CheckError, match="pass\\|fail"):
         st.record_gate("mc", result, row["phase"])
+    # even retitled as a pass, the spec-stamped digest is still refused
+    with pytest.raises(CheckError, match="input_digest"):
+        st.record_gate("mc", {**result, "status": "pass"}, row["phase"])
 
 
 def test_non_mapping_mc_block_is_an_error(tmp_path, monkeypatch, capsys):
