@@ -142,8 +142,9 @@ def test_sby_done_error_is_refused_for_any_task(tmp_path, capsys, monkeypatch):
     # refused too, not silently folded into bounded/proven downstream.
     ws = make_ws(tmp_path, RTL_OK)
     fake_eda = tmp_path / "fake-eda.sh"
-    fake_eda.write_text("#!/bin/sh\necho 'DONE (ERROR)'\nexit 0\n",
-                        encoding="utf-8")
+    # the probe's clock dump comes back empty (one clock domain, none)
+    fake_eda.write_text("#!/bin/sh\necho 'check_formal: clocked cells'\n"
+                        "echo 'DONE (ERROR)'\nexit 0\n", encoding="utf-8")
     fake_eda.chmod(0o755)
     monkeypatch.setattr(check_formal, "EDA_BIN", fake_eda)
     code = check_formal.main(["--workspace", str(ws)])
@@ -197,7 +198,9 @@ def test_crashed_launcher_is_an_error(tmp_path, capsys, monkeypatch):
     # silently treated as "no findings".
     ws = make_ws(tmp_path, RTL_OK)
     bad_eda = tmp_path / "bad-eda.sh"
-    bad_eda.write_text("#!/bin/sh\nexit 127\n", encoding="utf-8")
+    # the probe's clock dump comes back empty, so the run reaches sby
+    bad_eda.write_text("#!/bin/sh\necho 'check_formal: clocked cells'\n"
+                       "exit 127\n", encoding="utf-8")
     bad_eda.chmod(0o755)
     monkeypatch.setattr(check_formal, "EDA_BIN", bad_eda)
     code = check_formal.main(["--workspace", str(ws)])
@@ -562,6 +565,14 @@ def test_formal_settings_uses_the_spec_depth_and_scales_the_timeout():
     assert fixed["prove_timeout_s"] == fixed["cover_timeout_s"] == 900.0
 
 
+STUB_PROBE_LOG = f"""{check_formal.CLOCK_MARK}
+  cell $dff $procdff$1
+    parameter \\CLK_POLARITY 1'1
+    connect \\CLK \\clk
+  end
+"""
+
+
 def _fake_sby_run(monkeypatch, cov_failed: bool):
     """Stub out every tool call so run() is exercised end to end without
     sby: records each task's (depth, timeout) and hands back one ASSERT
@@ -569,9 +580,9 @@ def _fake_sby_run(monkeypatch, cov_failed: bool):
     seen: dict[str, tuple[int, float]] = {}
     depths: dict[str, int] = {}
     monkeypatch.setattr(check_formal, "pick_frontend",
-                        lambda *a: ("native", "stub", None))
+                        lambda *a: ("native", "stub", None, STUB_PROBE_LOG))
 
-    def write_sby(path, sv, rtl, top, mode, engine, depth, *a):
+    def write_sby(path, sv, rtl, top, mode, engine, depth, *a, **kw):
         depths[Path(path).stem] = depth
     monkeypatch.setattr(check_formal, "write_sby", write_sby)
 
@@ -583,8 +594,9 @@ def _fake_sby_run(monkeypatch, cov_failed: bool):
 
     def parse_testcases(xml_path):
         name = Path(xml_path).stem
-        return {"REQ_RESET": {"type": "ASSERT", "failed": False,
-                              "skipped": name == "cov"},
+        # the cov task covers every assert (chformal -assert2cover)
+        return {"REQ_RESET": {"type": "COVER" if name == "cov" else "ASSERT",
+                              "failed": False, "skipped": False},
                 "COVER_MAX": {"type": "COVER",
                               "failed": name == "cov" and cov_failed,
                               "skipped": name != "cov"}}
@@ -623,3 +635,187 @@ def test_unreached_cover_names_the_depth_and_the_key_to_raise(
     assert "raise formal.cover_depth" in v[0]["msg"]
     assert "raise formal.depth" not in v[0]["msg"]
     assert v[0]["depth"] == 12
+
+
+# --- Clocks: sby's multiclock mode (see check_formal's "Clocks") ---------
+
+RTL_PRESC = """\
+module presc (input wire clk_a, input wire clk_b,
+              output reg [3:0] cnt_a, output reg [2:0] cnt_b);
+  initial begin cnt_a = 0; cnt_b = 0; end
+  always @(posedge clk_a) cnt_a <= cnt_a + 4'd1;
+  always @(posedge clk_b) cnt_b <= cnt_b + 3'd1;
+endmodule
+"""
+
+# clk_b is clk_a divided by two, tied by an assume - the prescaler shape a
+# PLL core has. Without multiclock both counters tick on every solver step,
+# the assume is unsatisfiable, and an engine that does not check that
+# passes div_ok vacuously.
+FORMAL_PRESC = """\
+module presc_formal (input wire clk_a, input wire clk_b);
+  wire [3:0] cnt_a; wire [2:0] cnt_b;
+  presc dut (.clk_a(clk_a), .clk_b(clk_b), .cnt_a(cnt_a), .cnt_b(cnt_b));
+`ifdef FORMAL
+  reg ph;
+  initial ph = 0;
+  always @(posedge clk_a) ph <= ~ph;
+  wire [4:0] half = ({1'b0, cnt_a} + 5'd1) >> 1;
+  always @* begin
+    assume (clk_b == ph);
+    phase_ok: assert (ph == cnt_a[0]);
+    div_ok: assert (cnt_b == half[2:0]);
+    reach: cover (cnt_a == 4'd9);
+  end
+`endif
+endmodule
+"""
+
+
+def _presc_ws(tmp_path: Path, formal_extra: str = "") -> Path:
+    ws = tmp_path / "ws"
+    for sub in ("rtl", "spec", "formal"):
+        (ws / sub).mkdir(parents=True)
+    (ws / "rtl" / "presc.v").write_text(RTL_PRESC, encoding="utf-8")
+    (ws / "formal" / "presc_formal.sv").write_text(FORMAL_PRESC,
+                                                   encoding="utf-8")
+    (ws / "spec" / "spec.yaml").write_text(
+        "top: presc\nrequirements:\n"
+        "  - id: REQ-DIV\n    text: clk_b counts half of clk_a\n"
+        "    check: formal\n    property: div_ok\n"
+        "formal:\n  depth: 8\n  cover_depth: 24\n" + formal_extra,
+        encoding="utf-8")
+    return ws
+
+
+@pytest.mark.slow
+def test_two_clock_prescaler_proves_under_multiclock(tmp_path, capsys):
+    # Red before multiclock: smtbmc found the assumptions unsatisfiable,
+    # DONE (ERROR), a refusal - while abc pdr alone passed it vacuously.
+    ws = _presc_ws(tmp_path)
+    code = check_formal.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0, out
+    assert out["multiclock"] is True
+    assert "2 clock signals" in out["multiclock_why"]
+    assert out["proven"] == ["REQ-DIV"] and out["vacuous"] == []
+    assert "multiclock on" in (ws / "log/formal/smt.sby").read_text()
+
+
+@pytest.mark.slow
+def test_multiclock_false_on_a_two_clock_design_is_refused(tmp_path, capsys):
+    ws = _presc_ws(tmp_path, "  multiclock: false\n")
+    code = check_formal.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 2, out
+    assert "multiclock is false" in out["error"]
+
+
+@pytest.mark.slow
+def test_single_clock_design_stays_off_multiclock(tmp_path, capsys):
+    ws = make_ws(tmp_path, RTL_OK)
+    code = check_formal.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0, out
+    assert out["multiclock"] is False and out["multiclock_why"] is None
+    assert "multiclock off" in (ws / "log/formal/smt.sby").read_text()
+
+
+# --- vacuity: a pass nothing ever enabled -----------------------------------
+
+FORMAL_VACUOUS = """\
+module top_formal (input wire clk, input wire rst, input wire go,
+                   output wire [3:0] count);
+  top dut (.clk(clk), .rst(rst), .count(count));
+`ifdef FORMAL
+  always @* assume (!go);
+  always @(posedge clk)
+    if (go)
+      NEVER_ON: assert (count == 4'd7);
+  always @(posedge clk)
+    COVER_MAX: cover (count == 4'hF);
+`endif
+endmodule
+"""
+
+
+@pytest.mark.slow
+def test_vacuous_assert_is_an_error_not_a_pass(tmp_path, capsys):
+    # Red before the cov task covered asserts: NEVER_ON came back proven.
+    ws = _ws_with(tmp_path, RTL_OK, FORMAL_VACUOUS, "NEVER_ON")
+    code = check_formal.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 1, out
+    assert out["vacuous"] == ["REQ-P"] and out["proven"] == []
+    v = [v for v in out["violations"] if v["kind"] == "vacuous_pass"]
+    assert len(v) == 1 and v[0]["severity"] == "error", out
+
+
+def _dump(*cells: str) -> str:
+    return "noise\n" + check_formal.CLOCK_MARK + "\n" + "".join(cells)
+
+
+def _cell(ctype, name, clk="\\clk", pol="1'1", port="CLK"):
+    return (f"  cell {ctype} {name}\n"
+            f"    parameter \\{port}_POLARITY {pol}\n"
+            f"    connect \\{port} {clk}\n  end\n")
+
+
+def test_clocking_reads_clocks_edges_and_async_cells():
+    log = _dump(_cell("$dff", "$a"), _cell("$dff", "$b", "\\clk_b"),
+                _cell("$adff", "$c", pol="1'0"),
+                _cell("$check", "\\P", "{ }", "0'x", "TRG"),
+                _cell("$check", "\\Q", "\\clk", "1'1", "TRG"))
+    clk = check_formal.clocking(log)
+    assert clk == {"clocks": ["\\clk", "\\clk_b"], "negedge": ["$c"],
+                   "async": ["$adff"]}
+    assert check_formal.clocking("no mark here") is None
+
+
+def test_clocking_skips_an_unclocked_memory_port():
+    log = _dump(_cell("$dff", "$a"),
+                "  cell $memrd_v2 $m\n    parameter \\CLK_ENABLE 1'0\n"
+                "    parameter \\CLK_POLARITY 1'0\n"
+                "    connect \\CLK 1'x\n  end\n")
+    assert check_formal.clocking(log)["clocks"] == ["\\clk"]
+    assert check_formal.clocking(log)["negedge"] == []
+
+
+@pytest.mark.parametrize("clk, on", [
+    ({"clocks": ["\\clk"], "negedge": [], "async": []}, False),
+    ({"clocks": ["\\a", "\\b"], "negedge": [], "async": []}, True),
+    ({"clocks": ["\\clk"], "negedge": ["$x"], "async": []}, True),
+    ({"clocks": ["\\clk"], "negedge": [], "async": ["$adff"]}, True),
+])
+def test_needs_multiclock_follows_the_design(clk, on):
+    got, why = check_formal.needs_multiclock(clk, {"formal": {"depth": 4}})
+    assert got is on and (why is not None) is on
+
+
+def test_needs_multiclock_spec_forces_on_and_refuses_off():
+    one = {"clocks": ["\\clk"], "negedge": [], "async": []}
+    two = {"clocks": ["\\a", "\\b"], "negedge": [], "async": []}
+    assert check_formal.needs_multiclock(
+        one, {"formal": {"multiclock": True}})[0] is True
+    assert check_formal.needs_multiclock(
+        one, {"formal": {"multiclock": False}}) == (False, None)
+    with pytest.raises(check_formal.CheckError, match="multiclock is false"):
+        check_formal.needs_multiclock(two, {"formal": {"multiclock": False}})
+    with pytest.raises(check_formal.CheckError, match="true or false"):
+        check_formal.needs_multiclock(one, {"formal": {"multiclock": "on"}})
+    with pytest.raises(check_formal.CheckError, match="never reached"):
+        check_formal.needs_multiclock(None, {})
+
+
+def test_vacuity_verdict_turns_an_unreached_pass_into_an_error():
+    hit, miss = {"failed": False}, {"failed": True}
+    assert check_formal.vacuity_verdict(
+        "L", "R", "proven", None, hit, 20, "cover_depth") == ("proven", None)
+    for verdict in ("proven", "bounded"):
+        got, v = check_formal.vacuity_verdict(
+            "L", "R", verdict, None, miss, 20, "cover_depth")
+        assert got == "vacuous" and v["kind"] == "vacuous_pass"
+        assert v["severity"] == "error" and "20 steps" in v["msg"]
+    failed = check_formal.vacuity_verdict(
+        "L", "R", "failed", {"kind": "property_failed"}, miss, 20, "depth")
+    assert failed == ("failed", {"kind": "property_failed"})

@@ -148,3 +148,70 @@ def test_spec_corners_forms():
     assert len(names({"grid": DAC_GRID})) == 9
     with pytest.raises(CheckError):
         corners.spec_corners(data, {"grid": DAC_GRID, "extra": 1})
+
+
+# --- passive spread -----------------------------------------------------------
+
+DAC_TILE_NETLIST = (REPO / "corpus" / "msde" / "dac_tile" / "analog"
+                    / "netlist" / "dac_tile_analog.cir")
+MIRROR_NETLIST = REPO / "corpus" / "ade" / "mirror" / "netlist"
+
+
+def test_real_yaml_has_passive_corners_off_the_default_five():
+    data = corners.load(REAL_YAML)
+    assert {c["name"]: c["passive"] for c in data["passive_corners"]} == {
+        "tt_pss": "ss", "tt_pff": "ff"}
+    extra = {c["name"]: c for c in data["passive_skew_corners"]}
+    assert set(extra) == {"ss_pff", "ff_pss"}
+    # each transistor extreme meets the OPPOSITE RC extreme
+    assert extra["ss_pff"]["process"] == "ss" and extra["ss_pff"]["passive"] == "ff"
+    assert extra["ff_pss"]["process"] == "ff" and extra["ff_pss"]["passive"] == "ss"
+    assert [c["name"] for c in corners.default_corners(data)] == [
+        "tt", "ss", "ff", "sf", "fs"]
+
+
+def test_passive_of_follows_the_process_where_the_pdk_has_a_section():
+    assert corners.passive_of({"process": "ss"}) == "ss"
+    assert corners.passive_of({"process": "sf"}) == "typical"
+    assert corners.passive_of({"process": "ss", "passive": "ff"}) == "ff"
+
+
+def test_passive_devices_reads_resistors_and_mim_caps():
+    assert corners.passive_devices(DAC_TILE_NETLIST.read_text()) == ["resistor"]
+    text = ("* c\nxc1 a b cap_mim_2f0fF c_width=1e-5 c_length=1e-5\n"
+            "xm1 d g s b nfet_03v3 w=1e-6 l=1e-6\n"
+            "xr9 a b vss\n+ npolyf_s r_width=1e-6 r_length=1e-5\n")
+    assert corners.passive_devices(text) == ["mim_cap", "resistor"]
+    mos = "".join(p.read_text() for p in MIRROR_NETLIST.glob("*.cir"))
+    assert corners.passive_devices(mos) == []
+    # a net called nwell on a transistor is not a resistor
+    assert corners.passive_devices("xm1 nwell g s b pfet_03v3 w=1u\n") == []
+
+
+def test_a_resistor_design_gains_the_passive_corners():
+    data = corners.load(REAL_YAML)
+    passives = corners.passive_devices(DAC_TILE_NETLIST.read_text())
+    names = [c["name"] for c in corners.spec_corners(data, "default", passives)]
+    assert names == ["tt", "ss", "ff", "sf", "fs", "tt_pss", "tt_pff"]
+    grid = {"grid": {"process": ["typical", "ss", "ff"],
+                     "temp_c": [-40, 125]}}
+    gnames = [c["name"] for c in corners.spec_corners(data, grid, passives)]
+    assert len(gnames) == 6 + 2 and gnames[-2:] == names[-2:]
+    # the skew corners only when the spec names them
+    skew = corners.spec_corners(data, ["ss_pff", "ff_pss"], passives)
+    assert [c["name"] for c in skew] == names[:5] + ["ss_pff", "ff_pss"] + names[5:]
+    # a MOS-only design keeps exactly what its spec asks for
+    assert [c["name"] for c in corners.spec_corners(data, "default", [])] == names[:5]
+    # a spec may name a passive corner itself; it is not added twice
+    listed = corners.spec_corners(data, ["tt_pss"], passives)
+    assert [c["name"] for c in listed].count("tt_pss") == 1
+
+
+def test_passive_corner_outside_the_passive_axis_is_refused(tmp_path):
+    bad = REAL_YAML.read_text().replace(
+        "supply_pct: 0,   passive: ss}", "supply_pct: 0,   passive: sf}", 1)
+    assert "passive: sf}" in bad
+    p = tmp_path / "corners.yaml"
+    p.write_text(bad)
+    with pytest.raises(CheckError, match="passive 'sf'"):
+        corners.load(p)

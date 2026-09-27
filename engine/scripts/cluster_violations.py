@@ -129,6 +129,8 @@ FIXER_HINTS: dict[str, str] = {
     "engine_disagreement": "formal",
     "bounded_not_proven": "formal",
     "cover_not_reached": "formal",
+    # an assert nothing ever enables: its assumptions, the property-writer's
+    "vacuous_pass": "formal",
 
     # cover (check_cover.py)
     "line_coverage_below_threshold": "testbench",
@@ -192,6 +194,8 @@ FIXER_HINTS: dict[str, str] = {
     # sim_tt / sim_pvt (simlib.compare_bounds) and mc (check_mc.py)
     "sim_bound_fail": "sizing",
     "sim_measure_missing": "testbench",
+    # a bench that hard-codes res_typical/mimcap_typical under a passive sweep
+    "passive_corner_unselected": "testbench",
     # a step bench's own "did not settle within the window" verdict: the
     # window is already sized from the expected settling, so the block is
     # slower than its design equations said - sizing, not a wider window

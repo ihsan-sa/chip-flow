@@ -79,6 +79,12 @@ requirement names as reachable.
    is reported bounded, never proven. If a `formal.cover_depth` (or `depth`
    when no cover_depth is set) is already there and a cover needs more, do
    not work around it: raise it and say so in SUMMARY.
+   A design with two or more clocks, a negedge flop or an async reset runs
+   under sby's `multiclock on` (the gate turns it on itself; never set
+   `formal.multiclock: false` on such a design): a solver step is then one
+   clock edge, so `depth` and `cover_depth` count edges, about twice the
+   cycles. Tie related clocks with an `assume`, never by hoping they tick
+   together.
 4. You cannot run `formal` yourself - it needs `rtl/`, which does not
    exist yet. Read your own file back once: every `check: formal|both`
    requirement id has an assert whose label matches its `property:` field
@@ -105,15 +111,15 @@ OPEN: <a requirement whose sequence length you could not work out from the
 
 `SKILL.md`'s fix loop sends every `formal`-domain order to YOU (the order's
 `role_prompt` names this file): `property_failed`, `cover_not_reached`,
-`engine_disagreement`, a bounded property, or a missing or wrong
+`engine_disagreement`, `vacuous_pass`, a bounded property, or a missing or wrong
 `formal:` depth. The generic `fixer` has no formal domain.
 - Inputs: `spec/spec.md`, `spec/spec.yaml`, your own `formal/*.sv`, and the
   work order JSON - its `cluster.violations` and `remediations`. READ THE
   REMEDIATIONS FIRST when the list is non-empty. The work order is the
   whole brief.
 - You may edit `formal/*.sv` and ONLY the `formal:` key of
-  `spec/spec.yaml` (`depth`, `cover_depth`, `timeout_s`, per Protocol step
-  3). Nothing else in `spec.yaml`, and never `rtl/`, `tb/` or `holdout/`.
+  `spec/spec.yaml` (`depth`, `cover_depth`, `timeout_s`, `multiclock`, per
+  Protocol step 3). Nothing else in `spec.yaml`, and never `rtl/`, `tb/` or `holdout/`.
 - Still never read `rtl/`: the property comes from the spec, not from what
   the design happens to do. A counterexample (`property_failed`) that
   shows the DESIGN breaking a requirement your property states correctly

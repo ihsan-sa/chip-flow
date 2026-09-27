@@ -9,7 +9,8 @@ sweep (that file's own header explains the pairing choice).
 With no --names, prints the default corner set (`default_corners`). With
 --names, prints exactly those corners by name, in the order given - a
 block's spec.yaml `corners:` list (design.md 1.4) names a subset (or
-superset, via add-corner) of this file's default_corners this way.
+superset, via add-corner) of this file's default_corners this way, and may
+name a passive_corners or passive_skew_corners entry too.
 
 Library API (imported by sim_run.py / check_sim_pvt.py / check_bench_strength.py,
 never re-implemented there):
@@ -17,7 +18,10 @@ never re-implemented there):
     default_corners(data) -> list[dict]       the default sweep, validated
     corners_by_name(data, names) -> list[dict]
     grid_corners(data, grid) -> list[dict]    a spec-declared PVT grid
-    spec_corners(data, field) -> list[dict]   spec.yaml `corners` -> the sweep
+    spec_corners(data, field, passives=()) -> list[dict]
+                                             spec.yaml `corners` -> the sweep
+    passive_devices(netlist_text) -> list[str] which spread-prone passives
+    passive_of(corner) -> str                  the corner's passive section
     resolve_vdd(corner, nominal_vdd) -> float  nominal * (1 + supply_pct/100)
 
 A spec's `corners` field is one of: "default" (the five above), "all" (the
@@ -33,6 +37,20 @@ supply_pct defaults to [0], the spec's own nominal VDD. Grid corners are
 named `<process>_<temp>c[_v<supply>]` (typical -> tt, a minus sign -> m):
 `ss_m40c`, `tt_25c`, `ff_125c_vp10`.
 
+Passive spread. The PDK keeps poly/diffusion resistor sheet resistance
+(`.lib res_<p>`, ppolyf_u_1k +/-20%) and MIM capacitance (`.lib
+mimcap_<p>`, +/-10-15%) in sections of their own, p in corners.yaml's
+`passive` axis (typical, ss = more R and C, ff = less). A corner's passive
+section is its `passive` key, else its own process where the PDK has one
+(ss -> ss, ff -> ff) and typical otherwise (passive_of) - so the default
+five only ever move R and C together with the transistors. A design whose
+netlist uses a poly/diffusion resistor or a MIM cap (passive_devices) gets
+corners.yaml's `passive_corners` appended to whatever its spec sweeps
+(spec_corners' `passives`): typical transistors at each RC extreme.
+`passive_skew_corners` (each transistor extreme at the opposite RC
+extreme, the charge-pump against loop-filter corners) are swept only when
+a spec's `corners` list names them - corners.yaml says why.
+
 Not a gate (no workspace, no violations) - a plain reference-data reader,
 so its CLI contract is checklib's minus the pass/violations status: exit 0
 on success, 2 on a bad corners.yaml or an unknown --names entry.
@@ -41,6 +59,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -55,6 +74,10 @@ import yaml  # noqa: E402
 SCRIPT = "corners"
 DEFAULT_YAML = ENGINE / "reference" / "corners.yaml"
 REQUIRED_AXES = ("process", "temperature_c", "supply_pct")
+# the PDK's passive sections exist for these process names only
+PDK_PASSIVE = ("typical", "ss", "ff")
+RESISTOR_RE = re.compile(r"^(?:[np](?:plus|polyf)_[us](?:_\w+)?|nwell)$", re.I)
+MIM_RE = re.compile(r"^cap_mim_\w+$", re.I)
 
 
 def load(path: Path | str = DEFAULT_YAML) -> dict:
@@ -71,29 +94,69 @@ def load(path: Path | str = DEFAULT_YAML) -> dict:
     defaults = data.get("default_corners")
     if not isinstance(defaults, list) or not defaults:
         raise CheckError(f"{p}: 'default_corners' must be a non-empty list")
-    process_set = set(data["process"])
-    temp_set = set(data["temperature_c"])
-    supply_set = set(data["supply_pct"])
+    passive = data.setdefault("passive", list(PDK_PASSIVE))
+    if (not isinstance(passive, list) or not passive
+            or not set(passive) <= set(PDK_PASSIVE)):
+        raise CheckError(f"{p}: 'passive' must be a non-empty list drawn "
+                         f"from the PDK's passive sections {list(PDK_PASSIVE)}")
+    for key in ("passive_corners", "passive_skew_corners"):
+        if not isinstance(data.setdefault(key, []), list):
+            raise CheckError(f"{p}: '{key}' must be a list")
+    axes = {"process": set(data["process"]),
+            "temp_c": set(data["temperature_c"]),
+            "supply_pct": set(data["supply_pct"]), "passive": set(passive)}
     seen_names: set[str] = set()
-    for i, c in enumerate(defaults):
-        if not isinstance(c, dict):
-            raise CheckError(f"{p}: default_corners[{i}] is not a mapping")
-        for key in ("name", "process", "temp_c", "supply_pct"):
-            if key not in c:
-                raise CheckError(f"{p}: default_corners[{i}] missing {key!r}")
-        if c["name"] in seen_names:
-            raise CheckError(f"{p}: duplicate corner name {c['name']!r}")
-        seen_names.add(c["name"])
-        if c["process"] not in process_set:
-            raise CheckError(f"{p}: default_corners[{i}] process "
-                             f"{c['process']!r} not in {sorted(process_set)}")
-        if c["temp_c"] not in temp_set:
-            raise CheckError(f"{p}: default_corners[{i}] temp_c "
-                             f"{c['temp_c']!r} not in {sorted(temp_set)}")
-        if c["supply_pct"] not in supply_set:
-            raise CheckError(f"{p}: default_corners[{i}] supply_pct "
-                             f"{c['supply_pct']!r} not in {sorted(supply_set)}")
+    for key, corners in (("default_corners", defaults),
+                         ("passive_corners", data["passive_corners"]),
+                         ("passive_skew_corners",
+                          data["passive_skew_corners"])):
+        for i, c in enumerate(corners):
+            where = f"{p}: {key}[{i}]"
+            if not isinstance(c, dict):
+                raise CheckError(f"{where} is not a mapping")
+            needed = ("name", "process", "temp_c", "supply_pct") + (
+                ("passive",) if key.startswith("passive") else ())
+            for k in needed:
+                if k not in c:
+                    raise CheckError(f"{where} missing {k!r}")
+            if c["name"] in seen_names:
+                raise CheckError(f"{p}: duplicate corner name {c['name']!r}")
+            seen_names.add(c["name"])
+            for k, allowed in axes.items():
+                if k in c and c[k] not in allowed:
+                    raise CheckError(f"{where} {k} {c[k]!r} not in "
+                                     f"{sorted(allowed, key=str)}")
     return data
+
+
+def passive_of(corner: dict) -> str:
+    """The PDK passive section suffix (res_<it>, mimcap_<it>) `corner`
+    simulates at: its own `passive`, else its process where the PDK has a
+    passive section of that name, else typical (sf/fs have none)."""
+    if corner.get("passive"):
+        return corner["passive"]
+    return corner["process"] if corner["process"] in PDK_PASSIVE else "typical"
+
+
+def passive_devices(netlist_text: str) -> list[str]:
+    """Which spread-prone passives a SPICE netlist instantiates: "resistor"
+    (a poly/diffusion/well resistor subckt - ppolyf_u_1k, npolyf_s, nwell,
+    ...), "mim_cap" (cap_mim_*). A subckt instance's model is its last
+    token that is not a `key=value` parameter. Metal resistors are not
+    counted. Pure."""
+    found = set()
+    joined = re.sub(r"\n[ \t]*\+", " ", netlist_text)  # continuation lines
+    for line in joined.splitlines():
+        tokens = line.split()
+        if not tokens or tokens[0][0] not in "xX":
+            continue
+        names = [t for t in tokens[1:] if "=" not in t]
+        model = names[-1] if names else ""
+        if RESISTOR_RE.match(model):
+            found.add("resistor")
+        elif MIM_RE.match(model):
+            found.add("mim_cap")
+    return sorted(found)
 
 
 def default_corners(data: dict) -> list[dict]:
@@ -101,7 +164,9 @@ def default_corners(data: dict) -> list[dict]:
 
 
 def corners_by_name(data: dict, names: list[str]) -> list[dict]:
-    by_name = {c["name"]: c for c in data["default_corners"]}
+    by_name = {c["name"]: c for c in (*data["default_corners"],
+                                      *data.get("passive_corners", []),
+                                      *data.get("passive_skew_corners", []))}
     out = []
     for n in names:
         if n not in by_name:
@@ -172,7 +237,20 @@ def grid_corners(data: dict, grid) -> list[dict]:
     return out
 
 
-def spec_corners(data: dict, field="default") -> list[dict]:
+def spec_corners(data: dict, field="default", passives=()) -> list[dict]:
+    """The sweep a spec's `corners` field asks for, plus corners.yaml's
+    passive_corners when `passives` (passive_devices of the design's
+    netlist) is non-empty - brief: "Put passive-device spread into the
+    corner grid for designs that use those devices"."""
+    out = _spec_corners(data, field)
+    if passives:
+        have = {c["name"] for c in out}
+        out += [dict(c) for c in data["passive_corners"]
+                if c["name"] not in have]
+    return out
+
+
+def _spec_corners(data: dict, field) -> list[dict]:
     # brief: "Let a spec declare that grid, and keep the default five
     # corners when it doesn't."
     if field == "default":
