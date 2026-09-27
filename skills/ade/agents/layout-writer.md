@@ -50,6 +50,12 @@ You are a subagent (P5). Files are the interface. Run scripts through
 3. Label every pin in the netlist's `.subckt` order via the `labels` list
    passed to `layoutlib.finalize()` - sort it by that order explicitly
    (`PINS.index(...)`, as gen_mirror.py does), never by draw order.
+   Ground that the netlist reaches as global `0` (a device node `0` with
+   no ground pin in the `.subckt` line) gets a text label `"0"` on the
+   metal's drawing layer (`GF180_LAYER["metal1"]`, 34/0 - not the
+   `metal1_label` pin layer, which would make it a port), sorted after the
+   pins. Without it magic extracts ground as a nameless local net, and
+   `pex_sim` refuses to bench it (`ground_unlabelled`).
 4. Call `layoutlib.finalize(top, <cell name = netlist's .subckt name>,
    labels)` LAST - it snaps to grid and flattens; nothing after it may add
    geometry.

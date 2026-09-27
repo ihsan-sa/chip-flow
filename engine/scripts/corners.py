@@ -21,7 +21,9 @@ never re-implemented there):
     spec_corners(data, field, passives=()) -> list[dict]
                                              spec.yaml `corners` -> the sweep
     passive_devices(netlist_text) -> list[str] which spread-prone passives
-    passive_of(corner) -> str                  the corner's passive section
+    passive_of(corner, device=None) -> str     the corner's passive section
+    scope_out_problem(h1, dimension, quote)    why a scope-out is refused
+    recorded_scope_outs(state_data) -> list    the verified H1 scope-outs
     resolve_vdd(corner, nominal_vdd) -> float  nominal * (1 + supply_pct/100)
 
 A spec's `corners` field is one of: "default" (the five above), "all" (the
@@ -50,6 +52,20 @@ corners.yaml's `passive_corners` appended to whatever its spec sweeps
 `passive_skew_corners` (each transistor extreme at the opposite RC
 extreme, the charge-pump against loop-filter corners) are swept only when
 a spec's `corners` list names them - corners.yaml says why.
+
+Scoped-out dimensions. A person may rule one passive corner dimension out
+of scope at H1 (say "MIM capacitor spread is out of scope for this rung").
+`state.py scope-out --dimension mim_cap --quote '<their words>'` records it
+on the approved H1 record as `human.H1.scope_out`, and only when the quote
+is verbatim in that record's answer or note, lies inside one clause
+(SCOPE_CLAUSE_RE), and the whole clause it sits in names that dimension
+and no other (SCOPE_DIMENSIONS) and says it is out of scope (SCOPE_OUT_RE)
+without a negation anywhere before it (SCOPE_NEGATED_RE): the person's text is the source, never the session's. spec_corners(pinned=)
+then holds that one device at typical at every corner (a corner's
+`pinned` key, which passive_of(corner, device) honours) and stops adding
+passive_corners on its account; every other axis, the other passive
+included, is swept as before. Every reader re-verifies the record
+(recorded_scope_outs), so a hand-edited state.json is a refusal.
 
 Not a gate (no workspace, no violations) - a plain reference-data reader,
 so its CLI contract is checklib's minus the pass/violations status: exit 0
@@ -129,10 +145,15 @@ def load(path: Path | str = DEFAULT_YAML) -> dict:
     return data
 
 
-def passive_of(corner: dict) -> str:
+def passive_of(corner: dict, device: str | None = None) -> str:
     """The PDK passive section suffix (res_<it>, mimcap_<it>) `corner`
-    simulates at: its own `passive`, else its process where the PDK has a
-    passive section of that name, else typical (sf/fs have none)."""
+    simulates at: for a `device` ("resistor"/"mim_cap") the corner pins
+    (a scoped-out dimension), the pinned section; else its own `passive`,
+    else its process where the PDK has a passive section of that name,
+    else typical (sf/fs have none)."""
+    pinned = corner.get("pinned") or {}
+    if device and device in pinned:
+        return pinned[device]
     if corner.get("passive"):
         return corner["passive"]
     return corner["process"] if corner["process"] in PDK_PASSIVE else "typical"
@@ -237,16 +258,145 @@ def grid_corners(data: dict, grid) -> list[dict]:
     return out
 
 
-def spec_corners(data: dict, field="default", passives=()) -> list[dict]:
+def spec_corners(data: dict, field="default", passives=(),
+                 pinned=()) -> list[dict]:
     """The sweep a spec's `corners` field asks for, plus corners.yaml's
     passive_corners when `passives` (passive_devices of the design's
     netlist) is non-empty - brief: "Put passive-device spread into the
-    corner grid for designs that use those devices"."""
+    corner grid for designs that use those devices". `pinned` names the
+    scoped-out dimensions (recorded_scope_outs): each is held at typical
+    at every corner, and a device that is pinned no longer brings the
+    passive_corners in on its own."""
     out = _spec_corners(data, field)
-    if passives:
+    if [d for d in passives if d not in pinned]:
         have = {c["name"] for c in out}
         out += [dict(c) for c in data["passive_corners"]
                 if c["name"] not in have]
+    if pinned:
+        for c in out:
+            c["pinned"] = {d: "typical" for d in pinned}
+    return out
+
+
+# ---- scoped-out dimensions (the person's H1 ruling) ------------------------
+SCOPE_CHECKPOINT = "H1"
+# dimension -> what the person's words must name for it, and what it is
+SCOPE_DIMENSIONS = {
+    "mim_cap": {"names": re.compile(r"\bMIM\b", re.I),
+                "what": "MIM capacitor corner (mimcap_<p>)"},
+    "resistor": {"names": re.compile(r"\bresist", re.I),
+                 "what": "poly/diffusion resistor corner (res_<p>)"},
+}
+SCOPE_OUT_RE = re.compile(r"out of scope|scoped? out|not in scope|"
+                          r"pinned (?:at |to )?typical|not swept", re.I)
+# where one ruling ends and the next begins, and a negation that turns the
+# scope-out phrase after it into its opposite ("is not out of scope")
+SCOPE_CLAUSE_RE = re.compile(r"[.;:!?\n]|\b(?:but|however|whereas|while|"
+                             r"although|though|except)\b", re.I)
+# a negator anywhere in the clause before the scope-out phrase: "is not
+# considered out of scope", "Nobody said ...", "I don't think ...", "It is
+# not true that ..." all rule nothing out
+SCOPE_NEGATED_RE = re.compile(r"\b(?:not|never|nobody|none|neither|nor|"
+                              r"cannot|no[- ]one|no longer)\b|n't\b", re.I)
+
+
+def _norm(text) -> str:
+    return " ".join(str(text or "").split()).casefold()
+
+
+def scope_out_problem(h1: dict | None, dimension: str,
+                      quote: str) -> str | None:
+    """Why the approved H1 record `h1` does not carry a scope-out of
+    `dimension` in the words `quote`, or None when it does. Pure."""
+    if dimension not in SCOPE_DIMENSIONS:
+        return (f"unknown dimension {dimension!r}; a scope-out names one of "
+                f"{sorted(SCOPE_DIMENSIONS)}")
+    if not h1 or h1.get("status") != "approved":
+        return (f"{SCOPE_CHECKPOINT} is not approved "
+                f"(status {(h1 or {}).get('status')!r}): a scope-out is "
+                f"taken only from the person's recorded {SCOPE_CHECKPOINT} "
+                "answer")
+    q = _norm(quote).strip(" .;:!?")
+    if not q:
+        return "--quote is empty"
+    texts = [_norm(h1.get(k)) for k in ("answer", "note")]
+    if not any(q in t for t in texts):
+        return (f"the quote is not in the recorded {SCOPE_CHECKPOINT} answer "
+                "or note: quote the person's own words verbatim")
+    if not SCOPE_DIMENSIONS[dimension]["names"].search(q):
+        return (f"the quote does not name {dimension} "
+                f"({SCOPE_DIMENSIONS[dimension]['what']}): the recorded "
+                f"{SCOPE_CHECKPOINT} answer has to rule on that dimension "
+                "itself")
+    if not SCOPE_OUT_RE.search(q):
+        return ("the quote does not rule it out of scope (no 'out of "
+                "scope', 'scoped out' or 'pinned typical' in it)")
+    if SCOPE_CLAUSE_RE.search(q):
+        return ("the quote runs across more than one clause: quote the one "
+                "clause that rules the dimension out")
+    # The quote is judged by the whole clause it sits in, so a quote cut
+    # from "I don't think MIM spread is out of scope" rules nothing out.
+    # Every place the quote occurs has to carry the ruling.
+    for t in texts:
+        at = t.find(q)
+        while at >= 0:
+            problem = _scope_clause_problem(t, at, at + len(q), dimension)
+            if problem:
+                return problem
+            at = t.find(q, at + 1)
+    return None
+
+
+def _scope_clause_problem(text: str, start: int, end: int,
+                          dimension: str) -> str | None:
+    """Why the clause of `text` holding text[start:end] does not rule
+    `dimension` out of scope, or None when it does. The clause has to name
+    that dimension and no other, and hold an out-of-scope phrase with no
+    negation before it: "Resistor spread must be swept; MIM capacitor
+    spread is out of scope" rules out MIM only, and "MIM spread is not
+    considered out of scope" rules out nothing."""
+    lo, hi = 0, len(text)
+    for b in SCOPE_CLAUSE_RE.finditer(text):
+        if b.end() <= start:
+            lo = b.end()
+        elif b.start() >= end:
+            hi = b.start()
+            break
+    clause = text[lo:hi]
+    if not SCOPE_DIMENSIONS[dimension]["names"].search(clause):
+        return (f"the clause the quote sits in does not name {dimension}")
+    if not any(not SCOPE_NEGATED_RE.search(clause[:m.start()])
+               for m in SCOPE_OUT_RE.finditer(clause)):
+        return ("the quote does not rule it out of scope (no un-negated 'out "
+                "of scope', 'scoped out' or 'pinned typical' in the clause "
+                "it sits in)")
+    shared = [d for d in SCOPE_DIMENSIONS if d != dimension
+              and SCOPE_DIMENSIONS[d]["names"].search(clause)]
+    if shared:
+        return (f"the clause that rules {dimension} out also names "
+                f"{', '.join(shared)}: a scope-out is taken only from a "
+                "clause that rules on that one dimension")
+    return None
+
+
+def recorded_scope_outs(state_data: dict) -> list[dict]:
+    """The scope-outs state.json's approved H1 record carries, each
+    re-verified against that record's own answer/note. A record that no
+    longer verifies (a hand edit) is a CheckError, never a silent drop or
+    a silent keep."""
+    h1 = (state_data.get("human") or {}).get(SCOPE_CHECKPOINT) or {}
+    out = []
+    for s in h1.get("scope_out") or []:
+        dim = (s or {}).get("dimension")
+        problem = scope_out_problem(h1, dim, (s or {}).get("quote"))
+        if problem:
+            raise CheckError(
+                f"state.json human.{SCOPE_CHECKPOINT}.scope_out {dim!r} does "
+                f"not verify: {problem}. Re-record it with state.py "
+                "scope-out from the person's answer, or remove it")
+        out.append({"dimension": dim, "pinned": "typical",
+                    "checkpoint": SCOPE_CHECKPOINT, "quote": s["quote"],
+                    "what": SCOPE_DIMENSIONS[dim]["what"]})
     return out
 
 

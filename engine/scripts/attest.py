@@ -27,6 +27,12 @@ outright whenever the gate's own hash_valid is False (its last recorded run
 no longer matches the current files): a waiver never covers a gate that has
 not actually run against the inputs it is being asked to cover.
 
+A dimension the person scoped out at H1 (corners.py, "Scoped-out
+dimensions" - sim_pvt pins it at typical) is part of the record: build()
+writes each, with the person's quote, as the attestation's `scoped_out`
+(re-verified against the H1 answer; one that does not verify refuses), and
+verify() treats a scope-out added or dropped since as a stale attestation.
+
 Subcommands:
   build        Assemble + write reports/checks.json. Refuses (status
                violations, exit 1, nothing written) unless every applicable
@@ -61,6 +67,7 @@ sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(ENGINE / "lib"))
 
 import checklib  # noqa: E402
+import corners as corners_mod  # noqa: E402
 import gate as gate_mod  # noqa: E402
 import statelib  # noqa: E402
 
@@ -322,16 +329,25 @@ def build(ws: Path, max_report_age_h: float = 24.0) -> tuple[dict | None, list[s
     # state.json, or a waiver written before that requirement landed,
     # close an issue with no recorded reason or approver, which is exactly
     # the kind of gap release exists to refuse.
-    open_issues = [i for i in data.get("open_issues", [])
-                   if i.get("status") in ("open", "fixing", "escalated")
+    # A "superseded" issue is closed only while the issue that replaced
+    # it is a fixed one of the same gate (statelib.issue_unresolved).
+    issues = data.get("open_issues", [])
+    open_issues = [i for i in issues
+                   if statelib.issue_unresolved(i, issues)
                    or (i.get("status") == "waived"
                        and not (i.get("note") and i.get("approved_by")))]
     if open_issues:
         problems.append(f"{len(open_issues)} open issue(s) unresolved")
+    try:
+        scoped_out = corners_mod.recorded_scope_outs(data)
+    except checklib.CheckError as exc:
+        problems.append(str(exc))
     if problems:
         return None, problems
     body = {"skill": skill, "block": data.get("block"), "ts": _now(),
            "checks": checks}
+    if scoped_out:
+        body["scoped_out"] = scoped_out
     digest = hashlib.sha256(
         json.dumps(body, sort_keys=True).encode("utf-8")).hexdigest()
     body["attestation_sha256"] = digest
@@ -359,6 +375,11 @@ def verify(ws: Path) -> dict:
     att, problems = build(ws)
     if att is None:
         return {"valid": False, "reason": "; ".join(problems),
+                "attestation_sha256": recorded["attestation_sha256"]}
+    if att.get("scoped_out") != recorded.get("scoped_out"):
+        return {"valid": False,
+                "reason": "the scope-outs recorded at H1 changed since the "
+                          "attestation - re-run `attest build`",
                 "attestation_sha256": recorded["attestation_sha256"]}
     if att["checks"] != recorded["checks"]:
         return {"valid": False,

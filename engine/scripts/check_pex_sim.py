@@ -28,6 +28,18 @@ numbers ports in an order of its own, so the extracted `.subckt` line is
 rewritten into the reference's pin order first; a pin set that differs is
 a refusal.
 
+Ground is checked before the bench runs. A reference subckt that reaches
+ngspice's global ground (a node `0`, or its alias `gnd`) without a port for
+it needs the extracted netlist to carry a node of that name too - magic
+names a net `0` when the layout puts a non-pin text label "0" on it (a
+drawing-layer label such as metal1 34/0; a pin-layer label would make it a port and change the pin set).
+Without one, the layout's ground is a local net of magic's own naming and
+the bench runs with it floating. The gate never guesses which extracted net
+is ground - a substrate net and a ground wire both carry magic-made names,
+and tying the wrong one would pass a layout that is wired wrong - so a
+missing ground label is a `ground_unlabelled` finding for the layout
+generator, and no bench is run on that netlist.
+
 "the worst corner" (docs/design.md 1.5) is not run here - M9's own
 boundary is proving the extract-then-resim path on typical; the full
 corner sweep is `/ade`'s `sim_pvt`-style job, out of scope until the skill
@@ -92,6 +104,63 @@ def reorder_pins(extracted_text: str, cell: str, want: list[str]) -> str:
         by_lower[p.lower()] for p in want), extracted_text, count=1)
 
 
+# ngspice's global ground: node 0, and `gnd`, which it accepts as an alias
+GROUND = {"0", "gnd"}
+
+# node count per element letter; `x` is every token before the subckt name
+NODE_COUNT = {"r": 2, "c": 2, "l": 2, "d": 2, "v": 2, "i": 2, "b": 2,
+              "f": 2, "h": 2, "w": 2, "e": 4, "g": 4, "m": 4, "s": 4,
+              "t": 4, "o": 4, "q": 3, "j": 3, "z": 3, "u": 3}
+
+
+def element_nodes(netlist_text: str) -> set[str]:
+    """Every node name (lowercased) an element line of netlist_text touches.
+    Dot-cards and a .control block are not elements; a letter NODE_COUNT
+    does not know contributes nothing rather than a guess."""
+    nodes: set[str] = set()
+    in_control = False
+    for line in netlistlib.join_continuations(netlist_text):
+        tokens = line.split()
+        low = tokens[0].lower()
+        if low.startswith(".control"):
+            in_control = True
+            continue
+        if low.startswith(".endc"):
+            in_control = False
+            continue
+        if in_control or low[0] in ".$;":
+            continue
+        rest = [t for t in tokens[1:] if "=" not in t]
+        if low[0] == "x":
+            nodes.update(t.lower() for t in rest[:-1])
+        else:
+            nodes.update(t.lower() for t in rest[:NODE_COUNT.get(low[0], 0)])
+    return nodes
+
+
+def ground_finding(ref_text: str, ref_pins: list[str], extracted_text: str,
+                   topcell: str, rel_gds: str) -> dict | None:
+    """A `ground_unlabelled` finding when the reference reaches global
+    ground without a port for it and the extracted netlist has no node of
+    that name; None when there is nothing to tie or the layout names it."""
+    pins = {p.lower() for p in ref_pins}
+    used = (element_nodes(ref_text) & GROUND) - pins
+    if not used or element_nodes(extracted_text) & GROUND:
+        return None
+    return checklib.violation(
+        "pex_sim", "error", rel_gds, topcell, "ground_unlabelled",
+        sorted(used),
+        f"the reference {topcell} ties devices to global ground "
+        f"({', '.join(sorted(used))}) with no port for it, and the "
+        "extracted netlist has no node 0 - the layout's ground is a local "
+        "net of magic's own naming, so the bench would run with it "
+        "floating. Fix in layout/gen_<block>.py (the layout-fixer): put a "
+        "non-pin text label \"0\" on the ground net's drawing layer (e.g. "
+        "metal1 34/0), "
+        "not on a pin/label layer, which would add a port and change the "
+        "pin set", "magic")
+
+
 def run(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--workspace", required=True, help="block workspace")
@@ -126,8 +195,20 @@ def run(argv=None):
             "parasitics, so a bench on it is the schematic again")
     extracted = work_dir / f"{topcell}.pex.ordered.spice"
     layoutlib.fresh(extracted)
-    extracted.write_text(reorder_pins(
-        raw_text, topcell, pins_of(ref_text, ref_cell)), encoding="utf-8")
+    ref_pins = pins_of(ref_text, ref_cell)
+    extracted.write_text(reorder_pins(raw_text, topcell, ref_pins),
+                         encoding="utf-8")
+
+    # a floating ground is not a bench worth running: the finding alone
+    ground = ground_finding(ref_text, ref_pins, raw_text, topcell,
+                            str(gds_path.relative_to(ws)))
+    if ground is not None:
+        payload = checklib.report(
+            SCRIPT, ws / "layout", [ground], topcell=topcell,
+            gds=str(gds_path.relative_to(ws)),
+            extracted=str(extracted.relative_to(ws)),
+            parasitics=parasitics, measured={})
+        return payload, args.out
 
     pdk = layoutlib.pdk_root()
     bench_text = bench_tpl.read_text(encoding="utf-8").format(

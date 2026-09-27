@@ -213,7 +213,10 @@ def test_sdf_error_refuses(tmp_path, monkeypatch, capsys):
     assert "SDF ERROR" in out["error"]
 
 
-def test_unmatched_modpath_on_a_cell_icarus_refused_is_waived(tmp_path, monkeypatch, capsys):
+def _waiver_ws(tmp_path, monkeypatch):
+    """A workspace whose SDF has an a_xor cell (Icarus refused its paths at
+    build time) at _50_, IOPATH on line 7 of the copy handed to Icarus, and
+    an a_buf cell at _51_, IOPATH on line 14."""
     ws = make_ws(tmp_path)
     _patch_pdk(monkeypatch, tmp_path)
     cells = tmp_path / "cells.v"
@@ -224,23 +227,69 @@ def test_unmatched_modpath_on_a_cell_icarus_refused_is_waived(tmp_path, monkeypa
     sdf = (ws / "harden" / "runs" / "run" / "final" / "sdf" / check_glsim.SDF_CORNER /
            f"tt_um_counter8__{check_glsim.SDF_CORNER}.sdf")
     sdf.write_text(
-        '(DELAYFILE\n (CELL\n  (CELLTYPE "a_xor")\n  (INSTANCE _50_)\n )\n'
-        ' (CELL\n  (CELLTYPE "a_buf")\n  (INSTANCE _51_)\n )\n'
+        '(DELAYFILE\n'
+        ' (CELL\n  (CELLTYPE "a_xor")\n  (INSTANCE _50_)\n  (DELAY\n   (ABSOLUTE\n'
+        '    (IOPATH A1 Z (0.1:0.1:0.1) (0.2:0.2:0.2))\n   )\n  )\n )\n'
+        ' (CELL\n  (CELLTYPE "a_buf")\n  (INSTANCE _51_)\n  (DELAY\n   (ABSOLUTE\n'
+        '    (IOPATH A Z (0.1:0.1:0.1) (0.2:0.2:0.2))\n   )\n  )\n )\n'
         ' (CELL (CELLTYPE "tt_um_counter8") (INSTANCE) (DELAY (ABSOLUTE\n'
         '    (INTERCONNECT tie.ZN uio_oe[0] (0.000:0.000:0.000))\n'
         '    (INTERCONNECT a.Z b.A (0.118:0.118:0.118) (0.063:0.063:0.063))\n'
         ')))\n)\n', encoding="utf-8")
     build = f"{cells}:5: sorry: ifnone with an edge-sensitive path is not supported.\n"
-    ok_sim = "SDF ERROR: x.sdf:9: Unable to match ModPath A1 -> Z in counter8.dut._50_\n"
+    icarus = ws / "log" / "glsim_build" / "sdf_icarus.sdf"
+    return ws, build, icarus
+
+
+def test_unmatched_modpath_on_a_cell_icarus_refused_is_waived(tmp_path, monkeypatch, capsys):
+    ws, build, icarus = _waiver_ws(tmp_path, monkeypatch)
+    ok_sim = f"SDF ERROR: {icarus}:7: Unable to match ModPath A1 -> Z in counter8.dut._50_\n"
     code, out = _run(ws, monkeypatch, capsys, _runner_writing_logs(build, ok_sim))
     assert code == 0, out
     assert out["sdf"]["sdf_unannotated"] == ["_50_ (a_xor)"]
     assert out["sdf"]["zero_interconnects_dropped"] == 1
-    icarus_sdf = (ws / "log" / "glsim_build" / "sdf_icarus.sdf").read_text()
+    icarus_sdf = icarus.read_text()
     assert "tie.ZN" not in icarus_sdf and "a.Z b.A" in icarus_sdf
 
     # the same mismatch on a cell Icarus did NOT refuse is a real SDF error
-    bad_sim = "SDF ERROR: x.sdf:9: Unable to match ModPath A -> Z in counter8.dut._51_\n"
+    bad_sim = f"SDF ERROR: {icarus}:14: Unable to match ModPath A -> Z in counter8.dut._51_\n"
     code, out = _run(ws, monkeypatch, capsys, _runner_writing_logs(build, bad_sim))
     assert code == 2, out
     assert "_51_" in out["error"]
+
+
+def test_unmatched_modpath_torn_by_cocotb_output_is_waived_by_line(tmp_path, monkeypatch, capsys):
+    # cocotb's stdout shares the sim log and can cut Icarus's line before the
+    # instance name; the SDF line number still says which cell it was
+    ws, build, icarus = _waiver_ws(tmp_path, monkeypatch)
+    torn = (f"SDF ERROR: {icarus}:7: Unable to match ModP  1345.00ns INFO     "
+            "cocotb.regression  test_counter8.test_x passed\n"
+            "ath A1 -> Z in counter8.dut._50_\n")
+    code, out = _run(ws, monkeypatch, capsys, _runner_writing_logs(build, torn))
+    assert code == 0, out
+    assert out["sdf"]["sdf_unannotated"] == ["_50_ (a_xor)"]
+
+
+def test_sdf_error_the_gate_cannot_attribute_still_refuses(tmp_path, monkeypatch, capsys):
+    ws, build, icarus = _waiver_ws(tmp_path, monkeypatch)
+    for sim in (
+            # torn line pointing at a cell Icarus did not refuse
+            f"SDF ERROR: {icarus}:14: Unable to match Mo  12.00ns INFO x\n",
+            # torn before the line number
+            f"SDF ERROR: {str(icarus)[:12]}  12.00ns INFO x\n",
+            # torn too early to tell ModPath from "Unable to find ..."
+            f"SDF ERROR: {icarus}:7: Unable to  12.00ns INFO x\n",
+            # another kind of SDF error on the refused cell's line
+            f"SDF ERROR: {icarus}:7: Could not find intermodpath!\n",
+            # a line of the refused cell that is not an IOPATH
+            f"SDF ERROR: {icarus}:4: Unable to match ModPath A1 -> Z in counter8.dut._50_\n",
+            # intact text naming a different instance than the line holds
+            f"SDF ERROR: {icarus}:7: Unable to match ModPath A1 -> Z in counter8.dut._51_\n",
+            # a line number past the end of the file
+            f"SDF ERROR: {icarus}:999: Unable to match ModPath A1 -> Z in counter8.dut._50_\n",
+            # some other SDF file
+            f"SDF ERROR: {tmp_path}/other.sdf:7: Unable to match ModPath A1 -> Z in counter8.dut._50_\n",
+    ):
+        code, out = _run(ws, monkeypatch, capsys, _runner_writing_logs(build, sim))
+        assert code == 2, (sim, out)
+        assert "not fully applied" in out["error"], (sim, out)

@@ -150,6 +150,26 @@ def test_build_refuses_with_an_escalated_issue(tmp_path):
     assert any("open issue" in p for p in problems)
 
 
+def test_build_counts_superseded_closed_only_while_its_replacement_is_fixed(tmp_path):
+    ws = make_ws(tmp_path)
+    pass_every_gate(ws, "msde")
+    st = state_mod.State.load(ws / "state.json")
+    old = st.open_issue({"gate": "cosim", "fixer": "review"})
+    new = st.open_issue({"gate": "cosim", "fixer": "review"})
+    st.update_issue(new["id"], status="fixed")
+    st.update_issue(old["id"], status="superseded", by=new["id"])
+    st.save()
+    att, problems = attest_mod.build(ws)
+    assert problems == [] and att is not None
+
+    st = state_mod.State.load(ws / "state.json")
+    st.update_issue(new["id"], status="escalated")
+    st.save()
+    att, problems = attest_mod.build(ws)
+    assert att is None
+    assert any("2 open issue" in p for p in problems)
+
+
 def test_build_refuses_when_a_gate_edit_marks_it_stale(tmp_path):
     ws = make_ws(tmp_path)
     pass_every_gate(ws, "msde")
@@ -247,3 +267,42 @@ def test_cli_build_exit_1_then_0(tmp_path, capsys):
     out = json.loads(capsys.readouterr().out)
     assert out["status"] == "pass"
     assert out["disposition"]["disposition"] == "gates-green"
+
+
+# ------------------------------------------------- a scope-out made at H1
+
+MIM_RULING = ("MIM capacitor spread is out of scope for this rung: MIM "
+              "stays pinned typical, a known limit.")
+
+
+def scope_out_mim_at_h1(ws: Path) -> None:
+    st = state_mod.State.load(ws / "state.json")
+    chal = st.present_checkpoint("H1")["challenge"]
+    st.record_human("H1", "approved", f"approved {chal}", MIM_RULING)
+    st.record_scope_out("mim_cap", "MIM capacitor spread is out of scope")
+    st.save()
+
+
+def test_the_release_record_carries_a_scope_out_made_at_h1(tmp_path):
+    ws = make_ws(tmp_path, skill="ade", block="ring_osc_div")
+    pass_every_gate(ws, "ade")
+    att, _ = attest_mod.build(ws)
+    assert "scoped_out" not in att
+    attest_mod.write_attestation(ws, att)
+    scope_out_mim_at_h1(ws)
+    # the record written before the ruling no longer stands
+    v = attest_mod.verify(ws)
+    assert v["valid"] is False and "scope-outs" in v["reason"]
+    att, problems = attest_mod.build(ws)
+    assert problems == []
+    [so] = att["scoped_out"]
+    assert so["dimension"] == "mim_cap" and so["pinned"] == "typical"
+    assert so["quote"] == "MIM capacitor spread is out of scope"
+    attest_mod.write_attestation(ws, att)
+    assert attest_mod.verify(ws)["valid"] is True
+    # one that no longer verifies against the answer refuses the release
+    data = json.loads((ws / "state.json").read_text(encoding="utf-8"))
+    data["human"]["H1"]["scope_out"][0]["quote"] = "resistors out of scope"
+    (ws / "state.json").write_text(json.dumps(data), encoding="utf-8")
+    att, problems = attest_mod.build(ws)
+    assert att is None and any("does not verify" in p for p in problems)

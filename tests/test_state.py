@@ -139,6 +139,52 @@ def test_resume_summary_open_issues_includes_escalated_not_fixed_or_waived(tmp_p
     assert ids == {a["id"]}
 
 
+def test_issue_superseded_by_a_fixed_issue_of_the_same_gate(tmp_path):
+    """A finding re-dispatched as a new issue (the first work order refused
+    by a guard) closes the old one only by pointing at the fixed
+    replacement - never without a fix or a waiver of its own."""
+    ws = ws_empty(tmp_path)
+    st = state_mod.State.init(ws, "vde", "uart")
+    old = st.open_issue({"gate": "glsim", "fixer": "rtl"})
+    new = st.open_issue({"gate": "glsim", "fixer": "rtl"})
+    other = st.open_issue({"gate": "lint", "fixer": "rtl"})
+    st.update_issue(other["id"], status="fixed")
+    for kw in ({},                          # no --by
+               {"by": 999},                 # no such issue
+               {"by": old["id"]},           # itself
+               {"by": other["id"]},         # fixed, but another gate
+               {"by": new["id"]}):          # same gate, but not fixed yet
+        with pytest.raises(CheckError):
+            st.update_issue(old["id"], status="superseded", **kw)
+    with pytest.raises(CheckError, match="--by"):
+        st.update_issue(old["id"], status="fixed", by=new["id"])
+    assert old["status"] == "open"
+
+    st.update_issue(new["id"], status="fixed")
+    rec = st.update_issue(old["id"], status="superseded", by=new["id"])
+    assert rec["superseded_by"] == new["id"] and rec["closed"]
+    assert st.resume_summary()["open_issues"] == []
+
+    # the replacement reopened: the superseded one counts as open again
+    st.update_issue(new["id"], status="fixing")
+    ids = {i["id"] for i in st.resume_summary()["open_issues"]}
+    assert ids == {old["id"], new["id"]}
+
+
+def test_issue_superseded_through_the_cli(tmp_path):
+    ws = ws_empty(tmp_path)
+    st = state_mod.State.init(ws, "vde", "uart")
+    old = st.open_issue({"gate": "glsim", "fixer": "rtl"})
+    new = st.open_issue({"gate": "glsim", "fixer": "rtl"})
+    st.update_issue(new["id"], status="fixed")
+    st.save()
+    r, _ = state_mod.run(["issue", "--workspace", str(ws), "--id",
+                          str(old["id"]), "--status", "superseded",
+                          "--by", str(new["id"]), "--note", "re-dispatched"])
+    assert r["issue"]["status"] == "superseded"
+    assert r["issue"]["superseded_by"] == new["id"]
+
+
 def test_formal_gate_hash_covers_a_spec_yaml_depth_edit(tmp_path):
     """invalidation.yaml's `formal: [rtl, formal, spec_yaml]` (M5 - commit
     "invalidation: formal's own depth is a real gate input"):
@@ -646,6 +692,132 @@ def test_cli_present_then_human_quotes_the_challenge(tmp_path, capsys):
     capsys.readouterr()
     st = state_mod.State.load(ws / "state.json")
     assert st.data["human"]["H1"]["status"] == "approved"
+
+
+# ------------------------------------------------- scope-out from the H1 answer
+
+MIM_RULING = ("MIM capacitor spread is out of scope for this rung: MIM "
+              "stays pinned typical, a known limit.")
+
+
+def test_scope_out_is_taken_only_from_the_recorded_h1_answer(tmp_path,
+                                                             capsys):
+    """A person ruled MIM spread out of scope in the note recorded with
+    their H1 approval. state.py carries that ruling onto the H1 record, and
+    refuses a scope-out whose dimension the recorded answer does not name,
+    whose words are not the person's, or which does not rule anything out."""
+    import corners as corners_mod
+    ws = ws_empty(tmp_path)
+    state_mod.State.init(ws, "ade", "ring_osc_div", phase="P4")
+    base = ["--workspace", str(ws)]
+    st = state_mod.State.load(ws / "state.json")
+    # no approved H1 yet: nothing to take a scope-out from
+    with pytest.raises(CheckError, match="H1 is not approved"):
+        st.record_scope_out("mim_cap", MIM_RULING)
+    chal = st.present_checkpoint("H1")["challenge"]
+    st.record_human("H1", "approved", f"approved {chal}", MIM_RULING)
+    st.save()
+    refused = [
+        # the answer never names the resistor
+        ("resistor", MIM_RULING, "does not name resistor"),
+        ("resistor", "resistor spread is out of scope", "not in the recorded"),
+        # words the person did not write
+        ("mim_cap", "MIM spread is out of scope", "not in the recorded"),
+        # the person's words, but no ruling in them
+        ("mim_cap", "MIM capacitor spread", "does not rule it out"),
+        ("vth", MIM_RULING, "unknown dimension"),
+        ("mim_cap", "   ", "--quote is empty"),
+    ]
+    for dim, quote, why in refused:
+        assert state_mod.main(["scope-out", "--dimension", dim,
+                               "--quote", quote, *base]) == 2, (dim, quote)
+        out = json.loads(capsys.readouterr().out)
+        assert why in out["error"], (dim, quote, out)
+    st = state_mod.State.load(ws / "state.json")
+    assert "scope_out" not in st.data["human"]["H1"]
+    # the person's own sentence, whitespace and case aside
+    assert state_mod.main(["scope-out", "--dimension", "mim_cap", "--quote",
+                           "mim capacitor spread is  out of scope", *base]) == 0
+    capsys.readouterr()
+    st = state_mod.State.load(ws / "state.json")
+    [rec] = st.data["human"]["H1"]["scope_out"]
+    assert rec["dimension"] == "mim_cap" and rec["pinned"] == "typical"
+    assert [s["dimension"] for s in corners_mod.recorded_scope_outs(st.data)] \
+        == ["mim_cap"]
+    # a hand edit that widens it no longer verifies, and nothing reads it
+    rec["dimension"] = "resistor"
+    with pytest.raises(CheckError, match="does not verify"):
+        corners_mod.recorded_scope_outs(st.data)
+    # a new presentation of H1 drops it with the answer it came from
+    rec["dimension"] = "mim_cap"
+    st.present_checkpoint("H1")
+    assert corners_mod.recorded_scope_outs(st.data) == []
+
+
+@pytest.mark.parametrize("note, dim, quote, kept", [
+    # a negated ruling rules nothing out
+    ("MIM capacitor spread is not out of scope.", "mim_cap",
+     "MIM capacitor spread is not out of scope", None),
+    ("MIM spread should never be pinned typical.", "mim_cap",
+     "MIM spread should never be pinned typical", None),
+    # a ruling on the other device, quoted whole, rules out only that one
+    ("Resistor spread must be swept; MIM capacitor spread is out of scope.",
+     "resistor",
+     "Resistor spread must be swept; MIM capacitor spread is out of scope",
+     ("mim_cap", "MIM capacitor spread is out of scope")),
+    ("MIM spread is out of scope but resistor spread is swept.", "resistor",
+     "MIM spread is out of scope but resistor spread is swept",
+     ("mim_cap", "MIM spread is out of scope")),
+    # one clause that rules on both devices is not a ruling on either alone
+    ("MIM out of scope, resistors swept.", "resistor",
+     "MIM out of scope, resistors swept", None),
+    # a quote cut from inside a sentence that negates it: the whole clause
+    # the quote sits in is what the person said
+    ("I don't think MIM capacitor spread is out of scope.", "mim_cap",
+     "MIM capacitor spread is out of scope", None),
+    ("Nobody said MIM spread is out of scope.", "mim_cap",
+     "MIM spread is out of scope", None),
+    ("It is not true that MIM spread is out of scope.", "mim_cap",
+     "MIM spread is out of scope", None),
+    # a negator a word or two before the phrase, inside the quote
+    ("MIM spread is not considered out of scope.", "mim_cap",
+     "MIM spread is not considered out of scope", None),
+    # a quote that runs across two clauses is not one ruling
+    ("Resistors are swept; MIM spread is out of scope.", "mim_cap",
+     "Resistors are swept; MIM spread is out of scope",
+     ("mim_cap", "MIM spread is out of scope")),
+    # "not in scope" is itself the ruling, not a negation of one
+    ("Resistor spread is swept but MIM spread is not in scope.", "resistor",
+     "Resistor spread is swept but MIM spread is not in scope",
+     ("mim_cap", "MIM spread is not in scope")),
+])
+def test_scope_out_refuses_a_ruling_the_person_did_not_make(
+        tmp_path, capsys, note, dim, quote, kept):
+    """The quote is verbatim in the recorded H1 note, names the dimension
+    and holds an out-of-scope phrase, but the ruling it makes is negated or
+    is about the other device: refused. Where the note does rule the other
+    device out, that ruling is still taken."""
+    ws = ws_empty(tmp_path)
+    state_mod.State.init(ws, "ade", "ring_osc_div", phase="P4")
+    st = state_mod.State.load(ws / "state.json")
+    chal = st.present_checkpoint("H1")["challenge"]
+    st.record_human("H1", "approved", f"approved {chal}", note)
+    st.save()
+    base = ["--workspace", str(ws)]
+    assert state_mod.main(["scope-out", "--dimension", dim, "--quote", quote,
+                           *base]) == 2
+    out = json.loads(capsys.readouterr().out)
+    assert "refused" in out["error"], out
+    st = state_mod.State.load(ws / "state.json")
+    assert "scope_out" not in st.data["human"]["H1"]
+    if kept:
+        kdim, kquote = kept
+        assert state_mod.main(["scope-out", "--dimension", kdim, "--quote",
+                               kquote, *base]) == 0
+        capsys.readouterr()
+        st = state_mod.State.load(ws / "state.json")
+        assert [s["dimension"] for s in st.data["human"]["H1"]["scope_out"]] \
+            == [kdim]
 
 
 # ------------------------------------------------------------- edit class

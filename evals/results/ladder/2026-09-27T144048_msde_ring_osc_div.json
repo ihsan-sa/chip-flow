@@ -1,0 +1,36 @@
+{
+ "skill": "msde",
+ "rung": "ring_osc_div",
+ "block": "ring_osc_div",
+ "run": "ring_osc_div",
+ "phase": "P2",
+ "scored_at": "2026-09-27T18:40:48+00:00",
+ "counts": false,
+ "gates_green": false,
+ "gate_problems": [
+  "cosim: no recorded result",
+  "precheck: no recorded result",
+  "top_drc: no recorded result",
+  "top_harden: no recorded result",
+  "top_lvs: no recorded result",
+  "release: no recorded pass"
+ ],
+ "gates_passed": [
+  "split"
+ ],
+ "hand_edits": 0,
+ "held_out": {
+  "status": "n/a",
+  "why": "msde has no holdout gate"
+ },
+ "kill_rate": null,
+ "line_pct": null,
+ "area": null,
+ "worst_slack_ns": null,
+ "fix_attempts": 0,
+ "tokens": null,
+ "cost_usd": null,
+ "wall_s": 132,
+ "note": "msde session run 2026-09-27; analog sim_pvt green once the owner's H1 MIM ruling went through the new scope-out route; parked at analog P4 because the phase advance was refused on the box (raised to iiks1)",
+ "kind": "skill"
+}

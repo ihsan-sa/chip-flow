@@ -31,13 +31,14 @@ Schema (version 3):
       "optimise": {"trials", "evaluator_sha", "best": {trial, score}} | null,
       "human": {checkpoint_id: {status: presented|approved|rejected|skipped,
                                 challenge, digest, presented, ts?, answer?,
-                                note?}},
+                                note?, scope_out?: [{dimension, quote,
+                                pinned, ts}] (H1 only)}},
       "artifacts": {name: {path, kind|null, sha256|null, hashed: ts,
                            stale: [mark]?}},
       "open_issues": [{id, gate, phase, fixer, kinds[], severity, count,
                        work_order, status: open|fixing|fixed|escalated|
-                       waived, agent, attempts, opened, closed,
-                       note?, approved_by?}],
+                       waived|superseded, agent, attempts, opened, closed,
+                       note?, approved_by?, superseded_by?}],
       "next_issue_id": int, "next_job_id": int,
       "budgets": {"fix_loops": {gate_name: remaining}, ...},
       "decisions": [{what, why, phase, ts}],
@@ -76,8 +77,18 @@ CLI (docs/design.md 1.1 script contract: argparse, JSON to stdout, exit 0 ok
     state.py decision --what W --why Y ...
     state.py present --checkpoint H1 ...
     state.py human --checkpoint H1 --status approved --answer TEXT [--note N] ...
+    state.py scope-out --dimension mim_cap --quote TEXT ...
+        (a passive corner dimension the person ruled out of scope in their
+        approved H1 answer; refused unless TEXT is verbatim in that
+        answer or note, names the dimension and rules it out - corners.py,
+        "Scoped-out dimensions". check_sim_pvt.py pins it at typical)
     state.py issue --id 3 --status fixed [--agent fixer-1] [--bump-attempts] ...
     state.py issue --id 3 --status waived --note TEXT --approved-by WHO ...
+    state.py issue --id 3 --status superseded --by 4 [--note TEXT] ...
+        (the same finding went through again as issue 4 - a re-dispatched
+        work order - and issue 4 is `fixed`. Refused unless 4 is another
+        issue of the same gate and is itself `fixed`; issue 3 counts as
+        closed only while that stays true - statelib.issue_unresolved)
     state.py budget --path fix_loops.lint [--consume] ...
     state.py log --event name [--data JSON] ...
     state.py snapshot --label L [--files F ...] / restore --label L ...
@@ -839,6 +850,26 @@ class State:
                   challenge=chal)
         return rec
 
+    def record_scope_out(self, dimension: str, quote: str) -> dict:
+        """Carry a scope-out the person's approved H1 answer makes onto
+        that answer's own record (human.H1.scope_out). Only their words
+        can: corners.scope_out_problem refuses a quote that is not in the
+        recorded answer or note, does not name `dimension`, or does not
+        rule it out. A re-presentation of H1 replaces the record, and the
+        scope-out with it - the new answer has to make it again."""
+        import corners as corners_mod
+        cp = corners_mod.SCOPE_CHECKPOINT
+        rec = self.data["human"].get(cp)
+        problem = corners_mod.scope_out_problem(rec, dimension, quote)
+        if problem:
+            raise CheckError(f"scope-out {dimension!r} refused: {problem}")
+        entry = {"dimension": dimension, "quote": quote,
+                 "pinned": "typical", "ts": now()}
+        rec["scope_out"] = [s for s in rec.get("scope_out") or []
+                            if s.get("dimension") != dimension] + [entry]
+        self._log("scope_out", checkpoint=cp, dimension=dimension)
+        return entry
+
     def open_issue(self, issue: dict) -> dict:
         iid = self.data["next_issue_id"]
         self.data["next_issue_id"] = iid + 1
@@ -852,13 +883,22 @@ class State:
     def update_issue(self, iid: int, status: str | None = None,
                      agent: str | None = None, bump: bool = False,
                      note: str | None = None,
-                     approved_by: str | None = None) -> dict:
+                     approved_by: str | None = None,
+                     by: int | None = None) -> dict:
+        if by is not None and status != "superseded":
+            raise CheckError("issue --by names the replacement of a "
+                             "superseded issue; it goes only with "
+                             "--status superseded")
         for rec in self.data["open_issues"]:
             if rec["id"] == iid:
                 if status:
-                    if status not in ("open", "fixing", "fixed", "escalated",
-                                      "waived"):
+                    if status not in statelib.ISSUE_STATUSES:
                         raise CheckError(f"bad issue status {status!r}")
+                    if status == "superseded":
+                        self._check_superseded_by(rec, by)
+                        rec["superseded_by"] = by
+                    else:
+                        rec.pop("superseded_by", None)
                     if status == "waived" and not (
                             (note or rec.get("note"))
                             and (approved_by or rec.get("approved_by"))):
@@ -869,7 +909,7 @@ class State:
                             "approver is exactly the silent-waive this "
                             "field pair exists to refuse")
                     rec["status"] = status
-                    if status in ("fixed", "waived"):
+                    if status in ("fixed", "waived", "superseded"):
                         rec["closed"] = now()
                 if agent:
                     rec["agent"] = agent
@@ -883,6 +923,31 @@ class State:
                           agent=rec["agent"], attempts=rec["attempts"])
                 return rec
         raise CheckError(f"no issue with id {iid}")
+
+    def _check_superseded_by(self, rec: dict, by: int | None) -> None:
+        """Refuse `superseded` unless `by` names another issue of the same
+        gate that is itself fixed: the only route that closes an issue with
+        neither a fix of its own nor a waiver is pointing at the fix that
+        replaced it."""
+        if by is None:
+            raise CheckError("issue --status superseded requires --by <id>: "
+                             "the issue whose fix replaced this one")
+        if by == rec["id"]:
+            raise CheckError("an issue cannot be superseded by itself")
+        other = next((o for o in self.data["open_issues"]
+                      if o["id"] == by), None)
+        if other is None:
+            raise CheckError(f"issue --by {by}: no issue with id {by}")
+        if other.get("gate") != rec.get("gate"):
+            raise CheckError(
+                f"issue --by {by}: it is an issue of gate "
+                f"{other.get('gate')!r}, not {rec.get('gate')!r} - only a "
+                "fix of the same gate's finding can supersede it")
+        if other.get("status") != "fixed":
+            raise CheckError(
+                f"issue --by {by}: its status is {other.get('status')!r}, "
+                "not 'fixed' - an issue is superseded only by one whose "
+                "fix went through")
 
     def budget(self, dotted: str, consume: bool = False, default: int = 3) -> int:
         node = self.data["budgets"]
@@ -1071,9 +1136,11 @@ class State:
         # be closed by looping again (docs/design.md, "Escalate: ... a
         # human decides") - the single most important thing for a resumed
         # session to see, not less. Only "fixed"/"waived" are genuinely
-        # closed and belong out of this list.
-        open_issues = [i for i in self.data["open_issues"]
-                       if i["status"] in ("open", "fixing", "escalated")]
+        # closed and belong out of this list, and "superseded" only while
+        # its replacement is fixed (statelib.issue_unresolved).
+        issues = self.data["open_issues"]
+        open_issues = [i for i in issues
+                       if statelib.issue_unresolved(i, issues)]
         running_jobs = [jid for jid, j in self.data["jobs"].items()
                         if j.get("status") == "running"]
         last = self.data["history"][-1] if self.data["history"] else None
@@ -1235,6 +1302,15 @@ def run(argv=None):
                         "challenge `present` printed")
     p.add_argument("--note")
 
+    p = sub.add_parser("scope-out", help="record a passive corner "
+                       "dimension the approved H1 answer rules out of scope")
+    common(p)
+    p.add_argument("--dimension", required=True,
+                   help="mim_cap or resistor (corners.SCOPE_DIMENSIONS)")
+    p.add_argument("--quote", required=True,
+                   help="the person's words that rule it out, verbatim "
+                        "from the recorded H1 answer or note")
+
     p = sub.add_parser("issue")
     common(p)
     p.add_argument("--id", type=int, required=True)
@@ -1244,6 +1320,9 @@ def run(argv=None):
     p.add_argument("--note", help="required with --status waived: why")
     p.add_argument("--approved-by", dest="approved_by",
                    help="required with --status waived: who")
+    p.add_argument("--by", type=int,
+                   help="required with --status superseded: the id of the "
+                        "fixed issue of the same gate that replaced it")
 
     p = sub.add_parser("budget")
     common(p)
@@ -1364,10 +1443,13 @@ def _mutate(st: "State", args, result: dict):
     elif args.cmd == "human":
         st.record_human(args.checkpoint, args.status, args.answer, args.note)
         result.update(checkpoint=args.checkpoint, status=args.status)
+    elif args.cmd == "scope-out":
+        result.update(scope_out=st.record_scope_out(args.dimension,
+                                                    args.quote))
     elif args.cmd == "issue":
         rec = st.update_issue(args.id, args.status, args.agent,
                               args.bump_attempts, args.note,
-                              args.approved_by)
+                              args.approved_by, args.by)
         result.update(issue=rec)
     elif args.cmd == "budget":
         remaining = st.budget(args.bpath, args.consume)

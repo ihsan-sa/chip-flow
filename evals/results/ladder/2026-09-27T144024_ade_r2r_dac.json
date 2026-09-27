@@ -1,0 +1,38 @@
+{
+ "skill": "ade",
+ "rung": "r2r_dac",
+ "block": "r2r_dac",
+ "run": "r2r_dac",
+ "phase": "P5",
+ "scored_at": "2026-09-27T18:40:24+00:00",
+ "counts": false,
+ "gates_green": false,
+ "gate_problems": [
+  "release: no recorded pass"
+ ],
+ "gates_passed": [
+  "bench_strength",
+  "drc",
+  "lvs",
+  "netlist_lint",
+  "pex_sim",
+  "sim_pvt",
+  "sim_tt",
+  "spec_lint"
+ ],
+ "hand_edits": 0,
+ "held_out": {
+  "status": "n/a",
+  "why": "ade has no holdout gate"
+ },
+ "kill_rate": null,
+ "line_pct": null,
+ "area": null,
+ "worst_slack_ns": null,
+ "fix_attempts": 31,
+ "tokens": null,
+ "cost_usd": null,
+ "wall_s": 115470,
+ "note": "ade session run 2026-09-27 in this track's own workspace; P5 layout by the layout-writer, drc/lvs/pex_sim green; parked at H2 (H2-3b474f) awaiting the owner; release waits on it; pex_sim needed the floating-ground fix (bug G)",
+ "kind": "skill"
+}

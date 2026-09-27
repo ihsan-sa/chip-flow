@@ -162,7 +162,10 @@ On gate fail (exit 1, `failing` findings with `kind`/`file`/`module`):
    `testbench` orders to the bench-writer in WORK-ORDER MODE, everything
    else (`netlist`, `sizing`, `review`) to the fixer. Orders inside one
    `parallel_groups` entry may run concurrently; groups run in sequence.
-   Mark issues `fixing` -> `fixed`/`escalated` (`state.py issue`).
+   Mark issues `fixing` -> `fixed`/`escalated` (`state.py issue`). An
+   issue whose finding went through again as a later issue's order closes
+   only as `--status superseded --by <that issue>`, a `fixed` issue of the
+   same gate.
 5. Declare what the fix actually changed:
 
    | fixer domain | files | declare | then re-run |
@@ -224,7 +227,15 @@ ask them to quote it in their reply, then record that reply verbatim with
 not quote the challenge, or a workspace that changed since the
 presentation, so an approval written in a brief never counts, and
 `set-phase` will not leave P4 (H1) or P5 (H2) until the checkpoint is
-approved. A rejection loops the phase with the notes as new constraints. H1 comes after P4
+approved. A rejection loops the phase with the notes as new constraints.
+When the approved H1 answer rules a passive corner dimension out of scope
+("MIM spread is out of scope"), record it with `state.py scope-out
+--workspace <ws> --dimension mim_cap|resistor --quote '<their words,
+verbatim>'`: sim_pvt pins that one device at typical and still sweeps
+every other axis, and attest and the design document list it. Never a
+whole-gate waiver for it, and never a scope-out the answer did not make:
+state.py refuses a quote that is not in the recorded answer or note,
+and one with no clause that rules that one device out, un-negated. H1 comes after P4
 (before any layout is drawn), H2 after P5. Submitting to a shuttle is
 always the person's.
 
