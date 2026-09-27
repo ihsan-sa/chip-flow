@@ -8,7 +8,7 @@ edited the run by hand (docs/design.md section 3). Harder rungs are higher up.
 |---|---|---|---|
 | 4 | small RISC-V core: not run | bandgap: not run | SAR ADC: not run |
 | 3 | SPI peripheral with a FIFO: red | comparator: not run | DAC with an SPI register: not run |
-| 2 | UART: red | R2R DAC: red | ring oscillator with a divider: red |
+| 2 | UART: counts | R2R DAC: red | ring oscillator with a divider: red |
 | 1 | 8-bit counter: counts | current mirror: red | a sensor counted: red |
 
 ## /vde
@@ -16,7 +16,7 @@ edited the run by hand (docs/design.md section 3). Harder rungs are higher up.
 | rung | counts | why not | held-out | kill rate | area | worst slack ns | fix attempts | tokens | cost USD | wall s | scored | note |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | counter8 | yes |  | pass (1/1) | 1.00 | 1086.6 | 0.29 | 19 | - | - | 14718 | 2026-09-25 | vde session run 2026-09-24/25, workspace runs/counter8-20260924 |
-| uart | no | 7 gate(s) not green | pass (1/1) | 1.00 | 2283.0 | -0.12 | 21 | - | - | 213420 | 2026-09-27 | vde session run 2026-09-27 on main + this PR's flow fixes; stopped at P6 timing: setup -0.12 ns at max_ss_125C, the fixer's harden override edit refused by cc-guard (the workspace sits under another track's state dir) |
+| uart | yes |  | pass (1/1) | 1.00 | 2309.4 | 0.15 | 53 | - | - | 226452 | 2026-09-27 | vde session run 2026-09-27 in this track's own workspace; every gate green through release (timing after the fixer's harden override, glsim after the fixer's reset for hold, parity re-timed); parked at H2 (H2-97cc79) awaiting the owner |
 | spi_fifo | no | 10 gate(s) not green | pass (1/1) | 0.95 | - | - | 16 | - | - | 18580 | 2026-09-25 | vde session run 2026-09-25, workspace runs/spi_fifo-20260925; stopped at P4 formal: smt prove at depth 96 times out at the gate's 180s (3 runs), and induction can't close because the wrapper can't see DUT registers (sby flow never flattens), escalated |
 | riscv | not run | | | | | | | | | | | |
 
@@ -24,8 +24,8 @@ edited the run by hand (docs/design.md section 3). Harder rungs are higher up.
 
 | rung | counts | why not | held-out | kill rate | area | worst slack ns | fix attempts | tokens | cost USD | wall s | scored | note |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| mirror | no | 4 gate(s) not green | n/a | - | - | - | 7 | - | - | 107297 | 2026-09-27 | ade session run 2026-09-27; P4 re-run green (mc not applicable); stopped at P5 layout: the layout-writer's generator (DRC-clean, extraction matches in a scratch copy) refused by cc-guard (the workspace sits under another track's state dir) |
-| r2r_dac | no | 4 gate(s) not green | n/a | - | - | - | 26 | - | - | 106833 | 2026-09-27 | ade session run 2026-09-27; P4 re-run green (17 PVT corners, mc not applicable); stopped at P5 layout: the layout-writer's generator (DRC 0, LVS unique, PEX in bounds in a scratch copy) refused by cc-guard |
+| mirror | no | 1 gate(s) not green | n/a | - | - | - | 7 | - | - | 114496 | 2026-09-27 | ade session run 2026-09-27 in this track's own workspace; P5 layout by the layout-writer, drc/lvs/pex_sim green; parked at H2 (H2-907cba) awaiting the owner; release waits on it |
+| r2r_dac | no | 1 gate(s) not green | n/a | - | - | - | 31 | - | - | 115470 | 2026-09-27 | ade session run 2026-09-27 in this track's own workspace; P5 layout by the layout-writer, drc/lvs/pex_sim green; parked at H2 (H2-3b474f) awaiting the owner; release waits on it; pex_sim needed the floating-ground fix (bug G) |
 | comparator | not run | | | | | | | | | | | |
 | bandgap | not run | | | | | | | | | | | |
 
@@ -34,7 +34,7 @@ edited the run by hand (docs/design.md section 3). Harder rungs are higher up.
 | rung | counts | why not | held-out | kill rate | area | worst slack ns | fix attempts | tokens | cost USD | wall s | scored | note |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | sensor_counted | no | hand edits | n/a | - | - | - | 4 | - | 69.50 | 28795 | 2026-09-25 | all gates green on the merged engine; 2 hand edits are the mutant_rulings files carrying planning-seat per-mutant rulings; wall includes waits on rulings |
-| ring_osc_div | no | 6 gate(s) not green | n/a | - | - | - | 0 | - | - | 132 | 2026-09-27 | msde session run 2026-09-27; digital side released (CLOCK_PORT fix); analog stopped at P4 sim_pvt: with MIM corners (#35) f_osc spans 2.92-5.20 MHz vs 3-5 MHz, and the owner's H1 scoped MIM spread out - no flow route carries that ruling |
+| ring_osc_div | no | 6 gate(s) not green | n/a | - | - | - | 0 | - | - | 132 | 2026-09-27 | msde session run 2026-09-27; analog sim_pvt green once the owner's H1 MIM ruling went through the new scope-out route; parked at analog P4 because the phase advance was refused on the box (raised to iiks1) |
 | dac_spi | not run | | | | | | | | | | | |
 | sar_adc | not run | | | | | | | | | | | |
 
