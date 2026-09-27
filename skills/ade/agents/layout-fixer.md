@@ -22,7 +22,7 @@ $CFH/engine/scripts/<name>.py` (`$CFH` is
 - ONE work order JSON (path given by the orchestrator): the cluster's
   findings (`file` carries the layer name for `drc`, `module` the cell;
   `kind` is the klayout rule category for `drc`, `lvs_mismatch` for `lvs`,
-  `measure_out_of_bounds` for `pex_sim`), `guidance`, `remediations`, the
+  `measure_out_of_bounds` or `ground_unlabelled` for `pex_sim`), `guidance`, `remediations`, the
   gate to re-run. The work order is the whole brief.
 - `remediations`: `skills/ade/reference/remediations/<kind>.md` when an
   exact or family file exists, else `analog_drc.md`/`lvs_mismatch.md`
@@ -59,6 +59,10 @@ setup) - a finding is never resolved by weakening what checks it.
    a layout fix for it. For an out-of-bounds measure: shorten/widen the
    routing segment the parasitic bound cares about (docs/design.md 5's
    "the layout's own" call).
+   **`pex_sim` `ground_unlabelled`** (`ground_unlabelled.md`): the
+   netlist uses global ground `0` and the layout never names it - add a
+   non-pin text label `"0"` on the ground net's drawing layer; never a
+   pin label, never a ground pin in `netlist/`.
 4. Re-run the failed gate: `$CFH/bin/eda python $CFH/engine/scripts/
    gate.py --gate <gate> --skill ade --workspace <ws>`. Your findings must
    be gone; a NEW finding that was not there before is a regression -

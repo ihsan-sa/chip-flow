@@ -178,6 +178,83 @@ def test_measure_never_met_is_a_finding_not_a_refusal(unlaunchable_eda,
     assert out["measured"] == {"x": 0.5}
 
 
+# r2r_dac as a real ws hit it: the reference returns the ladder and every
+# poly body to global 0 with no port for it, and magic named the layout's
+# ground w_n352_n240#, so the bench ran with ground floating
+R2R_REF = (".subckt r2r_dac bmsb blsb vout\n"
+           "xrmsb bmsb vout 0 ppolyf_u_1k r_length={r_length} r_width=2e-6\n"
+           "xr2lsb n1 0 0 ppolyf_u_1k r_length={r2_length} r_width=2e-6\n"
+           ".ends r2r_dac\n")
+R2R_EXT_FLOATING = (".subckt r2r_dac bmsb blsb vout\n"
+                    "X0 vout bmsb w_n352_n240# ppolyf_u_1k r_width=2u "
+                    "r_length=20u\n"
+                    "X2 w_n352_n240# a_7214_0# w_n352_n240# ppolyf_u_1k "
+                    "r_width=2u r_length=36u\n"
+                    "C2 vout w_n352_n240# 1.08f\n.ends\n")
+
+
+def test_element_nodes_reads_nodes_not_values_or_models():
+    text = ("* comment 0\n.subckt blk a b\nX1 a 0 b\n+ rm1 w=1u\n"
+            "C1 a b 0\nR2 b gnd 1k\nM1 d g s b nfet l=0\n.ends\n"
+            ".control\nlet v = 0\n.endc\n")
+    assert check_pex_sim.element_nodes(text) == {
+        "a", "b", "0", "gnd", "d", "g", "s"}
+
+
+def test_ground_finding_when_reference_uses_global_0_and_layout_does_not():
+    v = check_pex_sim.ground_finding(
+        R2R_REF, ["bmsb", "blsb", "vout"], R2R_EXT_FLOATING, "r2r_dac",
+        "layout/r2r_dac.gds")
+    assert v["kind"] == "ground_unlabelled"
+    assert v["refs"] == ["0"]
+    assert "label" in v["msg"] and "layout-fixer" in v["msg"]
+
+
+def test_ground_labelled_0_in_the_layout_is_no_finding():
+    ext = R2R_EXT_FLOATING.replace("w_n352_n240#", "0")
+    assert check_pex_sim.ground_finding(
+        R2R_REF, ["bmsb", "blsb", "vout"], ext, "r2r_dac", "g") is None
+
+
+def test_pin_grounded_reference_is_unchanged():
+    # the mirror: ground is the vss pin, so the extraction owes no node 0
+    ref = (".subckt current_mirror iref_node iout vdd vss\n"
+           "xm1 iref_node iref_node vss vss nfet_03v3 w=8u l=0.5u\n.ends\n")
+    ext = (".subckt current_mirror iref_node iout vss vdd\n"
+           "X0 iout iref_node vss vss nfet_03v3 w=8u l=0.5u\n"
+           "C0 iout vss 0.2f\n.ends\n")
+    assert check_pex_sim.ground_finding(
+        ref, ["iref_node", "iout", "vdd", "vss"], ext, "current_mirror",
+        "g") is None
+
+
+def test_floating_ground_is_a_finding_and_no_bench_runs(unlaunchable_eda,
+                                                        tmp_path,
+                                                        monkeypatch):
+    import layoutlib
+    ws = unlaunchable_eda
+    (ws / "netlist" / "blk.cir").write_text(
+        ".subckt blk a b\nr1 a n1 1k\nr2 n1 0 1k\nr3 n1 b 1k\n.ends\n",
+        encoding="utf-8")
+
+    def extracted(work_dir, gds, cell, parasitics):
+        p = work_dir / f"{cell}.pex.spice"
+        p.write_text(".subckt blk a b\nR0 a n1 1k\nR1 n1 a_5_5# 1k\n"
+                     "R2 n1 b 1k\nC0 a b 0.1f\n.ends\n", encoding="utf-8")
+        return p, ""
+
+    def no_sim(*a, **k):
+        raise AssertionError("the bench ran on a floating ground")
+
+    monkeypatch.setattr(layoutlib, "run_magic_extract", extracted)
+    monkeypatch.setattr(layoutlib, "run_eda", no_sim)
+    code, out = run_json(["--workspace", str(ws)], tmp_path)
+    assert code == 1, out
+    assert [(v["kind"], v["refs"]) for v in out["violations"]] == [
+        ("ground_unlabelled", ["0"])]
+    assert out["measured"] == {}
+
+
 @pytest.mark.slow
 def test_clean_mirror_pex_sim_passes(tmp_path):
     ws = make_ws(tmp_path, "mirror")
