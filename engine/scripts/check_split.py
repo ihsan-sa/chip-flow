@@ -25,12 +25,25 @@ interface.yaml entry (a name-only entry is refused, not compared None ==
 None against an equally bare side entry). Fault this gate must catch
 (gates.yaml): "a control word width that differs between the two".
 
+Analog pads (Tiny Tapeout analog tile). An analog pin that leaves the chip
+on a ua pad is not a crossing signal: top_harden and precheck route pads
+only from interface.yaml's top-level `ua_pins: {<pin>: <k>}` map
+(check_top_harden.py), so a pad listed under `signals:` is joined to the
+digital side instead and nothing reaches its pad. The analog side declares
+its pads as `pads: [<pin>, ...]` in analog_spec.yaml. The gate fails with
+`pad_in_signals` when an interface.yaml signal is a ua_pins key, one of the
+analog side's `pads`, or named like a pad (`ua`, `ua[k]`, `ua_*`, `uaK`),
+and with `pad_missing_from_ua_pins` when a pad the analog side declares is
+not in ua_pins. A malformed `ua_pins` (not a mapping) or `pads` (not a list
+of names) is refused (exit 2).
+
 CLI/exit contract: checklib's (argparse, JSON to stdout or --out, exit 0
 pass, 1 violations, 2 error with a remediation string).
 """
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
@@ -52,6 +65,8 @@ SIDE_SPECS = {"digital": "digital_spec.yaml", "analog": "analog_spec.yaml"}
 # the two"), so it is checked and required with the same weight as the four
 # the prose does name.
 SIGNAL_FIELDS = ("direction", "level", "domain", "width", "load")
+# A name that is itself a Tiny Tapeout analog pad: ua, ua[k], ua_*, uaK.
+UA_PAD_RE = re.compile(r"^ua(\[\d+\]|_.*|\d+)?$", re.I)
 
 
 def _load_yaml_mapping(path: Path, what: str) -> dict:
@@ -119,6 +134,33 @@ def load_side_interface(path: Path, side: str) -> dict[str, dict]:
     return out
 
 
+def load_ua_pins(path: Path) -> set[str]:
+    """Lower-cased pin names of interface.yaml's optional `ua_pins` map -
+    the analog pins that leave the chip on a ua pad (check_top_harden.py
+    reads the same map). Anything but a mapping is refused."""
+    ua = _load_yaml_mapping(path, "interface.yaml").get("ua_pins")
+    if ua is None:
+        return set()
+    if not isinstance(ua, dict):
+        raise CheckError(f"{path}: 'ua_pins' must be a mapping "
+                         "{<analog pin>: <ua pad index>}")
+    return {str(p).lower() for p in ua}
+
+
+def load_analog_pads(path: Path) -> set[str]:
+    """Lower-cased names in analog_spec.yaml's optional `pads:` list - the
+    analog pins the analog side says go out on a ua pad."""
+    if not path.is_file():
+        return set()
+    pads = _load_yaml_mapping(path, "analog spec").get("pads")
+    if pads is None:
+        return set()
+    if not isinstance(pads, list) or not all(
+            isinstance(p, str) and p.strip() for p in pads):
+        raise CheckError(f"{path}: 'pads' must be a list of analog pin names")
+    return {p.lower() for p in pads}
+
+
 def run(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--workspace", required=True, help="block workspace")
@@ -161,6 +203,27 @@ def run(argv=None):
             bad("signal_not_declared", [name],
                f"{name!r} is in the {side} spec's 'interface' list but not "
                "in interface.yaml")
+
+    # A pad is routed from ua_pins only; as a crossing signal it would be
+    # joined to the digital side and never reach its pad (task brief: "the
+    # split gate fails ... when a pad or ua_* pin appears in interface.yaml's
+    # signals, or when an analog pad the analog side declares is missing
+    # from ua_pins").
+    ua_pins = load_ua_pins(interface_path)
+    pads = load_analog_pads(ws / SIDE_SPECS["analog"])
+    for name in sorted(interface):
+        low = name.lower()
+        if low in ua_pins or low in pads or UA_PAD_RE.match(name):
+            bad("pad_in_signals", [name],
+               f"{name!r} is an analog pad, not a crossing signal: take it "
+               "out of interface.yaml's signals (and both side specs' "
+               "'interface' lists) and map it in interface.yaml's ua_pins "
+               "{<pin>: <ua index>} - top_harden routes pads only from there")
+    for name in sorted(pads - ua_pins):
+        bad("pad_missing_from_ua_pins", [name],
+           f"the analog spec declares pad {name!r} but interface.yaml's "
+           f"ua_pins does not map it; add '{name}: <ua index>' under ua_pins "
+           "or it never reaches a pad")
 
     payload = checklib.report(SCRIPT, interface_path, violations,
                               signals=sorted(interface))

@@ -33,8 +33,8 @@ SEV_RANK = {"error": 2, "warning": 1, "info": 0}
 # transcribes one per finding) routes there directly - reviewer kinds are
 # free slugs FIXER_HINTS cannot enumerate.
 FIXER_DOMAINS = frozenset({
-    "rtl", "testbench", "formal", "synth", "harden", "layout", "sizing",
-    "netlist", "review"})
+    "rtl", "testbench", "holdout_stimulus", "formal", "synth", "harden",
+    "layout", "sizing", "netlist", "review"})
 
 # kind -> the fixer domain best suited to resolve it. Empty at M1 (every
 # gate is a stub, so no real finding kind exists yet); each milestone that
@@ -52,7 +52,11 @@ FIXER_DOMAINS = frozenset({
 #     testbench written first, in fresh context, from the spec alone (docs/
 #     design.md section 2) - they route to "rtl". A test that never ran
 #     (skipped) or a requirement with no test tagged to it is a TESTBENCH
-#     gap - "testbench".
+#     gap - "testbench". The one exception: a held-out test that died in
+#     its own stimulus code before any assert ran (`holdout_stimulus_fault`,
+#     check_holdout.py says exactly when) is the test's fault, not the
+#     design's - "holdout_stimulus", a narrower testbench domain that may
+#     touch holdout/ stimulus but nothing that judges.
 #   - `mutate` scores the testbench, never the design ("a mutate failure
 #     goes back to the tb-writer, not the rtl-writer", docs/design.md
 #     section 2) - every survivor_* class and the kill-rate rollup route to
@@ -113,6 +117,7 @@ FIXER_HINTS: dict[str, str] = {
 
     # holdout (check_holdout.py) - "test_skipped" is shared with sim above.
     "holdout_failed": "rtl",
+    "holdout_stimulus_fault": "holdout_stimulus",
     "untagged_holdout_test": "testbench",
 
     # mutate (check_mutate.py) - every mutate_runner.classify() class.
@@ -140,6 +145,7 @@ FIXER_HINTS: dict[str, str] = {
     "combinational_loop": "rtl",
     "no_driver": "rtl",
     "unmapped_cell": "rtl",
+    "cell_not_in_liberty": "rtl",
     "latch": "rtl",
 
     # release (check_release.py, via attest.py build())
@@ -204,6 +210,11 @@ FIXER_HINTS: dict[str, str] = {
     "survivor_connection_removed": "testbench",
     "survivor_type_flipped": "testbench",
     "survivor_bias_halved": "testbench",
+    # a behavioural B source's two mutants; survivor_output_stuck is the
+    # same key as mutate's class above, and routes the same way
+    "survivor_gain_halved": "testbench",
+    # device_not_mutated / device_undeclared stay unmapped ("review"): the
+    # fix is a spec scope call or an engine gap, not one fixer's file
 
     # lvs (check_analog_lvs.py) and pex_sim (check_pex_sim.py) - a pex
     # bench that never printed a value is the bench-writer's, not the layout's

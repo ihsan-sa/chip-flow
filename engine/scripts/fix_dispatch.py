@@ -5,8 +5,8 @@ swapped: the uniform fix-loop protocol is unchanged (a gate fails -> cluster
 the failing findings, cluster_violations.py -> ONE fixer agent per cluster,
 where clusters don't share a file they may run in parallel -> fixers edit
 via scripts only -> re-run the gate), but the fixer taxonomy is chip-flow's
-own (rtl/testbench/formal/synth/harden/layout/sizing/review, docs/design.md
-1.9's agent roles) instead of PCB's (router/placement/plane/silk/...), and
+own (rtl/testbench/holdout_stimulus/formal/synth/harden/layout/sizing/
+review, docs/design.md 1.9's agent roles) instead of PCB's (router/placement/plane/silk/...), and
 "region" (a board bbox) is gone - clusters key on (file, module, kind).
 
 DOMAINS' `scripts` lists are placeholders at M1: the skill directories that
@@ -68,6 +68,23 @@ DOMAINS: dict[str, dict] = {
         "guidance": [
             "Edit tb/ (and the reference model it scores against) only; a "
             "mutate survivor names the mutant class the test must now kill.",
+        ],
+    },
+    "holdout_stimulus": {
+        "scripts": ["engine/scripts/check_holdout_edit.py",
+                    "engine/scripts/gate.py", "engine/scripts/state.py"],
+        "guidance": [
+            "A held-out test died in its own stimulus code (a tb/ helper it "
+            "imports changed shape, a call it makes no longer fits) before "
+            "any assert judged the design. Edit holdout/ stimulus and "
+            "helper calls only: never an assert, a check_*/expect_* call, "
+            "a bound, an expected value, a decorator or a `# req:` tag.",
+            "Before declaring the edit, run check_holdout_edit.py "
+            "--workspace <ws> --baseline <the pre-fix snapshot label>; "
+            "declare it with `state.py edit --class holdout_stimulus_edit "
+            "--baseline <label>`, which refuses the same edits. If the "
+            "failure is not a stimulus fault after all, change nothing and "
+            "say so, and the order is escalated for triage.",
         ],
     },
     "formal": {
@@ -148,7 +165,8 @@ SIDECARS = ["spec/spec.yaml"]
 # (generator code only), bench findings to the bench-writer (a
 # bench_strength survivor is the BENCH's fault, like a mutate survivor), and
 # everything else to the fixer. /vde sends every testbench order (every
-# mutate survivor, every requirement-coverage gap) to the tb-writer in
+# mutate survivor, every requirement-coverage gap) and every held-out
+# stimulus fault (the tb-writer wrote holdout/) to the tb-writer in
 # work-order mode (skills/vde/SKILL.md, fix loop step 4), every formal
 # order (a failed or bounded property, an unreached cover, a formal depth
 # to set) to the property-writer in work-order mode - its prompt is the one
@@ -157,7 +175,8 @@ SIDECARS = ["spec/spec.yaml"]
 # goes to its own fixer (skills/msde/SKILL.md, fix loop), so no entry.
 ROLE_BY_DOMAIN: dict[str, dict[str, str]] = {
     "ade": {"layout": "layout-fixer", "testbench": "bench-writer"},
-    "vde": {"testbench": "tb-writer", "formal": "property-writer"},
+    "vde": {"testbench": "tb-writer", "holdout_stimulus": "tb-writer",
+            "formal": "property-writer"},
 }
 
 

@@ -16,6 +16,7 @@ sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(ENGINE / "lib"))
 
 import check_holdout  # noqa: E402
+import cluster_violations  # noqa: E402
 
 RTL_GOOD = """\
 module top (input wire clk, input wire rst, output reg [1:0] count);
@@ -172,3 +173,86 @@ def test_relative_workspace_does_not_pollute_holdout(tmp_path, capsys,
                if p.name not in ("test_holdout.py", "__pycache__")]
     assert leftover == [], \
         f"a relative --workspace polluted holdout/ with: {leftover}"
+
+
+# ---- a held-out test that dies in its own stimulus code is the test's
+# fault, not the design's: it routes to the test's writer, not the rtl fixer.
+
+HELPERS_PY = """\
+async def setup(dut):
+    # a visible-tb helper that grew a third return value
+    return 1, 2, 3
+"""
+
+STIMULUS_FAULT_TB = """\
+import cocotb
+from helpers import setup
+
+# req: REQ-RESET
+@cocotb.test()
+async def test_reset_is_zero(dut):
+    fb, rises = await setup(dut)
+"""
+
+# X on count (never reset) makes int() raise ValueError inside the assert -
+# cocotb's own code raised it, so that is the design's, not the stimulus's.
+X_IN_ASSERT_TB = """\
+import cocotb
+from cocotb.triggers import Timer
+
+# req: REQ-RESET
+@cocotb.test()
+async def test_reset_is_zero(dut):
+    await Timer(1, unit="ns")
+    assert int(dut.count.value) == 0
+"""
+
+
+@pytest.mark.slow
+def test_stimulus_fault_routes_away_from_the_rtl_fixer(tmp_path, capsys):
+    ws = make_ws(tmp_path, RTL_GOOD, STIMULUS_FAULT_TB)
+    (ws / "holdout" / "helpers.py").write_text(HELPERS_PY, encoding="utf-8")
+    code = check_holdout.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 1, out
+    kinds = [v["kind"] for v in out["violations"]]
+    assert kinds == ["holdout_stimulus_fault"], out
+    v = out["violations"][0]
+    assert v["refs"] == ["REQ-RESET"] and v["file"] is None
+    assert "ValueError" in v["msg"] and "test_reset_is_zero" not in v["msg"]
+    assert cluster_violations.FIXER_HINTS[v["kind"]] == "holdout_stimulus"
+
+
+@pytest.mark.slow
+def test_x_inside_an_assert_is_still_the_designs(tmp_path, capsys):
+    ws = make_ws(tmp_path, RTL_GOOD, X_IN_ASSERT_TB)
+    code = check_holdout.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 1, out
+    assert [v["kind"] for v in out["violations"]] == ["holdout_failed"]
+
+
+def _tb(path: str, code: str) -> str:
+    return ("Traceback (most recent call last):\n"
+            f'  File "{path}", line 8, in test_x\n    {code}\n'
+            "ValueError: nope\n")
+
+
+def test_stimulus_fault_classifier(tmp_path):
+    ws = tmp_path / "ws"
+    hold = str(ws / "holdout" / "test_h.py")
+    lib = "/usr/lib/python3/cocotb/handle.py"
+    sf = check_holdout.stimulus_fault
+    assert sf({"type": "ValueError",
+               "traceback": _tb(hold, "a, b = setup()")}, ws) == "ValueError"
+    # an AssertionError is a judgement, never a stimulus fault
+    assert sf({"type": "AssertionError",
+               "traceback": _tb(hold, "a, b = setup()")}, ws) is None
+    # raised from an assert line, or from library code: the design's
+    assert sf({"type": "ValueError",
+               "traceback": _tb(hold, "assert int(x) == 1")}, ws) is None
+    assert sf({"type": "AttributeError",
+               "traceback": _tb(hold, "dut.x.value = 1")
+               + _tb(lib, "raise AttributeError()")}, ws) is None
+    assert sf({"type": "ValueError", "traceback": ""}, ws) is None
+    assert sf({"type": None, "traceback": ""}, ws) is None

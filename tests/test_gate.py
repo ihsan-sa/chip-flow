@@ -406,3 +406,64 @@ def test_commit_carries_this_runs_report_and_leaves_it_clean(tmp_path, capsys):
         committed = json.loads(git("show", "HEAD:ws/reports/gate-lint.json"))
         assert committed["status"] == "pass"
         assert committed["record_result"]["attempts"] == n
+
+
+# A check that ran and answered "this gate does not apply here" - the shape
+# check_mc.py returns on a spec with no `mc.enabled: true`: checklib.report
+# with no violations, so its own status reads "pass", plus applicable:false.
+NOT_APPLICABLE_CHECK = FAKE_CHECK.replace(
+    '"input": str(args.workspace), "input_digest": None}',
+    '"input": str(args.workspace), "input_digest": None,\n'
+    '              "applicable": False, "reason": "spec asks for none"}')
+
+
+def test_not_applicable_never_says_pass_records_or_commits(tmp_path, capsys):
+    """An mc gate that does not apply used to leave reports/gate-mc.json
+    saying status pass, and --commit titled the commit 'mc pass'. It must
+    say not_applicable, record nothing and commit nothing."""
+    import subprocess
+
+    def git(*a):
+        return subprocess.run(["git", *a], cwd=str(tmp_path), check=True,
+                              capture_output=True, text=True).stdout
+
+    git("init", "-q")
+    git("config", "user.email", "t@example.invalid")
+    git("config", "user.name", "t")
+    ws = make_ws(tmp_path)
+    git("add", "-A")
+    git("commit", "-q", "-m", "init")
+    head = git("rev-parse", "HEAD")
+    checks_dir = make_checks_dir(tmp_path, NOT_APPLICABLE_CHECK)
+    gates_yaml = make_gates_yaml(tmp_path)
+    out_path = ws / "reports" / "gate-lint.json"
+    code = gate.main(["--gate", "lint", "--workspace", str(ws),
+                      "--gates", str(gates_yaml),
+                      "--checks-dir", str(checks_dir),
+                      "--out", str(out_path), "--commit", "lint pass"])
+    assert code == 0
+    report = json.loads(out_path.read_text(encoding="utf-8"))
+    assert report["status"] == "not_applicable"
+    assert '"pass"' not in json.dumps(report)
+    assert report["record_result"]["recorded"] is False
+    assert report["commit_result"]["committed"] is False
+    assert git("rev-parse", "HEAD") == head
+    data = json.loads((ws / "state.json").read_text(encoding="utf-8"))
+    assert data["gates"] == {}
+    assert "NOT APPLICABLE" in capsys.readouterr().err
+
+
+def test_applicable_true_or_absent_still_evaluates_pass_fail():
+    """Only an explicit applicable:false is not-applicable - a report that
+    says applicable:true, or says nothing, is judged on its findings."""
+    g = {"fail_severities": ["error"], "max_count": 0}
+    err = [{"severity": "error"}]
+    assert gate.evaluate("mc", g, {"violations": [], "applicable": True})[
+        "status"] == "pass"
+    assert gate.evaluate("mc", g, {"violations": err, "applicable": True})[
+        "status"] == "fail"
+    assert gate.evaluate("mc", g, {"violations": err})["status"] == "fail"
+    assert gate.evaluate("mc", g, {"violations": err, "applicable": None})[
+        "status"] == "fail"
+    assert gate.evaluate("mc", g, {"violations": [], "applicable": False})[
+        "status"] == "not_applicable"

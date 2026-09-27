@@ -107,8 +107,30 @@ a design to read.
   2's escalation path) is a legitimate ESCALATE, not a stuck loop - say so
   plainly in OPEN rather than burning budget on tests that cannot succeed.
 
+### Held-out stimulus fault (`holdout_stimulus_fault`, domain `holdout_stimulus`)
+
+A held-out test died in its own stimulus code before any assert judged the
+design: a `tb/` helper it imports changed shape, or a call it makes no
+longer fits. The RTL is not at fault, so this comes to you, the test's
+author, and not to the rtl fixer. You may open `holdout/` for this order.
+
+- Adapt stimulus and helper calls only: how a helper's return is unpacked,
+  a call's arguments, a Timer or settle wait, a priming edge.
+- Never change an assert, a `check_*`/`expect_*`/`verify_*` call, a bound,
+  an expected value, a loop's case list, a decorator, a `# req:` tag or a
+  plain helper that computes expected values. The independence of the
+  held-out set is the point of it.
+- Before you declare the edit, run `check_holdout_edit.py --workspace <ws>
+  --baseline <the pre-fix snapshot label from the order>`. It passes only
+  when nothing that judges moved. Then declare it with `state.py edit
+  --workspace <ws> --class holdout_stimulus_edit --baseline <label>`, which
+  runs the same check and refuses the same edits.
+- If the fault is not in the stimulus after all, change nothing and say so
+  in OPEN. The orchestrator escalates it.
+
 ### Output contract, work-order mode
-FILES: tb/* (and holdout/* only if the order named a held-out gap)
+FILES: tb/* (and holdout/* only if the order named a held-out gap or a
+held-out stimulus fault)
 GATE: <gate name>: <pass/fail after your change; kill rate or coverage %>
 SUMMARY: <up to 10 lines: what the finding meant, what you added/changed>
 OPEN: <a survivor you believe is an equivalent mutant, or "none">

@@ -6,6 +6,10 @@ the requirement id(s) and, by design, never the held-out test itself
 VISIBLE tests that already cover it. Routes to `rtl`: this is a real
 functional gap the visible suite did not catch, which is the entire
 reason a held-out set exists.
+A held-out test that died in its own stimulus code, before any assert
+ran, is reported as `holdout_stimulus_fault` instead and goes to the
+tb-writer, so this finding means an assert (or the design's own X or
+missing port) judged the RTL.
 
 **Do not** go looking for the held-out test file to see what it actually
 checks - that defeats its purpose for every future edit to this block,

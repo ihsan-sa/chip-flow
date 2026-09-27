@@ -202,7 +202,86 @@ def test_m4_gate_hash_covers_a_spec_yaml_period_edit(tmp_path, gate):
         encoding="utf-8")
     fresh_after, _ = state_mod.run(["freshness", "--workspace", str(ws)])
     assert fresh_after["gates"][gate]["hash_valid"] is False
-    assert "spec_yaml" in fresh_after["gates"][gate]["changed_inputs"]
+    assert "spec_yaml_sans_formal" in fresh_after["gates"][gate][
+        "changed_inputs"]
+
+
+VDE_GATES = ["spec_lint", "lint", "sim", "holdout", "mutate", "formal",
+             "cover", "synth", "harden", "timing", "drc", "lvs", "glsim",
+             "precheck", "release"]
+VDE_SPEC = ("top: counter8\nrequirements: []\nclock: {period_ns: 20}\n"
+            "cover: {line_min: 95}\nformal:\n  depth: 20\n")
+
+
+def _vde_ws_with_passes(tmp_path):
+    """A /vde workspace with every input present and a recorded pass on
+    every gate."""
+    ws = ws_empty(tmp_path)
+    state_mod.run(["init", "--workspace", str(ws), "--skill", "vde",
+                  "--block", "counter8"])
+    files = {"spec/spec.yaml": VDE_SPEC,
+             "rtl/counter8.v": "module counter8; endmodule\n",
+             "tb/test_counter8.py": "# tb\n",
+             "holdout/test_hold.py": "# holdout\n",
+             "formal/counter8_formal.sv": "// wrapper\n",
+             "harden/config.json": "{}\n",
+             "harden/info.yaml": "project: {}\n"}
+    for rel, text in files.items():
+        (ws / rel).parent.mkdir(parents=True, exist_ok=True)
+        (ws / rel).write_text(text, encoding="utf-8")
+    st = state_mod.State.load(ws / "state.json")   # one load/save: fast
+    for g in VDE_GATES:
+        st.record_gate(g, {"status": "pass", "failing_count": 0,
+                           "counts": {"total": 0}})
+    st.save()
+    assert _not_fresh(ws) == set()
+    return ws
+
+
+def _not_fresh(ws):
+    fresh, _ = state_mod.run(["freshness", "--workspace", str(ws)])
+    return {g for g, v in fresh["gates"].items() if not v["fresh"]}
+
+
+def test_vde_formal_key_only_edit_stales_only_formal_and_cover(tmp_path):
+    """An edit to only spec.yaml's `formal:` key used to stale lint, sim,
+    holdout, mutate and every later gate by hash, because each hashed the
+    whole spec. Only formal and cover read it (cover takes the whole file),
+    so only they go stale - by hash, and by the declared class's marks.
+    spec_lint lints the whole file, so it re-runs too."""
+    ws = _vde_ws_with_passes(tmp_path)
+    (ws / "spec" / "spec.yaml").write_text(
+        VDE_SPEC.replace("depth: 20", "depth: 40\n  cover_depth: 60"),
+        encoding="utf-8")
+    assert _not_fresh(ws) == {"spec_lint", "formal", "cover"}
+    state_mod.run(["edit", "--workspace", str(ws),
+                   "--class", "spec_formal_edit"])
+    assert _not_fresh(ws) == {"spec_lint", "formal", "cover"}
+
+
+@pytest.mark.parametrize("edit", [
+    ("top: counter8", "top: counter9"),
+    ("period_ns: 20", "period_ns: 10"),
+    ("requirements: []", "requirements: [{id: R1, check: sim}]"),
+    ("line_min: 95", "line_min: 80"),
+])
+def test_vde_other_spec_edits_still_stale_every_spec_reader(tmp_path, edit):
+    """Any spec.yaml edit outside `formal:` still stales every vde gate
+    that reads the spec - including cover and synth, which read `top` (and
+    cover its thresholds) but used to have no spec input at all."""
+    ws = _vde_ws_with_passes(tmp_path)
+    (ws / "spec" / "spec.yaml").write_text(VDE_SPEC.replace(*edit),
+                                           encoding="utf-8")
+    assert _not_fresh(ws) == set(VDE_GATES) - {"release"}
+
+
+def test_vde_non_mapping_spec_still_stales_every_spec_reader(tmp_path):
+    """A spec.yaml that stops being a mapping hashes raw under both kinds,
+    so it never passes for a formal-only edit."""
+    ws = _vde_ws_with_passes(tmp_path)
+    (ws / "spec" / "spec.yaml").write_text("- not a mapping\n",
+                                           encoding="utf-8")
+    assert _not_fresh(ws) == set(VDE_GATES) - {"release"}
 
 
 def _ade_ws_with_passes(tmp_path, gates):
@@ -779,3 +858,52 @@ def test_init_of_a_nested_msde_side_refuses_a_name_the_split_did_not_give(
     state_mod.State.init(parent / "digital", "vde", "r2r_dac")
     # outside an msde workspace a directory called analog is just a name
     state_mod.State.init(tmp_path / "analog", "ade", "analog")
+
+
+# ---- holdout_stimulus_edit: a held-out stimulus fix is declared only when
+# check_holdout_edit.py proves nothing that judges moved.
+
+STIM_BASE = """\
+import cocotb
+from helpers import setup
+
+# req: REQ-1
+@cocotb.test()
+async def test_a(dut):
+    fb, rises = await setup(dut)
+    assert len(rises) >= 2, "stalled"
+"""
+
+
+def _stimulus_ws(tmp_path):
+    ws, st = _pinned_holdout(tmp_path)
+    (ws / "holdout" / "t1.py").write_text(STIM_BASE, encoding="utf-8")
+    st.apply_edit("holdout_edit")
+    st.record_holdout("tb-writer")
+    st.snapshot("pre-fix-holdout-a1", ["holdout/t1.py"])
+    return ws, st
+
+
+def test_stimulus_edit_that_only_moves_stimulus_is_declared(tmp_path):
+    ws, st = _stimulus_ws(tmp_path)
+    (ws / "holdout" / "t1.py").write_text(
+        STIM_BASE.replace("fb, rises =", "fb, rises, _ ="), encoding="utf-8")
+    rec = st.apply_edit("holdout_stimulus_edit",
+                        baseline="pre-fix-holdout-a1")
+    assert rec["human_hold"] == 1 and rec["baseline"] == "pre-fix-holdout-a1"
+    assert st.holdout_drift()["declared"]["class"] == "holdout_stimulus_edit"
+
+
+def test_stimulus_edit_that_loosens_an_assert_is_refused(tmp_path):
+    ws, st = _stimulus_ws(tmp_path)
+    (ws / "holdout" / "t1.py").write_text(
+        STIM_BASE.replace("fb, rises =", "fb, rises, _ =")
+        .replace(">= 2", ">= 1"), encoding="utf-8")
+    with pytest.raises(CheckError, match="holdout_judgement_changed"):
+        st.apply_edit("holdout_stimulus_edit", baseline="pre-fix-holdout-a1")
+    assert st.holdout_drift()["declared"] is None
+    # and it cannot be declared without a baseline at all
+    with pytest.raises(CheckError, match="--baseline"):
+        st.apply_edit("holdout_stimulus_edit")
+    with pytest.raises(CheckError, match="holdout_stimulus_edit only"):
+        st.apply_edit("tb_edit", baseline="pre-fix-holdout-a1")

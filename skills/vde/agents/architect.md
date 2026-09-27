@@ -33,6 +33,13 @@ JSON out, exit 0/1/2. Keep output ASCII. **No web tools.**
    the pin budget are in `engine/lib/ttlib.py`'s docstring). The spec-
    writer leaves it to you, and P6's `harden` refuses without it - an
    active-high `rst` port is `~rst_n`.
+2b. Leave `std_cell` out unless the brief names a library. Synth reads it
+   (`std_cell: {library, corner}`, e.g. `{library: gf180mcu_fd_sc_mcu9t5v0,
+   corner: tt_025C_5v00}`); without it a spec with `tt_pins` synthesises
+   against the TT GF template's own gf180mcu_fd_sc_mcu7t5v0 at
+   tt_025C_3v30, the library harden uses. RTL that instantiates a cell by
+   name must use that library's prefix; synth fails on a cell the library
+   lacks, and a blackbox stub does not get it through.
 3. For anything beyond a single obvious module: write a short block list
    (module names, one-line responsibility each, the signals crossing
    between them) as prose in `spec/spec.md` under a `## Architecture`

@@ -207,3 +207,113 @@ signals:
         assert False, "expected CheckError"
     except CheckError:
         pass
+
+
+# ---------------------------------------------------------------- ua pads
+# A Tiny Tapeout analog pad goes out through interface.yaml's ua_pins only
+# (check_top_harden.py). Before this check a splitter that listed a pad
+# (vctrl, bias_ref) as a crossing signal passed split, and nothing caught it
+# before top_harden. Each case builds its own workspace.
+
+PAD_SIGNAL = """\
+  - name: vctrl
+    direction: a2d
+    level: analog
+    domain: clk_free
+    width: 1
+    load: "PLL control voltage pad"
+"""
+
+
+def _with_pad_signal(text: str, name: str = "vctrl") -> str:
+    """text plus the pad entry (renamed to `name`) under its signal list."""
+    return text + PAD_SIGNAL.replace("vctrl", name)
+
+
+def _kinds(payload) -> set[str]:
+    return {v["kind"] for v in payload["violations"]}
+
+
+def test_pad_declared_by_analog_side_listed_as_signal_fails(tmp_path):
+    # The planted ece298a shape: the analog side declares vctrl a pad, and
+    # the splitter put it in signals (and both side specs) with no ua_pins.
+    analog = _with_pad_signal(ANALOG_SPEC).replace(
+        "interface:\n", "pads: [vctrl]\ninterface:\n", 1)
+    ws = make_ws(tmp_path, interface=_with_pad_signal(INTERFACE),
+                 digital=_with_pad_signal(DIGITAL_SPEC), analog=analog)
+    payload, _out = check_split.run(["--workspace", str(ws)])
+    assert payload["status"] == "violations"
+    by_kind = {v["kind"]: v for v in payload["violations"]}
+    assert set(by_kind) == {"pad_in_signals", "pad_missing_from_ua_pins"}
+    assert by_kind["pad_in_signals"]["refs"] == ["vctrl"]
+    assert "ua_pins" in by_kind["pad_in_signals"]["msg"]
+
+
+def test_ua_pins_key_listed_as_signal_fails(tmp_path):
+    interface = _with_pad_signal(INTERFACE) + "ua_pins:\n  vctrl: 0\n"
+    ws = make_ws(tmp_path, interface=interface,
+                 digital=_with_pad_signal(DIGITAL_SPEC),
+                 analog=_with_pad_signal(ANALOG_SPEC))
+    payload, _out = check_split.run(["--workspace", str(ws)])
+    assert _kinds(payload) == {"pad_in_signals"}
+
+
+def test_ua_named_signal_fails(tmp_path):
+    ws = make_ws(tmp_path, interface=_with_pad_signal(INTERFACE, "ua_bias"),
+                 digital=_with_pad_signal(DIGITAL_SPEC, "ua_bias"),
+                 analog=_with_pad_signal(ANALOG_SPEC, "ua_bias"))
+    payload, _out = check_split.run(["--workspace", str(ws)])
+    assert _kinds(payload) == {"pad_in_signals"}
+
+
+def test_ua_like_but_not_pad_names_pass(tmp_path):
+    ws = make_ws(tmp_path, interface=_with_pad_signal(INTERFACE, "uart_rx"),
+                 digital=_with_pad_signal(DIGITAL_SPEC, "uart_rx"),
+                 analog=_with_pad_signal(ANALOG_SPEC, "uart_rx"))
+    payload, _out = check_split.run(["--workspace", str(ws)])
+    assert payload["status"] == "pass"
+
+
+def test_declared_pad_missing_from_ua_pins_fails(tmp_path):
+    analog = ANALOG_SPEC.replace("interface:\n", "pads: [vout]\n"
+                                 "interface:\n", 1)
+    ws = make_ws(tmp_path, analog=analog)
+    payload, _out = check_split.run(["--workspace", str(ws)])
+    assert _kinds(payload) == {"pad_missing_from_ua_pins"}
+    assert payload["violations"][0]["refs"] == ["vout"]
+
+
+def test_declared_pad_in_ua_pins_passes(tmp_path):
+    analog = ANALOG_SPEC.replace("interface:\n", "pads: [vout]\n"
+                                 "interface:\n", 1)
+    ws = make_ws(tmp_path, analog=analog,
+                 interface=INTERFACE + "ua_pins:\n  vout: 0\n")
+    payload, _out = check_split.run(["--workspace", str(ws)])
+    assert payload["status"] == "pass"
+
+
+def test_malformed_pads_is_refused(tmp_path):
+    analog = ANALOG_SPEC.replace("interface:\n", "pads: vout\n"
+                                 "interface:\n", 1)
+    ws = make_ws(tmp_path, analog=analog)
+    try:
+        check_split.run(["--workspace", str(ws)])
+        assert False, "expected CheckError for a non-list 'pads'"
+    except CheckError:
+        pass
+
+
+def test_malformed_ua_pins_is_refused(tmp_path):
+    ws = make_ws(tmp_path, interface=INTERFACE + "ua_pins: [vout]\n")
+    try:
+        check_split.run(["--workspace", str(ws)])
+        assert False, "expected CheckError for a non-mapping 'ua_pins'"
+    except CheckError:
+        pass
+
+
+def test_corpus_rungs_pass_split():
+    for rung in ("dac_tile", "sensor_counted"):
+        ws = REPO / "corpus" / "msde" / rung
+        payload, _out = check_split.run(["--workspace", str(ws)])
+        assert payload["status"] == "pass", (rung, payload["violations"])

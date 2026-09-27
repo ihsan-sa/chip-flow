@@ -191,7 +191,7 @@ def test_bench_strength_survivors_never_route_to_the_designer():
     the BENCH's fault - every survivor_* class routes to testbench (the
     bench-writer), never sizing/netlist (the analog-designer)."""
     for cls in ("size_doubled", "connection_removed", "type_flipped",
-               "bias_halved"):
+               "bias_halved", "output_stuck", "gain_halved"):
         assert cluster_violations.FIXER_HINTS[f"survivor_{cls}"] == "testbench"
 
 

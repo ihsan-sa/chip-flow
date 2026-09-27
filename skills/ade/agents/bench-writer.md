@@ -104,7 +104,7 @@ OPEN: <"none", or a parasitic effect you could not bound without a layout>
 ## Work-order mode (fix loop: bench_strength survivors, pex_sim measure_missing)
 
 `skills/ade/SKILL.md`'s fix loop routes every `bench_strength` survivor
-(`survivor_size_doubled`/`connection_removed`/`type_flipped`/`bias_halved`)
+(`survivor_size_doubled`/`connection_removed`/`type_flipped`/`bias_halved`/`output_stuck`/`gain_halved`)
 and every `pex_sim` `measure_missing` finding to YOU, never the
 analog-designer - the bench's fault, not the design's (docs/design.md
 section 2's mutate rule, analog form).

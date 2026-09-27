@@ -123,7 +123,7 @@ def test_empty_netlist_is_refused(tmp_path, capsys, monkeypatch):
                   "        0 0.0 cells\n\n"
                   "   Chip area for module '\\top': 0.0\n")
     monkeypatch.setattr(check_synth, "run_yosys",
-                        lambda *a, **k: fake_output)
+                        lambda *a, **k: (fake_output, []))
     code = check_synth.main(["--workspace", str(ws)])
     out = json.loads(capsys.readouterr().out)
     assert code == 2, out
@@ -207,3 +207,103 @@ def test_cell_histogram_uses_the_last_cells_section():
 """
     cells = check_synth.cell_histogram(output)
     assert cells == {"gf180mcu_fd_sc_mcu9t5v0__clkinv_1": 1}
+
+
+# ---- the standard-cell library is the spec's to choose (a /msde PLL on
+# the TT GF template uses mcu7t5v0 at 3.3 V; synth used to hardcode
+# mcu9t5v0 5 V and ignore any spec key).
+
+DLY_V = """\
+module top (input wire clk, input wire rst, output reg [3:0] count,
+            output wire d);
+  always @(posedge clk) count <= rst ? 4'd0 : count + 4'd1;
+  gf180mcu_fd_sc_mcu7t5v0__dlya_1 u0 (.I(count[0]), .Z(d));
+endmodule
+"""
+
+# the PLL track's workaround: a blackbox stub so yosys elaborates a cell it
+# was never told about - it must not hide a cell the chosen lib lacks.
+STUB_V = DLY_V + """\
+(* blackbox *)
+module gf180mcu_fd_sc_mcu7t5v0__dlya_1 (input wire I, output wire Z);
+endmodule
+"""
+
+
+def _spec(ws: Path, extra: str) -> None:
+    (ws / "spec" / "spec.yaml").write_text(
+        f"top: top\nrequirements: []\n{extra}", encoding="utf-8")
+
+
+def test_choose_std_cell_defaults_and_spec_key():
+    assert check_synth.choose_std_cell({"top": "t"}) == {
+        "library": "gf180mcu_fd_sc_mcu9t5v0", "corner": "tt_025C_5v00",
+        "source": "default"}
+    # a TT target gets the TT GF template's own synthesis liberty
+    assert check_synth.choose_std_cell({"tt_pins": {"clk": "clk"}}) == {
+        "library": "gf180mcu_fd_sc_mcu7t5v0", "corner": "tt_025C_3v30",
+        "source": "tt_template"}
+    got = check_synth.choose_std_cell(
+        {"std_cell": {"library": "gf180mcu_fd_sc_mcu7t5v0",
+                      "corner": "ss_125C_3v00"}})
+    assert (got["library"], got["corner"]) == (
+        "gf180mcu_fd_sc_mcu7t5v0", "ss_125C_3v00")
+    # the spec's key outranks the TT default
+    got = check_synth.choose_std_cell(
+        {"tt_pins": {"clk": "clk"},
+         "std_cell": {"library": "gf180mcu_fd_sc_mcu9t5v0"}})
+    assert got["library"] == "gf180mcu_fd_sc_mcu9t5v0"
+
+
+@pytest.mark.parametrize("bad", [
+    {"library": "sky130_fd_sc_hd"},
+    {"library": "gf180mcu_fd_sc_mcu7t5v0", "corner": "../../etc"},
+    {"library": "gf180mcu_fd_sc_mcu7t5v0", "voltage": 3.3},
+    "gf180mcu_fd_sc_mcu7t5v0",
+])
+def test_choose_std_cell_refuses_a_bad_key(bad):
+    with pytest.raises(check_synth.CheckError):
+        check_synth.choose_std_cell({"std_cell": bad})
+
+
+@pytest.mark.slow
+def test_spec_asking_for_mcu7t5v0_gets_that_lib(tmp_path, capsys):
+    ws = make_ws(tmp_path, DLY_V)
+    _spec(ws, "std_cell: {library: gf180mcu_fd_sc_mcu7t5v0, "
+              "corner: tt_025C_3v30}\n")
+    code = check_synth.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0, out
+    assert out["std_cell"]["liberty"] == \
+        "gf180mcu_fd_sc_mcu7t5v0__tt_025C_3v30.lib"
+    assert all(c.startswith("gf180mcu_fd_sc_mcu7t5v0__") for c in out["cells"])
+    # the instantiated delay cell is kept, no blackbox stub needed
+    assert out["cells"]["gf180mcu_fd_sc_mcu7t5v0__dlya_1"] == 1
+
+
+@pytest.mark.slow
+def test_cell_missing_from_the_chosen_lib_fails_loudly(tmp_path, capsys):
+    ws = make_ws(tmp_path, DLY_V)
+    _spec(ws, "std_cell: {library: gf180mcu_fd_sc_mcu9t5v0}\n")
+    code = check_synth.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 1, out
+    v = next(v for v in out["violations"] if v["kind"] == "cell_not_in_liberty")
+    assert "gf180mcu_fd_sc_mcu7t5v0__dlya_1" in v["msg"]
+    assert "mcu9t5v0" in v["msg"]
+
+
+@pytest.mark.slow
+def test_blackbox_stub_does_not_hide_a_missing_cell(tmp_path, capsys):
+    ws = make_ws(tmp_path, STUB_V)
+    _spec(ws, "std_cell: {library: gf180mcu_fd_sc_mcu9t5v0}\n")
+    code = check_synth.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 1, out
+    assert [v["kind"] for v in out["violations"]] == ["cell_not_in_liberty"]
+    # same stub, the lib that has the cell: a clean pass
+    _spec(ws, "tt_pins: {clk: clk}\n")
+    code = check_synth.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0, out
+    assert out["std_cell"]["source"] == "tt_template"

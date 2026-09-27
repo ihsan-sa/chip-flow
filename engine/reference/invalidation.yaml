@@ -45,6 +45,10 @@
 #   json_canonical   parsed YAML-or-JSON re-serialized with sorted keys
 #                    (spec.yaml, config.json, info.yaml, sizing.yaml,
 #                    interface.yaml - whitespace and key order invisible).
+#   json_canonical_sans_formal
+#                    json_canonical of spec.yaml minus its top-level
+#                    `formal:` key (kind spec_yaml_sans_formal): what a vde
+#                    gate that never reads `formal:` depends on.
 #   dir_text         all files under a directory, name-sorted, each text_eol
 #                    normalized (rtl/, tb/, holdout/, formal/, ...).
 # `gds_geometry` (a hardened GDS hashed through klayout's python module,
@@ -59,6 +63,11 @@ version: 1
 artifact_kinds:
   spec_md:       {path: "spec/spec.md", norm: text_eol}
   spec_yaml:     {path: "spec/spec.yaml", norm: json_canonical}
+  # the same file minus `formal:` - only check_formal.py reads that key, so
+  # a formal-depth-only edit must not stale lint/sim/holdout/mutate/synth
+  # or the signoff gates; any other spec.yaml edit still does.
+  spec_yaml_sans_formal: {path: "spec/spec.yaml",
+                          norm: json_canonical_sans_formal}
   rtl:           {path: "rtl", norm: dir_text}
   netlist:       {path: "netlist", norm: dir_text}
   tb:            {path: "tb", norm: dir_text}
@@ -102,10 +111,13 @@ gate_inputs:
     # input of each - a `top` rename with no RTL edit must still invalidate
     # them, and lint's rtl/lint_allow.yaml lives inside rtl/ so the `rtl`
     # dir_text hash already covers it.
-    lint:      [rtl, spec_yaml]
-    sim:       [rtl, tb, spec_yaml]
-    holdout:   [rtl, holdout, spec_yaml]
-    mutate:    [rtl, tb, spec_yaml, mutant_rulings]
+    # spec_yaml_sans_formal: none of these reads spec.yaml's `formal:` key,
+    # so an edit to only that key (the formal fix loop's depth change) leaves
+    # them fresh; spec_lint and formal keep the whole file.
+    lint:      [rtl, spec_yaml_sans_formal]
+    sim:       [rtl, tb, spec_yaml_sans_formal]
+    holdout:   [rtl, holdout, spec_yaml_sans_formal]
+    mutate:    [rtl, tb, spec_yaml_sans_formal, mutant_rulings]
     # spec_yaml (M5, added): check_formal.py also reads `top` and this
     # block's own `formal: {depth}` from spec.yaml - a depth-only edit
     # (the fix loop's own sanctioned way to close a bounded-not-proven or
@@ -113,19 +125,24 @@ gate_inputs:
     # file under formal/ or rtl/ at all, and without this a stale recorded
     # PASS from before the depth changed would still read as fresh.
     formal:    [rtl, formal, spec_yaml]
-    cover:     [rtl, tb]
-    synth:     [rtl]
+    # cover reads `top` and `cover: {line_min, toggle_min}`, synth reads
+    # `top`: both used to have no spec input at all, so a threshold or top
+    # edit left their passes fresh. cover takes the whole file, so a
+    # `formal:` edit stales it too (spec_formal_edit's own set).
+    cover:     [rtl, tb, spec_yaml]
+    synth:     [rtl, spec_yaml_sans_formal]
     # spec_yaml (M4 review): harden reads tt_pins and clock.period_ns from
     # spec.yaml to build the wrapper and CLOCK_PERIOD, and timing, drc, lvs,
     # glsim and precheck all read `top` (and glsim tt_pins) from it too. A
     # period-only edit touches nothing under rtl/ or harden/, so without it
     # a recorded pass on the old period would still read fresh.
-    harden:    [rtl, harden_config, harden_override, harden_info, spec_yaml]
-    timing:    [harden, spec_yaml]
-    drc:       [harden, spec_yaml]
-    lvs:       [harden, spec_yaml]
-    glsim:     [harden, tb, spec_yaml]
-    precheck:  [harden, harden_info, spec_yaml]
+    harden:    [rtl, harden_config, harden_override, harden_info,
+                spec_yaml_sans_formal]
+    timing:    [harden, spec_yaml_sans_formal]
+    drc:       [harden, spec_yaml_sans_formal]
+    lvs:       [harden, spec_yaml_sans_formal]
+    glsim:     [harden, tb, spec_yaml_sans_formal]
+    precheck:  [harden, harden_info, spec_yaml_sans_formal]
     release:   [rtl, harden]
   ade:
     # kinds[0] is each script's own stamp path; the rest is what it reads
@@ -192,6 +209,14 @@ edit_classes:
       stale_artifacts: []
       gates: [formal, mutate]
       human_hold: 1
+    spec_formal_edit:
+      # an edit to ONLY spec.yaml's `formal:` key (depth, cover_depth, top) -
+      # the formal fix loop's sanctioned move. Any other spec.yaml change is
+      # a spec_edit; the hash layer still stales every gate reading the rest.
+      mutates: [spec_yaml]
+      stale_artifacts: []
+      gates: [formal, cover]
+      human_hold: 1
     holdout_edit:
       # held-out tests are the check the designer never sees (section 2),
       # so a change to them is declared, hold 2 like a spec change. It is
@@ -202,6 +227,16 @@ edit_classes:
       stale_artifacts: []
       gates: [holdout]
       human_hold: 2
+    holdout_stimulus_edit:
+      # the fix for a holdout_stimulus_fault: holdout/ stimulus and helper
+      # calls only. state.py refuses to declare it without --baseline (the
+      # pre-fix snapshot label) and runs check_holdout_edit.py against it,
+      # so an edit that moved an assert, bound or expected value is never
+      # recorded as this class. That check is why it holds 1, not 2.
+      mutates: [holdout]
+      stale_artifacts: []
+      gates: [holdout]
+      human_hold: 1
     harden_config_edit:
       mutates: [harden_config, harden_override, harden_info]
       stale_artifacts: []

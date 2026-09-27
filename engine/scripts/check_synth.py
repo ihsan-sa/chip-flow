@@ -3,10 +3,18 @@
 
     check_synth.py --workspace DIR [--out FILE]
 
-Runs yosys (through `bin/eda`) over rtl/*.v: generic `synth -top`, then
-`dfflibmap`/`abc` against the gf180mcu_fd_sc_mcu9t5v0 typical-corner liberty
-(the same recipe tests/check.sh's own yosys-synth-gf180mcu smoke uses),
+Runs yosys (through `bin/eda`) over rtl/*.v: `read_liberty -lib` of the
+chosen standard-cell liberty (so the RTL may instantiate its cells directly),
+generic `synth -top`, then `dfflibmap`/`abc` against that same liberty,
 writing the mapped netlist to `synth/<top>.v`.
+
+Which liberty: spec.yaml's optional `std_cell: {library, corner}` (e.g.
+`{library: gf180mcu_fd_sc_mcu7t5v0, corner: tt_025C_3v30}`). Without it, a
+spec that names a Tiny Tapeout target (`tt_pins` or `tiles`) gets the TT GF
+template's own synthesis liberty (the vendored tech.py's `LIB_SYNTH`,
+gf180mcu_fd_sc_mcu7t5v0 tt_025C_3v30 - the library LibreLane hardens it
+with), and any other spec gets gf180mcu_fd_sc_mcu9t5v0 tt_025C_5v00.
+`--liberty` overrides all three.
 
 Pass criteria (gates.yaml `synth` row): no latches, unmapped cells or
 combinational loops; area recorded.
@@ -18,8 +26,15 @@ combinational loops; area recorded.
                        so a missing check here would let a real combinational
                        loop through silently). This is gates.yaml's own
                        named fault for this gate.
+  cell not in liberty  a cell the RTL instantiates by name that the chosen
+                       liberty does not define: yosys's `hierarchy` refuses
+                       the unknown module, or (when the RTL carries its own
+                       blackbox stub of it) it survives into the netlist
+                       under a name the liberty has no `cell(...)` for.
+                       Either way it is a finding naming the liberty, never
+                       a pass over a netlist the chosen library cannot build.
   unmapped cell        after `abc -liberty`, every surviving cell should be
-                       a `gf180mcu_fd_sc_mcu9t5v0__*` liberty cell; anything
+                       a cell of the chosen liberty; anything
                        still named `$...` (yosys's internal generic cell
                        types - never a legal Verilog/liberty identifier
                        prefix) never got mapped.
@@ -60,8 +75,16 @@ from checklib import CheckError  # noqa: E402
 SCRIPT = "check_synth"
 EDA_BIN = REPO / "bin" / "eda"
 TIMEOUT_S = 120.0
-LIBERTY_REL = ("foss/pdks/gf180mcuD/libs.ref/gf180mcu_fd_sc_mcu9t5v0/lib/"
-              "gf180mcu_fd_sc_mcu9t5v0__tt_025C_5v00.lib")
+LIBS_REF_REL = "foss/pdks/gf180mcuD/libs.ref"
+STD_CELL_LIBRARIES = ("gf180mcu_fd_sc_mcu7t5v0", "gf180mcu_fd_sc_mcu9t5v0")
+DEFAULT_STD_CELL = {"library": "gf180mcu_fd_sc_mcu9t5v0",
+                    "corner": "tt_025C_5v00"}
+CORNER_RE = re.compile(r"^(tt|ss|ff)_n?\d+C_\dv\d\d$")
+LIB_SYNTH_RE = re.compile(r"libs\.ref/(gf180mcu_fd_sc_\w+?)/lib/"
+                          r"\1__(\w+)\.lib$")
+LIB_CELL_RE = re.compile(r"^\s*cell\s*\(\s*\"?([\w$]+)\"?\s*\)", re.M)
+MISSING_MODULE_RE = re.compile(
+    r"Module `\\?(\S+?)' referenced in module `\\?(\S+?)'")
 
 LOOP_RE = re.compile(r"found logic loop in module (\S+?):")
 # yosys's own `synth`/`opt` passes print this for a net that is read but
@@ -80,6 +103,53 @@ CELLS_HEADER_RE = re.compile(r"^\s*\d+\s+\S+\s+cells\s*$")
 CELL_ROW_RE = re.compile(r"^\s*(\d+)\s+[0-9.eE+-]+\s+(\S+)\s*$")
 AREA_RE = re.compile(r"Chip area for module '\\?(\S+?)':\s*([0-9.]+)")
 LATCH_RE = re.compile(r"__lat[a-z]*_\d+$")
+
+
+def tt_std_cell() -> dict:
+    """The TT GF template's own synthesis liberty, read from the vendored
+    tech.py's `LIB_SYNTH` rather than typed a second time here."""
+    import ttlib
+    value = ttlib.gf180_tech().librelane_config.get("LIB_SYNTH", "")
+    m = LIB_SYNTH_RE.search(value)
+    if not m:
+        raise CheckError(f"unexpected LIB_SYNTH shape in the vendored "
+                         f"tech.py: {value!r}")
+    return {"library": m.group(1), "corner": m.group(2)}
+
+
+def choose_std_cell(spec: dict) -> dict:
+    """{library, corner, source} for this spec: its own `std_cell`, else
+    the TT template's when it names a TT target, else DEFAULT_STD_CELL."""
+    want = spec.get("std_cell")
+    if want is None:
+        if spec.get("tt_pins") or spec.get("tiles"):
+            return {**tt_std_cell(), "source": "tt_template"}
+        return {**DEFAULT_STD_CELL, "source": "default"}
+    if not isinstance(want, dict) or set(want) - {"library", "corner"}:
+        raise CheckError("spec.yaml 'std_cell' must be a mapping with "
+                         "'library' and optional 'corner' only")
+    lib = want.get("library")
+    if lib not in STD_CELL_LIBRARIES:
+        raise CheckError(f"spec.yaml std_cell.library {lib!r} is not one of "
+                         f"{', '.join(STD_CELL_LIBRARIES)}")
+    corner = want.get("corner") or ("tt_025C_3v30"
+                                    if lib == "gf180mcu_fd_sc_mcu7t5v0"
+                                    else DEFAULT_STD_CELL["corner"])
+    if not isinstance(corner, str) or not CORNER_RE.match(corner):
+        raise CheckError(f"spec.yaml std_cell.corner {corner!r} is not a "
+                         "liberty corner name like tt_025C_3v30")
+    return {"library": lib, "corner": corner, "source": "spec"}
+
+
+def liberty_path(root: Path, std_cell: dict) -> Path:
+    lib = std_cell["library"]
+    return (root / LIBS_REF_REL / lib / "lib"
+            / f"{lib}__{std_cell['corner']}.lib")
+
+
+def liberty_cells(liberty: Path) -> set[str]:
+    return set(LIB_CELL_RE.findall(
+        liberty.read_text(encoding="utf-8", errors="replace")))
 
 
 def collect_sources(ws: Path) -> list[Path]:
@@ -101,12 +171,16 @@ def toolchain_root(timeout: float = 30.0) -> Path:
 
 
 def run_yosys(ws: Path, top: str, rtl_files: list[Path], liberty: Path,
-             out_v: Path) -> str:
+             out_v: Path) -> tuple[str, list[tuple[str, str]]]:
+    """(yosys output, missing) - `missing` lists (cell, module) pairs
+    `hierarchy` refused because the liberty does not define that cell;
+    when it is non-empty yosys stopped there and the output is partial."""
     rel = [str(f.relative_to(ws)) for f in rtl_files]
     script = ws / "log" / "synth.ys"
     script.parent.mkdir(parents=True, exist_ok=True)
     out_v.parent.mkdir(parents=True, exist_ok=True)
     script.write_text(f"""\
+read_liberty -lib {liberty}
 {chr(10).join(f'read_verilog {f}' for f in rel)}
 hierarchy -top {top}
 synth -top {top}
@@ -126,13 +200,16 @@ write_verilog {out_v.relative_to(ws)}
                          f"{exc}") from exc
     output = (proc.stdout or "") + (proc.stderr or "")
     if proc.returncode != 0:
+        missing = sorted(set(MISSING_MODULE_RE.findall(output)))
+        if missing:
+            return output, missing
         raise CheckError(f"yosys exited {proc.returncode}: "
                          f"{output[-2000:]}")
     if "Chip area for module" not in output:
         raise CheckError("yosys never reached `stat` (no area line in its "
                          f"output) - the run did not complete: "
                          f"{output[-2000:]}")
-    return output
+    return output, []
 
 
 def cell_histogram(output: str) -> dict[str, int]:
@@ -163,7 +240,8 @@ def run(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--workspace", required=True, help="block workspace")
     ap.add_argument("--liberty", help="override the liberty file "
-                    "(default: the gf180mcu typical-corner std cell lib)")
+                    "(default: spec.yaml's std_cell, else the TT template's "
+                    "for a TT target, else mcu9t5v0 tt_025C_5v00)")
     ap.add_argument("--out", help="write result JSON here instead of stdout")
     args = ap.parse_args(argv)
 
@@ -174,15 +252,32 @@ def run(argv=None):
         raise CheckError("spec.yaml has no non-empty 'top' - run spec_lint "
                          "first")
     rtl_files = collect_sources(ws)
-    liberty = (Path(args.liberty) if args.liberty
-              else toolchain_root() / LIBERTY_REL)
+    if args.liberty:
+        std_cell = {"library": None, "corner": None, "source": "--liberty"}
+        liberty = Path(args.liberty)
+    else:
+        std_cell = choose_std_cell(spec)
+        liberty = liberty_path(toolchain_root(), std_cell)
     if not liberty.is_file():
         raise CheckError(f"liberty file not found: {liberty}")
+    std_cell["liberty"] = liberty.name
 
     out_v = ws / "synth" / f"{top}.v"
-    output = run_yosys(ws, top, rtl_files, liberty, out_v)
+    output, missing = run_yosys(ws, top, rtl_files, liberty, out_v)
 
     violations = []
+    for cell, mod in missing:
+        violations.append(checklib.violation(
+            "synth", "error", None, mod, "cell_not_in_liberty", [],
+            f"module {mod} instantiates {cell}, which {liberty.name} does "
+            "not define - pick the library that has it (spec.yaml "
+            "std_cell) or use a cell this one has", "yosys"))
+    if missing:
+        payload = checklib.report(SCRIPT, ws / "rtl", violations, top=top,
+                                  std_cell=std_cell, cells={}, area=None,
+                                  netlist=None)
+        return payload, args.out
+
     loop_mods = sorted(set(LOOP_RE.findall(output)))
     for mod in loop_mods:
         violations.append(checklib.violation(
@@ -204,8 +299,17 @@ def run(argv=None):
     for name in unmapped:
         violations.append(checklib.violation(
             "synth", "error", None, None, "unmapped_cell", [],
-            f"{cells[name]} instance(s) of {name} were never mapped to the "
-            "gf180mcu liberty", "yosys"))
+            f"{cells[name]} instance(s) of {name} were never mapped to "
+            f"{liberty.name}", "yosys"))
+    known = liberty_cells(liberty)
+    for name in sorted(n for n in cells
+                       if not n.startswith("$") and n not in known):
+        violations.append(checklib.violation(
+            "synth", "error", None, None, "cell_not_in_liberty", [],
+            f"{cells[name]} instance(s) of {name} survive in the netlist but "
+            f"{liberty.name} does not define that cell (a blackbox stub in "
+            "rtl/ hides it from yosys) - pick the library that has it "
+            "(spec.yaml std_cell) or use a cell this one has", "yosys"))
     latches = sorted(name for name in cells if LATCH_RE.search(name))
     for name in latches:
         violations.append(checklib.violation(
@@ -220,7 +324,7 @@ def run(argv=None):
                          "output - area could not be recorded")
 
     payload = checklib.report(
-        SCRIPT, ws / "rtl", violations, top=top,
+        SCRIPT, ws / "rtl", violations, top=top, std_cell=std_cell,
         cells={k: v for k, v in sorted(cells.items())}, area=area,
         netlist=str(out_v.relative_to(ws)))
     return payload, args.out
