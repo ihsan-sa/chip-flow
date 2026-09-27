@@ -297,6 +297,26 @@ def test_regroup_flops_orders_one_clock_by_the_rtl(tmp_path):
     assert "src" not in got
 
 
+def test_regroup_flops_keeps_each_flop_in_its_own_module():
+    import mutate_runner
+    net = "\n".join([
+        "module sub(clk, a, r);",
+        "  always @(posedge clk)", "    r <= a;",
+        "endmodule",
+        "module top(clk, d, q);",
+        "  always @(posedge clk)", "    q <= d;",
+        "  always @(posedge clk)", "    p <= d;",
+        "endmodule", ""])
+    got = mutate_runner.regroup_flops(net)
+    sub, top = got.split("endmodule")[:2]
+    # kept: top's two same-edge flops merge inside top
+    assert "  always @(posedge clk) begin\n    q <= d;\n    p <= d;\n  end" in top
+    # suppressed: nothing crosses the module boundary either way
+    assert "q <=" not in sub and "p <=" not in sub
+    assert "  always @(posedge clk) begin\n    r <= a;\n  end" in sub
+    assert "r <=" not in top
+
+
 def test_no_tb_modules_is_an_error(tmp_path, capsys):
     ws = make_ws(tmp_path, TB_STRONG)
     (ws / "tb" / "test_top.py").unlink()

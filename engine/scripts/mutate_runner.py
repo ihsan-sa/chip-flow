@@ -15,7 +15,8 @@ line per input line: PASS = every visible test still passed (the mutant
 SURVIVED, undetected), FAIL = at least one visible test failed, or the
 mutated netlist would not even build (the mutant was KILLED). Before it
 simulates, each netlist's edge-triggered flops are regrouped into one block
-per sensitivity list, in RTL assignment order (regroup_flops() says why).
+per module and sensitivity list, in RTL assignment order (regroup_flops()
+says why).
 
 When mcy's own `-mode none` baseline fails to build (yosys or Icarus), the
 tool's error goes to PRJDIR/baseline_build_error.txt, so check_mutate.py
@@ -53,8 +54,8 @@ def tail(path: Path, n: int = 20) -> str:
 # the statements ran - so a tb that reads count on RisingEdge(valid) sees
 # the new count on the RTL and the old one on the netlist, and the
 # unmutated design "fails" (sensor_counted_digital: count read 0, 3/4
-# tests). regroup_flops() puts every edge-triggered block with the same
-# sensitivity list back into one block, ordered by where each flop is first
+# tests). regroup_flops() puts every edge-triggered block of one module
+# with the same sensitivity list back into one block, ordered by where each flop is first
 # assigned in the RTL its src attribute names, so the netlist's update order
 # is the RTL's again. It changes no logic: only the order of updates the
 # standard leaves undefined across blocks.
@@ -92,10 +93,15 @@ def _rtl_position(src: str | None, lhs: str, cache: dict) -> tuple | None:
 def regroup_flops(text: str) -> str:
     lines = text.split("\n")
     out: list = []          # str lines, or a group key standing for a block
-    groups: dict[str, list] = {}
+    # keyed by (module, sensitivity list): write_verilog puts every module
+    # of the unflattened design in one file, and a flop never leaves its own
+    groups: dict[tuple, list] = {}
     cache: dict = {}
+    module = 0
     i = 0
     while i < len(lines):
+        if lines[i].startswith(("module ", "endmodule")):
+            module += 1
         m = _ALWAYS.match(lines[i])
         j = i + 1
         while j < len(lines) and lines[j].startswith("    "):
@@ -115,7 +121,7 @@ def regroup_flops(text: str) -> str:
         if out and isinstance(out[-1], str) and out[-1].startswith("  (* src"):
             src = out.pop()
         stmt = body[:-1] if m.group(2) else body  # drop a block's `end`
-        key = m.group(1)
+        key = (module, m.group(1))
         pos = _rtl_position(src, _LHS.search(body[0]).group(1), cache)
         if key not in groups:
             groups[key] = []
@@ -128,7 +134,7 @@ def regroup_flops(text: str) -> str:
             result.append(item)
             continue
         blocks = sorted(groups[item[1]], key=lambda b: b[:3])
-        result.append(f"  always @({item[1]}) begin")
+        result.append(f"  always @({item[1][1]}) begin")
         for *_, stmt in blocks:
             result.extend(stmt)
         result.append("  end")
