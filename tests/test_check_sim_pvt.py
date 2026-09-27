@@ -291,13 +291,14 @@ def test_mim_bench_with_the_placeholder_passes(tmp_path, monkeypatch, capsys):
 
 MIM_RULING = ("MIM capacitor spread is out of scope for this rung: MIM "
               "stays pinned typical, a known limit.")
+MIM_CLAUSE = "MIM capacitor spread is out of scope for this rung"
 RC_NETLIST = ("xr1 a b vss ppolyf_u_1k r_width=2e-6 r_length=1e-5\n"
               "xc1 a vss cap_mim_2f0fF c_width=1e-5 c_length=1e-5")
 RC_LIBS = (".lib '{{PDK}}/libs.tech/ngspice/sm141064.spice' {{RES_CORNER}}\n"
            ".lib '{{PDK}}/libs.tech/ngspice/sm141064.spice' {{MIM_CORNER}}")
 
 
-def _h1_scope_out(ws: Path, dimension="mim_cap", quote=MIM_RULING) -> None:
+def _h1_scope_out(ws: Path, dimension="mim_cap", quote=MIM_CLAUSE) -> None:
     """The state.json record `state.py scope-out` leaves on an approved H1
     whose note carries the person's ruling."""
     (ws / "state.json").write_text(json.dumps({"human": {"H1": {
@@ -333,7 +334,7 @@ def test_a_scoped_out_mim_corner_is_pinned_and_nothing_else(tmp_path,
     assert {r["corner"]: r["pinned"] for r in out["results"]}["ss"] \
         == {"mim_cap": "typical"}
     [so] = out["scoped_out"]
-    assert so["dimension"] == "mim_cap" and so["quote"] == MIM_RULING
+    assert so["dimension"] == "mim_cap" and so["quote"] == MIM_CLAUSE
 
 
 def test_a_scoped_out_mim_bench_may_hard_code_typical(tmp_path, monkeypatch,

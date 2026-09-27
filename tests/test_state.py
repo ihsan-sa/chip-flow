@@ -771,6 +771,25 @@ def test_scope_out_is_taken_only_from_the_recorded_h1_answer(tmp_path,
     # one clause that rules on both devices is not a ruling on either alone
     ("MIM out of scope, resistors swept.", "resistor",
      "MIM out of scope, resistors swept", None),
+    # a quote cut from inside a sentence that negates it: the whole clause
+    # the quote sits in is what the person said
+    ("I don't think MIM capacitor spread is out of scope.", "mim_cap",
+     "MIM capacitor spread is out of scope", None),
+    ("Nobody said MIM spread is out of scope.", "mim_cap",
+     "MIM spread is out of scope", None),
+    ("It is not true that MIM spread is out of scope.", "mim_cap",
+     "MIM spread is out of scope", None),
+    # a negator a word or two before the phrase, inside the quote
+    ("MIM spread is not considered out of scope.", "mim_cap",
+     "MIM spread is not considered out of scope", None),
+    # a quote that runs across two clauses is not one ruling
+    ("Resistors are swept; MIM spread is out of scope.", "mim_cap",
+     "Resistors are swept; MIM spread is out of scope",
+     ("mim_cap", "MIM spread is out of scope")),
+    # "not in scope" is itself the ruling, not a negation of one
+    ("Resistor spread is swept but MIM spread is not in scope.", "resistor",
+     "Resistor spread is swept but MIM spread is not in scope",
+     ("mim_cap", "MIM spread is not in scope")),
 ])
 def test_scope_out_refuses_a_ruling_the_person_did_not_make(
         tmp_path, capsys, note, dim, quote, kept):
