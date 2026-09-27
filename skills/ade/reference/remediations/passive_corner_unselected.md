@@ -14,3 +14,14 @@ passive corner would then simulate at typical and pass unseen. Routes to
 **Trap:** don't drop the device's `.lib` line or the corner to make the
 finding go away. The resistor and MIM spread (about +/-20% and +/-10-15%)
 is what those corners exist to check.
+
+**When the person ruled it out:** if the approved H1 answer (or the note
+recorded with it) says that device's spread is out of scope, record that
+ruling from their words instead of touching the bench:
+`state.py scope-out --workspace <ws> --dimension mim_cap --quote '<their
+sentence, verbatim>'` (`resistor` for the resistor). sim_pvt then pins
+only that device at typical, sweeps everything else, and no longer asks
+for the placeholder; the release record and the design document say it
+was scoped out. state.py refuses a quote that is not in the recorded
+answer or does not name that device, so a session cannot scope one out
+the person did not.

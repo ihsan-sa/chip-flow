@@ -28,7 +28,10 @@ What the document says, and where each part comes from:
     an msde block adds a section for each nested side;
   - PPA: synth area, timing slack per corner, analog measures against their
     bounds; what no gate measured is said to be unmeasured;
-  - the release record: attest.verify on reports/checks.json, H2, waivers.
+  - the release record: attest.verify on reports/checks.json, H2, waivers,
+    and every corner dimension the person scoped out at H1 with their own
+    words (corners.recorded_scope_outs; one that does not verify is an
+    error, never left out).
 No number in the document is typed by hand: every one is read from those
 files when the document is built.
 
@@ -69,6 +72,7 @@ sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(ENGINE / "lib"))
 import checklib  # noqa: E402
 import attest as attest_mod  # noqa: E402
+import corners as corners_mod  # noqa: E402
 
 SCRIPT = "design_doc"
 DEFAULT_PROJECT = "004"
@@ -687,6 +691,12 @@ def release_text(ws: Path, data: dict) -> tuple[str, bool]:
     else:
         s += " No human sign-off (H2) is recorded."
     s += f" {len(waivers)} waiver{'s' if len(waivers) != 1 else ''} recorded."
+    for so in corners_mod.recorded_scope_outs(data):
+        s += (" Scoped out at " + tex(so["checkpoint"]) + ", pinned at " +
+              tex(so["pinned"]) + r" in every sim\_pvt corner and not "
+              "verified across its spread: the " + tex(so["what"]) +
+              r" (\texttt{" + tex(so["dimension"]) + "}), in the person's "
+              "words: ``" + tex(so["quote"]) + "''.")
     return s, bool(v.get("valid"))
 
 

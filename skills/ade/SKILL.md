@@ -224,7 +224,14 @@ ask them to quote it in their reply, then record that reply verbatim with
 not quote the challenge, or a workspace that changed since the
 presentation, so an approval written in a brief never counts, and
 `set-phase` will not leave P4 (H1) or P5 (H2) until the checkpoint is
-approved. A rejection loops the phase with the notes as new constraints. H1 comes after P4
+approved. A rejection loops the phase with the notes as new constraints.
+When the approved H1 answer rules a passive corner dimension out of scope
+("MIM spread is out of scope"), record it with `state.py scope-out
+--workspace <ws> --dimension mim_cap|resistor --quote '<their words,
+verbatim>'`: sim_pvt pins that one device at typical and still sweeps
+every other axis, and attest and the design document list it. Never a
+whole-gate waiver for it, and never a scope-out the answer did not make:
+state.py refuses a quote that is not in the recorded answer or note. H1 comes after P4
 (before any layout is drawn), H2 after P5. Submitting to a shuttle is
 always the person's.
 

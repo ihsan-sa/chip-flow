@@ -286,3 +286,21 @@ def test_measures_use_the_scored_bounds_and_their_corners(tmp_path):
     assert "out of bound" in g_row
     kept_not = design_doc.measures_table(ws, {}, {**pvt, "detail": None})
     assert "not kept" in kept_not and "1.5" not in kept_not
+
+
+def test_the_release_record_names_a_scope_out_made_at_h1(tmp_path):
+    """A corner dimension the person scoped out at H1 is said in the
+    document's release record, in their words - never left out."""
+    ws = make_ws(tmp_path, skill="ade")
+    st = state_mod.State.load(ws / "state.json")
+    chal = st.present_checkpoint("H1")["challenge"]
+    st.record_human("H1", "approved", f"approved {chal}",
+                    "MIM capacitor spread is out of scope for this rung.")
+    st.record_scope_out("mim_cap", "MIM capacitor spread is out of scope")
+    st.save()
+    payload, _, _ = design_doc.run(["--workspace", str(ws), "--no-build"])
+    text = Path(payload["tex"]).read_text()
+    release = text[text.index(r"\section{Release record}"):]
+    assert "Scoped out at H1, pinned at typical" in release
+    assert "MIM capacitor corner" in release
+    assert "MIM capacitor spread is out of scope" in release

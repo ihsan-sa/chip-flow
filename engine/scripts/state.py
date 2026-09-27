@@ -31,7 +31,8 @@ Schema (version 3):
       "optimise": {"trials", "evaluator_sha", "best": {trial, score}} | null,
       "human": {checkpoint_id: {status: presented|approved|rejected|skipped,
                                 challenge, digest, presented, ts?, answer?,
-                                note?}},
+                                note?, scope_out?: [{dimension, quote,
+                                pinned, ts}] (H1 only)}},
       "artifacts": {name: {path, kind|null, sha256|null, hashed: ts,
                            stale: [mark]?}},
       "open_issues": [{id, gate, phase, fixer, kinds[], severity, count,
@@ -76,6 +77,11 @@ CLI (docs/design.md 1.1 script contract: argparse, JSON to stdout, exit 0 ok
     state.py decision --what W --why Y ...
     state.py present --checkpoint H1 ...
     state.py human --checkpoint H1 --status approved --answer TEXT [--note N] ...
+    state.py scope-out --dimension mim_cap --quote TEXT ...
+        (a passive corner dimension the person ruled out of scope in their
+        approved H1 answer; refused unless TEXT is verbatim in that
+        answer or note, names the dimension and rules it out - corners.py,
+        "Scoped-out dimensions". check_sim_pvt.py pins it at typical)
     state.py issue --id 3 --status fixed [--agent fixer-1] [--bump-attempts] ...
     state.py issue --id 3 --status waived --note TEXT --approved-by WHO ...
     state.py budget --path fix_loops.lint [--consume] ...
@@ -839,6 +845,26 @@ class State:
                   challenge=chal)
         return rec
 
+    def record_scope_out(self, dimension: str, quote: str) -> dict:
+        """Carry a scope-out the person's approved H1 answer makes onto
+        that answer's own record (human.H1.scope_out). Only their words
+        can: corners.scope_out_problem refuses a quote that is not in the
+        recorded answer or note, does not name `dimension`, or does not
+        rule it out. A re-presentation of H1 replaces the record, and the
+        scope-out with it - the new answer has to make it again."""
+        import corners as corners_mod
+        cp = corners_mod.SCOPE_CHECKPOINT
+        rec = self.data["human"].get(cp)
+        problem = corners_mod.scope_out_problem(rec, dimension, quote)
+        if problem:
+            raise CheckError(f"scope-out {dimension!r} refused: {problem}")
+        entry = {"dimension": dimension, "quote": quote,
+                 "pinned": "typical", "ts": now()}
+        rec["scope_out"] = [s for s in rec.get("scope_out") or []
+                            if s.get("dimension") != dimension] + [entry]
+        self._log("scope_out", checkpoint=cp, dimension=dimension)
+        return entry
+
     def open_issue(self, issue: dict) -> dict:
         iid = self.data["next_issue_id"]
         self.data["next_issue_id"] = iid + 1
@@ -1235,6 +1261,15 @@ def run(argv=None):
                         "challenge `present` printed")
     p.add_argument("--note")
 
+    p = sub.add_parser("scope-out", help="record a passive corner "
+                       "dimension the approved H1 answer rules out of scope")
+    common(p)
+    p.add_argument("--dimension", required=True,
+                   help="mim_cap or resistor (corners.SCOPE_DIMENSIONS)")
+    p.add_argument("--quote", required=True,
+                   help="the person's words that rule it out, verbatim "
+                        "from the recorded H1 answer or note")
+
     p = sub.add_parser("issue")
     common(p)
     p.add_argument("--id", type=int, required=True)
@@ -1364,6 +1399,9 @@ def _mutate(st: "State", args, result: dict):
     elif args.cmd == "human":
         st.record_human(args.checkpoint, args.status, args.answer, args.note)
         result.update(checkpoint=args.checkpoint, status=args.status)
+    elif args.cmd == "scope-out":
+        result.update(scope_out=st.record_scope_out(args.dimension,
+                                                    args.quote))
     elif args.cmd == "issue":
         rec = st.update_issue(args.id, args.status, args.agent,
                               args.bump_attempts, args.note,

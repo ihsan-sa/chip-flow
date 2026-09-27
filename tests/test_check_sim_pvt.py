@@ -285,3 +285,83 @@ def test_mim_bench_with_the_placeholder_passes(tmp_path, monkeypatch, capsys):
     decks = {r["corner"]: Path(r["deck"]).read_text() for r in out["results"]}
     assert "mimcap_ss" in decks["tt_pss"] and "mimcap_ff" in decks["tt_pff"]
     assert "mimcap_typical" in decks["fs"]
+
+
+# --- a dimension the person scoped out at H1 --------------------------------
+
+MIM_RULING = ("MIM capacitor spread is out of scope for this rung: MIM "
+              "stays pinned typical, a known limit.")
+RC_NETLIST = ("xr1 a b vss ppolyf_u_1k r_width=2e-6 r_length=1e-5\n"
+              "xc1 a vss cap_mim_2f0fF c_width=1e-5 c_length=1e-5")
+RC_LIBS = (".lib '{{PDK}}/libs.tech/ngspice/sm141064.spice' {{RES_CORNER}}\n"
+           ".lib '{{PDK}}/libs.tech/ngspice/sm141064.spice' {{MIM_CORNER}}")
+
+
+def _h1_scope_out(ws: Path, dimension="mim_cap", quote=MIM_RULING) -> None:
+    """The state.json record `state.py scope-out` leaves on an approved H1
+    whose note carries the person's ruling."""
+    (ws / "state.json").write_text(json.dumps({"human": {"H1": {
+        "status": "approved", "answer": "approved H1-abc123",
+        "note": MIM_RULING,
+        "scope_out": [{"dimension": dimension, "quote": quote,
+                       "pinned": "typical", "ts": "2026-09-27T05:00:00"}]}}}),
+        encoding="utf-8")
+
+
+def test_a_scoped_out_mim_corner_is_pinned_and_nothing_else(tmp_path,
+                                                           monkeypatch,
+                                                           capsys):
+    # Red before the route: sim_pvt read no ruling, so the MIM cap moved to
+    # mimcap_ss/mimcap_ff with the passive and process corners whatever the
+    # person had ruled at H1.
+    ws = _passive_ws(tmp_path, RC_NETLIST, RC_LIBS)
+    _h1_scope_out(ws)
+    monkeypatch.setattr(sim_run, "EDA_BIN",
+                        _fake_eda_failing_on(tmp_path, "res_ff"))
+    code = check_sim_pvt.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    # the resistor still brings its passive corners in, and they still gate
+    assert set(out["corners"]) == {"tt", "ss", "ff", "sf", "fs"} | PASSIVE_CORNERS
+    failed = {r["corner"] for r in out["results"] if r["violations"]}
+    assert code == 1 and failed == {"ff", "tt_pff"}, out
+    decks = {r["corner"]: Path(r["deck"]).read_text() for r in out["results"]}
+    for name, deck in decks.items():
+        assert "mimcap_typical" in deck and "mimcap_ss" not in deck \
+            and "mimcap_ff" not in deck, name
+    assert "res_ss" in decks["ss"] and "res_ff" in decks["tt_pff"]
+    assert "sm141064.spice' ss\n" in decks["ss"]      # process still swept
+    assert {r["corner"]: r["pinned"] for r in out["results"]}["ss"] \
+        == {"mim_cap": "typical"}
+    [so] = out["scoped_out"]
+    assert so["dimension"] == "mim_cap" and so["quote"] == MIM_RULING
+
+
+def test_a_scoped_out_mim_bench_may_hard_code_typical(tmp_path, monkeypatch,
+                                                      capsys):
+    """The bench ring_osc_div's bench-writer wrote to the ruling: MIM pinned
+    at mimcap_typical. Scoped out, it owes no {{MIM_CORNER}}; a MIM-only
+    design sweeps just the five, since nothing else moves a passive."""
+    ws = _passive_ws(tmp_path, "xc1 a vss cap_mim_2f0fF c_width=1e-5 "
+                     "c_length=1e-5",
+                     ".lib '{{PDK}}/libs.tech/ngspice/sm141064.spice' "
+                     "mimcap_typical")
+    _h1_scope_out(ws)
+    monkeypatch.setattr(sim_run, "EDA_BIN",
+                        _fake_eda_failing_on(tmp_path, "no-such-section"))
+    code = check_sim_pvt.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0, out
+    assert set(out["corners"]) == {"tt", "ss", "ff", "sf", "fs"}
+
+
+def test_a_scope_out_the_h1_answer_does_not_make_is_an_error(tmp_path,
+                                                             monkeypatch,
+                                                             capsys):
+    ws = _passive_ws(tmp_path, RC_NETLIST, RC_LIBS)
+    _h1_scope_out(ws, dimension="resistor")     # the answer rules on MIM only
+    monkeypatch.setattr(sim_run, "EDA_BIN",
+                        _fake_eda_failing_on(tmp_path, "no-such-section"))
+    code = check_sim_pvt.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 2 and "does not name resistor" in out["error"], out
+    assert "state.py" in out["remediation"]

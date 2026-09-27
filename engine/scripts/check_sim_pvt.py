@@ -22,6 +22,14 @@ and both temperature extremes. A design whose netlist uses a poly/diffusion
 resistor or a MIM cap also sweeps corners.yaml's passive_corners (the
 resistor and MIM spread the PDK keeps in its own sections), whatever form
 the spec's `corners` takes.
+
+Scoped-out dimensions: a passive corner dimension the person ruled out of
+scope at H1, recorded from their answer with `state.py scope-out` (corners.py,
+"Scoped-out dimensions"), is pinned at typical at every corner and only
+that one: the other passive, process, temperature and supply are swept and
+gated as before. The report's `scoped_out` lists each, with the person's
+quote; a record in state.json that no longer verifies against the H1 answer
+is an error (exit 2), never a silent sweep change.
 """
 from __future__ import annotations
 
@@ -53,9 +61,13 @@ def run(argv=None):
     spec = speclib.load_spec(ws / "spec" / "spec.yaml")
     passives = corners_mod.passive_devices(sim_run.find_netlist(ws).read_text(
         encoding="utf-8", errors="replace"))
-    corner_list = corners_mod.spec_corners(corners_mod.load(),
-                                           spec.get("corners", "default"),
-                                           passives)
+    state_path = ws / "state.json"
+    scoped_out = corners_mod.recorded_scope_outs(
+        checklib.load_json(state_path, "state.json")
+        if state_path.is_file() else {})
+    corner_list = corners_mod.spec_corners(
+        corners_mod.load(), spec.get("corners", "default"), passives,
+        pinned=[s["dimension"] for s in scoped_out])
 
     result = sim_run.run_workspace_benches(
         ws, corners=corner_list, timeout=args.timeout, check="sim_pvt")
@@ -66,7 +78,8 @@ def run(argv=None):
     # record_gate cross-checks that against invalidation.yaml's gate_inputs
     # kinds[0] for this gate ("netlist" for sim_pvt).
     payload = checklib.report(SCRIPT, ws / "netlist", violations, top=top,
-                              corners=corner_list, results=results)
+                              corners=corner_list, results=results,
+                              scoped_out=scoped_out)
     return payload, args.out
 
 

@@ -648,6 +648,66 @@ def test_cli_present_then_human_quotes_the_challenge(tmp_path, capsys):
     assert st.data["human"]["H1"]["status"] == "approved"
 
 
+# ------------------------------------------------- scope-out from the H1 answer
+
+MIM_RULING = ("MIM capacitor spread is out of scope for this rung: MIM "
+              "stays pinned typical, a known limit.")
+
+
+def test_scope_out_is_taken_only_from_the_recorded_h1_answer(tmp_path,
+                                                             capsys):
+    """A person ruled MIM spread out of scope in the note recorded with
+    their H1 approval. state.py carries that ruling onto the H1 record, and
+    refuses a scope-out whose dimension the recorded answer does not name,
+    whose words are not the person's, or which does not rule anything out."""
+    import corners as corners_mod
+    ws = ws_empty(tmp_path)
+    state_mod.State.init(ws, "ade", "ring_osc_div", phase="P4")
+    base = ["--workspace", str(ws)]
+    st = state_mod.State.load(ws / "state.json")
+    # no approved H1 yet: nothing to take a scope-out from
+    with pytest.raises(CheckError, match="H1 is not approved"):
+        st.record_scope_out("mim_cap", MIM_RULING)
+    chal = st.present_checkpoint("H1")["challenge"]
+    st.record_human("H1", "approved", f"approved {chal}", MIM_RULING)
+    st.save()
+    refused = [
+        # the answer never names the resistor
+        ("resistor", MIM_RULING, "does not name resistor"),
+        ("resistor", "resistor spread is out of scope", "not in the recorded"),
+        # words the person did not write
+        ("mim_cap", "MIM spread is out of scope", "not in the recorded"),
+        # the person's words, but no ruling in them
+        ("mim_cap", "MIM capacitor spread", "does not rule it out"),
+        ("vth", MIM_RULING, "unknown dimension"),
+        ("mim_cap", "   ", "--quote is empty"),
+    ]
+    for dim, quote, why in refused:
+        assert state_mod.main(["scope-out", "--dimension", dim,
+                               "--quote", quote, *base]) == 2, (dim, quote)
+        out = json.loads(capsys.readouterr().out)
+        assert why in out["error"], (dim, quote, out)
+    st = state_mod.State.load(ws / "state.json")
+    assert "scope_out" not in st.data["human"]["H1"]
+    # the person's own sentence, whitespace and case aside
+    assert state_mod.main(["scope-out", "--dimension", "mim_cap", "--quote",
+                           "mim capacitor spread is  out of scope", *base]) == 0
+    capsys.readouterr()
+    st = state_mod.State.load(ws / "state.json")
+    [rec] = st.data["human"]["H1"]["scope_out"]
+    assert rec["dimension"] == "mim_cap" and rec["pinned"] == "typical"
+    assert [s["dimension"] for s in corners_mod.recorded_scope_outs(st.data)] \
+        == ["mim_cap"]
+    # a hand edit that widens it no longer verifies, and nothing reads it
+    rec["dimension"] = "resistor"
+    with pytest.raises(CheckError, match="does not verify"):
+        corners_mod.recorded_scope_outs(st.data)
+    # a new presentation of H1 drops it with the answer it came from
+    rec["dimension"] = "mim_cap"
+    st.present_checkpoint("H1")
+    assert corners_mod.recorded_scope_outs(st.data) == []
+
+
 # ------------------------------------------------------------- edit class
 
 def test_edit_unknown_class_for_skill_refuses(tmp_path):

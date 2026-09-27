@@ -130,7 +130,9 @@ def load_sizing(ws: Path) -> dict:
 # cap's in `.lib mimcap_<corner>`. {{RES_CORNER}} and {{MIM_CORNER}} pick
 # them from corners.passive_of(corner): the corner's own `passive` key (a
 # passive corner), else its process where the PDK has a passive section
-# (typical/ss/ff), else typical (sf/fs have none).
+# (typical/ss/ff), else typical (sf/fs have none) - and typical at every
+# corner for a device the person scoped out at H1 (the corner's `pinned`
+# key; corners.py, "Scoped-out dimensions").
 PASSIVE_PLACEHOLDERS = {"resistor": "RES_CORNER", "mim_cap": "MIM_CORNER"}
 
 
@@ -140,11 +142,13 @@ def unselected_passives(bench_text: str, passives: list[str],
     moves a passive off typical, a bench over a netlist with that passive
     that hard-codes `res_typical`/`mimcap_typical` instead of
     {{RES_CORNER}}/{{MIM_CORNER}} would simulate every passive corner at
-    typical and pass them all unseen. Pure."""
-    if all(corners_mod.passive_of(c) == "typical" for c in corner_list):
-        return []
+    typical and pass them all unseen. A device no corner moves (pinned
+    by a recorded scope-out, or a sweep that never leaves typical) owes
+    no placeholder. Pure."""
     return [PASSIVE_PLACEHOLDERS[d] for d in passives
-            if "{{" + PASSIVE_PLACEHOLDERS[d] + "}}" not in bench_text]
+            if any(corners_mod.passive_of(c, d) != "typical"
+                   for c in corner_list)
+            and "{{" + PASSIVE_PLACEHOLDERS[d] + "}}" not in bench_text]
 
 
 def build_subs(t_root: Path, netlist_path: Path, corner: dict,
@@ -155,8 +159,8 @@ def build_subs(t_root: Path, netlist_path: Path, corner: dict,
         # from a relative --workspace would not resolve there
         "NETLIST": str(Path(netlist_path).resolve()),
         "CORNER": corner["process"],
-        "RES_CORNER": f"res_{corners_mod.passive_of(corner)}",
-        "MIM_CORNER": f"mimcap_{corners_mod.passive_of(corner)}",
+        "RES_CORNER": f"res_{corners_mod.passive_of(corner, 'resistor')}",
+        "MIM_CORNER": f"mimcap_{corners_mod.passive_of(corner, 'mim_cap')}",
         "TEMP_C": corner["temp_c"],
         "VDD": f"{corners_mod.resolve_vdd(corner, nominal_vdd):.6g}",
         "SIZING": simlib.sizing_param_line(sizing),
@@ -210,13 +214,16 @@ def run_bench_at_corner(eda_bin: Path, bench_name: str,
         failed_measures=failed, check=check,
         unsettled=simlib.parse_unsettled(stdout))
 
-    return {
+    out = {
         "bench": bench_name, "corner": corner["name"], "process": corner["process"],
         "passive": corners_mod.passive_of(corner),
         "temp_c": corner["temp_c"], "vdd": subs["VDD"], "returncode": rc,
         "measures": measures, "engine_errors": err_kinds,
         "violations": violations, "deck": str(deck_path),
     }
+    if corner.get("pinned"):
+        out["pinned"] = dict(corner["pinned"])
+    return out
 
 
 def run_workspace_benches(ws: Path, eda_bin: Path | None = None,
@@ -269,7 +276,10 @@ def run_workspace_benches(ws: Path, eda_bin: Path | None = None,
                 f"off typical, but the bench never uses {{{{{token}}}}} - "
                 f"every passive corner would simulate at typical. Replace "
                 f"the bench's hard-coded `.lib ... res_typical` / "
-                f"`mimcap_typical` line with `.lib ... {{{{{token}}}}}`",
+                f"`mimcap_typical` line with `.lib ... {{{{{token}}}}}` - "
+                f"unless the person ruled that spread out of scope at H1, "
+                f"which is recorded from their answer with state.py "
+                f"scope-out, never by editing the bench",
                 "sim_run"))
         for corner in corner_list:
             subs = build_subs(t_root, netlist_path, corner, nominal_vdd, sizing)
