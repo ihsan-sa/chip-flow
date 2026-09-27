@@ -1034,12 +1034,18 @@ class State:
     # ---- resume ----------------------------------------------------------
     def resume_summary(self) -> dict:
         gates = self.data["gates"]
-        order = applicable_gate_order(self._skill())
+        skill = self._skill()
+        order = applicable_gate_order(skill)
         passed = [g for _, g in order
                   if gates.get(g, {}).get("status") == "pass"]
         next_gate = None
+        import attest   # lazy, as in gate_coverage
+        ws = self.path.parent
         for ph, g in order:
-            if gates.get(g, {}).get("status") != "pass":
+            # a gate the block's own spec declares not applicable is not
+            # owed (gate_coverage's rule), so it is never the next gate
+            if gates.get(g, {}).get("status") != "pass" \
+                    and not attest.not_applicable_reason(ws, skill, g):
                 next_gate = {"phase": ph, "gate": g}
                 break
         # "escalated" belongs here too (M5, found running the fix loop for
