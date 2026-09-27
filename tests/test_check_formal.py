@@ -507,18 +507,59 @@ def _spy_eda(tmp_path: Path) -> tuple[Path, Path]:
     return eda, marker
 
 
-def test_missing_formal_depth_is_refused_before_any_tool_runs(
+def test_missing_formal_depth_is_a_finding_before_any_tool_runs(
         tmp_path, capsys, monkeypatch):
+    # A finding, not a refusal: a refusal (exit 2) carries no findings, so
+    # fix_dispatch had no order to give the property-writer, who owns the
+    # depth - a spec written before depth was required was stuck. The gate
+    # still fails and still runs nothing on a depth nobody chose.
     ws = make_ws(tmp_path, RTL_OK)
     (ws / "spec" / "spec.yaml").write_text(SPEC_NO_DEPTH, encoding="utf-8")
     eda, marker = _spy_eda(tmp_path)
     monkeypatch.setattr(check_formal, "EDA_BIN", eda)
     code = check_formal.main(["--workspace", str(ws)])
     out = json.loads(capsys.readouterr().out)
-    assert code == 2, out
-    assert "formal.depth" in out["remediation"]
-    assert "at least the cycle length" in out["remediation"]
+    assert code == 1, out
+    assert out["status"] == "violations"
+    assert out["proven"] == [] and out["depth"] is None
+    [v] = out["violations"]
+    assert (v["check"], v["severity"], v["kind"]) == (
+        "formal", "error", "formal_depth_missing")
+    assert v["file"] == "spec/spec.yaml"
+    assert "formal.depth" in v["msg"]
+    assert "at least the cycle length" in v["msg"]
     assert not marker.exists(), "sby/yosys ran on a depth nobody chose"
+    result = gate.evaluate("formal", _formal_gate_row(), out)
+    assert result["status"] == "fail"
+
+
+@pytest.mark.parametrize("formal", [{"depth": 0}, {"depth": "20"}, 20])
+def test_malformed_formal_depth_is_still_refused(
+        tmp_path, capsys, monkeypatch, formal):
+    # only a MISSING depth became a finding; a malformed one stays exit 2
+    import yaml
+    ws = make_ws(tmp_path, RTL_OK)
+    spec = yaml.safe_load(SPEC)
+    spec["formal"] = formal
+    (ws / "spec" / "spec.yaml").write_text(yaml.safe_dump(spec),
+                                           encoding="utf-8")
+    eda, marker = _spy_eda(tmp_path)
+    monkeypatch.setattr(check_formal, "EDA_BIN", eda)
+    code = check_formal.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 2, out
+    assert out["status"] == "error"
+    assert not marker.exists()
+
+
+def test_depth_missing_violation_only_for_a_missing_depth():
+    assert check_formal.depth_missing_violation({})["kind"] == \
+        "formal_depth_missing"
+    assert check_formal.depth_missing_violation(
+        {"formal": {"depth": None, "cover_depth": 40}}) is not None
+    assert check_formal.depth_missing_violation(
+        {"formal": {"depth": 12}}) is None
+    assert check_formal.depth_missing_violation({"formal": 20}) is None
 
 
 @pytest.mark.parametrize("formal, needle", [

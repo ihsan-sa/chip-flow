@@ -255,6 +255,9 @@ def gate_check(ws: Path, skill: str, gate: str, data: dict,
                       + ", ".join(verdict.get("changed_inputs") or []) + ")")
         elif verdict.get("hash_valid") is None:
             reason = "freshness unknown (no recorded input hashes)"
+        elif any(m.get("edit_class") == "gate_error"
+                 for m in verdict.get("stale_marks") or []):
+            reason = "stale: a later run of this gate ended in error"
         else:
             reason = "stale: marked by a later edit"
     result = {"gate": gate, "applies": True, "ran": True, "ok": bool(ok),

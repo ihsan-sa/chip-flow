@@ -48,8 +48,9 @@ Schema (version 3):
       "history": [{ts, event, ...detail}]
     }
     mark = {ts, edit_class, refs, human_hold} - stamped by `edit` from
-    reference/invalidation.yaml, cleared by record-gate (gates) / re-register
-    (artifacts). A gate is FRESH iff its recorded input hashes all match the
+    reference/invalidation.yaml, or on a gate by a run of it that ended in
+    error (edit_class "gate_error", + error; gate.py), cleared by
+    record-gate (gates) / re-register (artifacts). A gate is FRESH iff its recorded input hashes all match the
     current normalized hashes AND it carries no mark (engine/lib/statelib.py).
 
 CLI (docs/design.md 1.1 script contract: argparse, JSON to stdout, exit 0 ok
@@ -476,6 +477,23 @@ class State:
         self._log("gate", gate=gate, status=status, attempt=g["attempts"],
                   failing_count=entry["failing_count"])
         return g
+
+    def mark_gate_error(self, gate: str, error: str) -> dict | None:
+        """A run of `gate` ended in error (its check refused or crashed):
+        stamp a stale mark (edit_class "gate_error") on the gate's recorded
+        result so an earlier pass stops counting as a fresh pass - a gate
+        that did not run is a refusal, never a pass. The error itself is not
+        recorded as a result (status stays pass|fail, attempts unchanged);
+        the next recorded run clears the mark like any other. None when the
+        gate has no recorded result (nothing to distrust)."""
+        g = self.data["gates"].get(gate)
+        if g is None:
+            return None
+        mark = {"ts": now(), "edit_class": "gate_error", "refs": [],
+                "human_hold": 0, "error": str(error)[:2000]}
+        g.setdefault("stale", []).append(mark)
+        self._log("gate_error", gate=gate, error=mark["error"][:200])
+        return mark
 
     def _imap(self) -> dict:
         return statelib.load_map()

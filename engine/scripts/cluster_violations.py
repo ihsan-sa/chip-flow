@@ -134,6 +134,8 @@ FIXER_HINTS: dict[str, str] = {
     "engine_disagreement": "formal",
     "bounded_not_proven": "formal",
     "cover_not_reached": "formal",
+    # spec.yaml's formal.depth unset: the property-writer's to set
+    "formal_depth_missing": "formal",
     # an assert nothing ever enables: its assumptions, the property-writer's
     "vacuous_pass": "formal",
 

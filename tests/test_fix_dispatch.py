@@ -251,3 +251,36 @@ def test_no_file_orders_serialize_alone():
              {"id": 2, "cluster": {"violations": [{"file": None}]}}]
     groups = fix_dispatch.parallel_groups(orders)
     assert groups == [[1], [2]]
+
+
+def test_vde_missing_formal_depth_reaches_the_property_writer(tmp_path,
+                                                              capsys):
+    """A spec with no formal.depth (one written before depth was required)
+    used to make check_formal refuse (exit 2): gate.py's error carried no
+    findings, fix_dispatch refused "no failing/violations/clusters list",
+    and the property-writer - who owns the depth - never got an order. The
+    real gate result now dispatches a formal order to it, with its
+    remediation."""
+    sys.path.insert(0, str(ENGINE / "scripts"))
+    import gate
+    import state as state_mod
+    ws = tmp_path / "ws"
+    state_mod.State.init(ws, "vde", "counter8")
+    for sub in ("spec", "rtl", "formal"):
+        (ws / sub).mkdir(exist_ok=True)
+    (ws / "spec" / "spec.yaml").write_text(
+        "top: counter8\nrequirements:\n  - id: REQ-RESET\n    text: reset\n"
+        "    check: formal\n    property: REQ_RESET\n", encoding="utf-8")
+    out = tmp_path / "gate-formal.json"
+    code = gate.main(["--gate", "formal", "--workspace", str(ws),
+                      "--out", str(out), "--no-record"])
+    assert code == 1, out.read_text(encoding="utf-8")
+    payload, _ = fix_dispatch.run(["--input", str(out),
+                                   "--workspace", str(ws)])
+    [order] = payload["orders"]
+    assert order["fixer"] == "formal"
+    wo = json.loads(Path(order["work_order"]).read_text(encoding="utf-8"))
+    assert wo["role_prompt"] == "skills/vde/agents/property-writer.md"
+    assert wo["cluster"]["kinds"] == ["formal_depth_missing"]
+    assert any(r.endswith("remediations/formal_depth_missing.md")
+               for r in wo["remediations"])

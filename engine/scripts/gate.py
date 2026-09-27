@@ -46,7 +46,12 @@ state.record_gate: input hashes, attempt count, stale-mark clearing all
 apply. Pass AND fail are recorded (the fix loop wants every attempt). A
 scratch/corpus input with no workspace records nothing, and the result says
 so (`record_result.recorded: false` + reason); --no-record opts out
-explicitly. A REQUESTED-but-failed record is an operational error (exit 2),
+explicitly. An ERROR is never recorded as a result, but when the check
+itself ends in error (refused, crashed, not built) the gate's earlier
+recorded result gets a stale mark (mark_gate_error, edit_class
+"gate_error"), so an older pass stops reading as fresh: a gate that did
+not run is a refusal, never a pass. --no-record skips that too. A
+REQUESTED-but-failed record is an operational error (exit 2),
 exactly like a requested-but-failed commit: a caller keying on exit 0 must
 not believe the evidence was preserved when it was not. With the record goes
 the run's whole result, to reports/recorded/gate-<g>.json stamped with the
@@ -317,6 +322,36 @@ def record_gate_result(skill: str, gate_name: str, gate: dict, result: dict,
             "inputs": (g.get("last") or {}).get("inputs")}
 
 
+def mark_gate_error(gate_name: str, error: str,
+                    workspace: Path | None) -> dict:
+    """The check for `gate_name` ended in error: stale-mark the gate's
+    earlier recorded result (state.State.mark_gate_error) so a pass from
+    before no longer reads as fresh. Same writer lock as
+    record_gate_result. Never raises - the run is already exit 2, and the
+    outcome goes into the error JSON as `stale_mark`."""
+    try:
+        ws = find_workspace(None, str(workspace) if workspace else None)
+    except RuntimeError:
+        ws = None       # --workspace with no state.json: nothing recorded
+    if ws is None:
+        return {"ok": True, "marked": False,
+                "reason": "no state.json at the workspace"}
+    state_path = ws / "state.json"
+    try:
+        import state as state_mod  # sibling script
+        with safelib.writer_lock(state_path, what="state.json"):
+            st = state_mod.State.load(state_path)
+            mark = st.mark_gate_error(gate_name, error)
+            if mark is None:
+                return {"ok": True, "marked": False,
+                        "reason": "no earlier recorded result to distrust"}
+            st.save()
+    except Exception as exc:  # noqa: BLE001 - reported, never swallowed
+        return {"ok": False, "marked": False,
+                "reason": f"{type(exc).__name__}: {exc}"}
+    return {"ok": True, "marked": True, "ts": mark["ts"]}
+
+
 def repo_root(start: Path) -> Path | None:
     proc = subprocess.run(["git", "rev-parse", "--show-toplevel"],
                           cwd=str(start), capture_output=True, text=True,
@@ -418,6 +453,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--list", action="store_true", help="list gates and exit")
     args = ap.parse_args(argv)
 
+    error_mark = None
     try:
         gates = load_gates(Path(args.gates))
         if args.list:
@@ -447,9 +483,16 @@ def main(argv: list[str] | None = None) -> int:
         else:
             if not args.workspace:
                 ap.error("--workspace is required unless --report is given")
-            report = run_report_for_gate(
-                gate, Path(args.workspace).resolve(),
-                Path(args.checks_dir) if args.checks_dir else None)
+            try:
+                report = run_report_for_gate(
+                    gate, Path(args.workspace).resolve(),
+                    Path(args.checks_dir) if args.checks_dir else None)
+            except Exception as exc:  # noqa: BLE001 - re-raised below
+                if not args.no_record:
+                    error_mark = mark_gate_error(
+                        args.gate, f"{type(exc).__name__}: {exc}",
+                        Path(args.workspace))
+                raise
 
         result = evaluate(args.gate, gate, report)
 
@@ -486,11 +529,12 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:  # noqa: BLE001 - the exit-2 contract
         # The error goes where the result would have: a caller reading
         # --out must not find the last run's pass there instead.
-        text = json.dumps({"script": "gate", "gate": args.gate,
-                           "status": "error",
-                           "error": traceback.format_exc(),
-                           "remediation": f"{type(exc).__name__}: {exc}"},
-                          indent=2)
+        body = {"script": "gate", "gate": args.gate, "status": "error",
+                "error": traceback.format_exc(),
+                "remediation": f"{type(exc).__name__}: {exc}"}
+        if error_mark is not None:
+            body["stale_mark"] = error_mark
+        text = json.dumps(body, indent=2)
         if args.out:
             Path(args.out).parent.mkdir(parents=True, exist_ok=True)
             Path(args.out).write_text(text, encoding="utf-8")
