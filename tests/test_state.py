@@ -754,6 +754,53 @@ def test_scope_out_is_taken_only_from_the_recorded_h1_answer(tmp_path,
     assert corners_mod.recorded_scope_outs(st.data) == []
 
 
+@pytest.mark.parametrize("note, dim, quote, kept", [
+    # a negated ruling rules nothing out
+    ("MIM capacitor spread is not out of scope.", "mim_cap",
+     "MIM capacitor spread is not out of scope", None),
+    ("MIM spread should never be pinned typical.", "mim_cap",
+     "MIM spread should never be pinned typical", None),
+    # a ruling on the other device, quoted whole, rules out only that one
+    ("Resistor spread must be swept; MIM capacitor spread is out of scope.",
+     "resistor",
+     "Resistor spread must be swept; MIM capacitor spread is out of scope",
+     ("mim_cap", "MIM capacitor spread is out of scope")),
+    ("MIM spread is out of scope but resistor spread is swept.", "resistor",
+     "MIM spread is out of scope but resistor spread is swept",
+     ("mim_cap", "MIM spread is out of scope")),
+    # one clause that rules on both devices is not a ruling on either alone
+    ("MIM out of scope, resistors swept.", "resistor",
+     "MIM out of scope, resistors swept", None),
+])
+def test_scope_out_refuses_a_ruling_the_person_did_not_make(
+        tmp_path, capsys, note, dim, quote, kept):
+    """The quote is verbatim in the recorded H1 note, names the dimension
+    and holds an out-of-scope phrase, but the ruling it makes is negated or
+    is about the other device: refused. Where the note does rule the other
+    device out, that ruling is still taken."""
+    ws = ws_empty(tmp_path)
+    state_mod.State.init(ws, "ade", "ring_osc_div", phase="P4")
+    st = state_mod.State.load(ws / "state.json")
+    chal = st.present_checkpoint("H1")["challenge"]
+    st.record_human("H1", "approved", f"approved {chal}", note)
+    st.save()
+    base = ["--workspace", str(ws)]
+    assert state_mod.main(["scope-out", "--dimension", dim, "--quote", quote,
+                           *base]) == 2
+    out = json.loads(capsys.readouterr().out)
+    assert "refused" in out["error"], out
+    st = state_mod.State.load(ws / "state.json")
+    assert "scope_out" not in st.data["human"]["H1"]
+    if kept:
+        kdim, kquote = kept
+        assert state_mod.main(["scope-out", "--dimension", kdim, "--quote",
+                               kquote, *base]) == 0
+        capsys.readouterr()
+        st = state_mod.State.load(ws / "state.json")
+        assert [s["dimension"] for s in st.data["human"]["H1"]["scope_out"]] \
+            == [kdim]
+
+
 # ------------------------------------------------------------- edit class
 
 def test_edit_unknown_class_for_skill_refuses(tmp_path):

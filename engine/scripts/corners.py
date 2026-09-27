@@ -57,9 +57,10 @@ Scoped-out dimensions. A person may rule one passive corner dimension out
 of scope at H1 (say "MIM capacitor spread is out of scope for this rung").
 `state.py scope-out --dimension mim_cap --quote '<their words>'` records it
 on the approved H1 record as `human.H1.scope_out`, and only when the quote
-is verbatim in that record's answer or note, names the dimension
-(SCOPE_DIMENSIONS) and says it is out of scope (SCOPE_OUT_RE): the
-person's text is the source, never the session's. spec_corners(pinned=)
+is verbatim in that record's answer or note and one clause of it
+(SCOPE_CLAUSE_RE) names that dimension and no other (SCOPE_DIMENSIONS)
+and says it is out of scope (SCOPE_OUT_RE) without a negation before it
+(SCOPE_NEGATED_RE): the person's text is the source, never the session's. spec_corners(pinned=)
 then holds that one device at typical at every corner (a corner's
 `pinned` key, which passive_of(corner, device) honours) and stops adding
 passive_corners on its account; every other axis, the other passive
@@ -288,6 +289,12 @@ SCOPE_DIMENSIONS = {
 }
 SCOPE_OUT_RE = re.compile(r"out of scope|scoped? out|not in scope|"
                           r"pinned (?:at |to )?typical|not swept", re.I)
+# where one ruling ends and the next begins, and a negation that turns the
+# scope-out phrase after it into its opposite ("is not out of scope")
+SCOPE_CLAUSE_RE = re.compile(r"[.;:!?\n]|\b(?:but|however|whereas|while|"
+                             r"although|though|except)\b", re.I)
+SCOPE_NEGATED_RE = re.compile(r"(?:\bnot|\bnever|\bno longer|n't)\s+"
+                              r"(?:(?:be|been|being)\s+)?$", re.I)
 
 
 def _norm(text) -> str:
@@ -317,10 +324,30 @@ def scope_out_problem(h1: dict | None, dimension: str,
                 f"({SCOPE_DIMENSIONS[dimension]['what']}): the recorded "
                 f"{SCOPE_CHECKPOINT} answer has to rule on that dimension "
                 "itself")
-    if not SCOPE_OUT_RE.search(quote):
-        return ("the quote does not rule it out of scope (no 'out of "
-                "scope', 'scoped out' or 'pinned typical')")
-    return None
+    # The ruling has to sit in one clause that names this dimension and no
+    # other, un-negated: "Resistor spread must be swept; MIM capacitor
+    # spread is out of scope" rules out MIM only, and "MIM spread is not
+    # out of scope" rules out nothing.
+    others = [d for d in SCOPE_DIMENSIONS if d != dimension]
+    shared = None
+    for clause in SCOPE_CLAUSE_RE.split(quote):
+        if not SCOPE_DIMENSIONS[dimension]["names"].search(clause):
+            continue
+        if not any(not SCOPE_NEGATED_RE.search(clause[:m.start()])
+                   for m in SCOPE_OUT_RE.finditer(clause)):
+            continue
+        named = [d for d in others
+                 if SCOPE_DIMENSIONS[d]["names"].search(clause)]
+        if not named:
+            return None
+        shared = named
+    if shared:
+        return (f"the clause that rules {dimension} out also names "
+                f"{', '.join(shared)}: a scope-out is taken only from a "
+                "clause that rules on that one dimension")
+    return ("the quote does not rule it out of scope (no un-negated 'out "
+            "of scope', 'scoped out' or 'pinned typical' in a clause that "
+            "names it)")
 
 
 def recorded_scope_outs(state_data: dict) -> list[dict]:

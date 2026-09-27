@@ -234,7 +234,8 @@ When the approved H1 answer rules a passive corner dimension out of scope
 verbatim>'`: sim_pvt pins that one device at typical and still sweeps
 every other axis, and attest and the design document list it. Never a
 whole-gate waiver for it, and never a scope-out the answer did not make:
-state.py refuses a quote that is not in the recorded answer or note. H1 comes after P4
+state.py refuses a quote that is not in the recorded answer or note,
+and one with no clause that rules that one device out, un-negated. H1 comes after P4
 (before any layout is drawn), H2 after P5. Submitting to a shuttle is
 always the person's.
 
