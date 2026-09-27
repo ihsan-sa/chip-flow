@@ -1,0 +1,47 @@
+{
+ "skill": "vde",
+ "rung": "uart",
+ "block": "uart",
+ "run": "uart",
+ "phase": "P6",
+ "scored_at": "2026-09-27T15:40:51+00:00",
+ "counts": false,
+ "gates_green": false,
+ "gate_problems": [
+  "drc: no recorded result",
+  "glsim: no recorded result",
+  "lvs: no recorded result",
+  "precheck: no recorded result",
+  "timing: last recorded result is FAIL",
+  "1 open issue(s) unresolved",
+  "release: no recorded pass"
+ ],
+ "gates_passed": [
+  "cover",
+  "formal",
+  "harden",
+  "holdout",
+  "lint",
+  "mutate",
+  "sim",
+  "spec_lint",
+  "synth"
+ ],
+ "hand_edits": 0,
+ "held_out": {
+  "status": "pass",
+  "tests_passed": 1,
+  "tests_run": 1,
+  "kinds": []
+ },
+ "kill_rate": 1.0,
+ "line_pct": 100.0,
+ "area": 2283.008,
+ "worst_slack_ns": -0.12,
+ "fix_attempts": 21,
+ "tokens": null,
+ "cost_usd": null,
+ "wall_s": 213420,
+ "note": "vde session run 2026-09-27 on main + this PR's flow fixes; stopped at P6 timing: setup -0.12 ns at max_ss_125C, the fixer's harden override edit refused by cc-guard (the workspace sits under another track's state dir)",
+ "kind": "skill"
+}
