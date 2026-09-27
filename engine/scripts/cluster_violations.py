@@ -134,6 +134,8 @@ FIXER_HINTS: dict[str, str] = {
     "engine_disagreement": "formal",
     "bounded_not_proven": "formal",
     "cover_not_reached": "formal",
+    # spec.yaml's formal.depth unset: the property-writer's to set
+    "formal_depth_missing": "formal",
     # an assert nothing ever enables: its assumptions, the property-writer's
     "vacuous_pass": "formal",
 
@@ -157,10 +159,15 @@ FIXER_HINTS: dict[str, str] = {
     "flow_step_failed": "harden",
     "harden_missing_artifact": "harden",
 
-    # timing (check_timing.py)
+    # timing (check_timing.py) - clock_unconstrained is the one timing kind
+    # that does NOT route to "harden": an INF slack means the SDC's clock
+    # reaches no path, which traces to spec.yaml's clock.domains/tt_pins
+    # mapping, not anything a harden override or the RTL can fix - "review"
+    # (the spec-writer's), same as any other spec-owned finding.
     "setup_violation": "harden",
     "hold_violation": "harden",
     "slew_or_cap_or_fanout_violation": "harden",
+    "clock_unconstrained": "review",
 
     # drc (check_drc.py)
     "magic_drc_violation": "harden",

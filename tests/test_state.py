@@ -431,6 +431,30 @@ def test_set_phase_skips_mc_only_when_the_spec_declares_it_not_applicable(
                        for h in st.data["history"])
 
 
+
+@pytest.mark.parametrize("mc_on", [False, True])
+def test_resume_next_gate_skips_mc_only_when_the_spec_declares_it_not_applicable(
+        tmp_path, mc_on):
+    # Found scoring the mirror rung: every P4 gate but mc passed, the spec
+    # asks for no Monte Carlo, and resume still named mc as the next gate.
+    ws = ws_empty(tmp_path)
+    state_mod.State.init(ws, "ade", "mirror", phase="P4")
+    spec = (REPO / "corpus" / "ade" / "mirror" / "spec.yaml").read_text(
+        encoding="utf-8")
+    if mc_on:
+        spec += "\nmc:\n  enabled: true\n"
+    (ws / "spec").mkdir(exist_ok=True)
+    (ws / "spec" / "spec.yaml").write_text(spec, encoding="utf-8")
+    st = state_mod.State.load(ws / "state.json")
+    for ph, g in state_mod.applicable_gate_order("ade"):
+        if g != "mc" and state_mod.PHASES.index(ph) < state_mod.PHASES.index("P5"):
+            st.record_gate(g, {"status": "pass"})
+    nxt = st.resume_summary()["next_gate"]
+    if mc_on:   # MC asked for and not run: it is still the next gate
+        assert nxt == {"phase": "P4", "gate": "mc"}
+    else:       # declared not applicable: resume moves on to P5's first gate
+        assert nxt["gate"] != "mc" and nxt["phase"] == "P5"
+
 # ------------------------------------------------------------------- jobs
 
 def test_job_lifecycle(tmp_path):

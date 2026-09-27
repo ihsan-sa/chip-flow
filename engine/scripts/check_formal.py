@@ -47,7 +47,11 @@ prove (`check: formal|both` requirements each carry a `property:` label
 matching an assert's own Verilog statement label in formal/*.sv).
 
 Depth comes from the design, never from this gate: `formal: {depth: N}` is
-required, and a missing or non-positive one is refused (formal_settings).
+required. A MISSING one is a finding, formal_depth_missing (an error, so
+the gate fails and nothing runs): the property-writer owns setting it, and
+a refusal would give the fix loop no work order to route there (a spec
+written before depth was required was stuck with no legal fix). A present
+but non-positive or malformed one is still refused (formal_settings).
 `depth` is the PROVE depth only - the k of smt's k-induction and pdr's run -
 so it should be what the asserts need for induction to close, which is
 usually small: k-induction proves unboundedly, it does not have to walk a
@@ -119,8 +123,8 @@ a `property:` label spec.yaml names is not found as an ASSERT testcase in
 sby's own model (the id sby echoes back, not a text search - a rename, or
 under slang an immediate assert outside a named block, leaves the id
 missing); a label that matches two ids; formal.depth missing or not a
-positive int, or cover_depth/timeout_s/multiclock malformed (see Depth
-above); `multiclock: false` on a design that needs it (see Clocks above);
+positive int (a missing one is the formal_depth_missing finding, not a
+refusal), or cover_depth/timeout_s/multiclock malformed (see Depth above); `multiclock: false` on a design that needs it (see Clocks above);
 slang needed but unavailable or
 unable to read the design (see Frontend above); any sby task fails to reach a DONE line at all (a crashed
 launcher, a solver missing, a syntax error before the model even builds).
@@ -220,6 +224,25 @@ def _positive_int(value, key: str) -> int:
     return value
 
 
+def depth_missing_violation(spec: dict) -> dict | None:
+    """The formal_depth_missing finding when spec.yaml's `formal:` is a
+    mapping (or absent) without a `depth`, else None. A finding, not a
+    refusal: setting the depth is the property-writer's job, and only a
+    finding reaches it as a work order. Everything else formal_settings
+    rejects (a non-mapping `formal:`, a depth that is not a positive int)
+    stays a refusal. Pure."""
+    cfg = spec.get("formal")
+    if cfg is None:
+        cfg = {}
+    if not isinstance(cfg, dict) or cfg.get("depth") is not None:
+        return None
+    return checklib.violation(
+        "formal", "error", "spec/spec.yaml", None, "formal_depth_missing",
+        [], "spec.yaml has no formal.depth - the formal gate never picks a "
+        "depth for you, so nothing was proven; " + DEPTH_REMEDIATION,
+        "check_formal")
+
+
 def formal_settings(spec: dict) -> dict:
     """The depths and sby timeouts this run uses, all from spec.yaml's own
     `formal:` key - never a default depth nobody chose. Pure, so the rules
@@ -236,7 +259,9 @@ def formal_settings(spec: dict) -> dict:
                    TIMEOUT_PER_STEP_S * that task's depth, capped at
                    TIMEOUT_MAX_S.
 
-    Refuses (CheckError) a missing or malformed formal.depth."""
+    Refuses (CheckError) a missing or malformed formal.depth; run() turns
+    a missing one into the formal_depth_missing finding before this is
+    called (depth_missing_violation)."""
     cfg = spec.get("formal")
     if cfg is None:
         cfg = {}
@@ -681,9 +706,17 @@ def run(argv=None):
                          "for the formal gate to prove (an empty property "
                          "set is a refusal, never a pass)")
 
+    formal_top = (spec.get("formal") or {}).get("top") or f"{top}_formal"
+    missing = depth_missing_violation(spec)
+    if missing is not None:
+        # nothing runs on a depth nobody chose, and the gate still fails -
+        # but as a finding the fix loop can route to the property-writer
+        return checklib.report(
+            SCRIPT, ws / "rtl", [missing], top=top, formal_top=formal_top,
+            depth=None, cover_depth=None, proven=[], bounded=[], failed=[],
+            vacuous=[]), args.out
     settings = formal_settings(spec)
     depth, cover_depth = settings["depth"], settings["cover_depth"]
-    formal_top = (spec.get("formal") or {}).get("top") or f"{top}_formal"
 
     sv_files = collect_sources(ws, "formal", (".sv", ".v"))
     rtl_files = collect_sources(ws, "rtl")

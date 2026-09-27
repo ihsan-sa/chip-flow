@@ -197,6 +197,83 @@ def test_harden_override_may_not_replace_the_specs_macros(tmp_path):
     assert config["PL_TARGET_DENSITY_PCT"] == 50
 
 
+def test_clock_port_none_when_spec_names_no_domain():
+    assert ttlib.clock_port(COUNTER8_SPEC) is None
+    assert ttlib.clock_port({**COUNTER8_SPEC, "clock": {"period_ns": 20}}) is None
+
+
+def test_clock_port_clk_for_a_clk_mapping():
+    spec = {**COUNTER8_SPEC, "clock": {"period_ns": 20, "domains": ["clk"]}}
+    assert ttlib.clock_port(spec) == "clk"
+
+
+def test_clock_port_maps_a_spare_input_bit():
+    spec = {
+        "top": "divider",
+        "ports": {"osc_out": {"dir": "input", "width": 1},
+                 "count": {"dir": "output", "width": 8}},
+        "tt_pins": {"osc_out": "ui_in[0]", "count": "uo_out[7:0]"},
+        "clock": {"period_ns": 20, "domains": ["osc_out"]},
+    }
+    assert ttlib.clock_port(spec) == "ui_in[0]"
+
+
+def test_clock_port_raises_on_more_than_one_domain():
+    spec = {**COUNTER8_SPEC,
+            "clock": {"period_ns": 20, "domains": ["clk", "rst"]}}
+    with pytest.raises(ttlib.TTError, match="more than one clock"):
+        ttlib.clock_port(spec)
+
+
+def test_clock_port_raises_on_a_multi_bit_or_output_mapping():
+    multi = {
+        "top": "x",
+        "ports": {"c": {"dir": "input", "width": 2},
+                 "o": {"dir": "output", "width": 1}},
+        "tt_pins": {"c": "ui_in[1:0]", "o": "uo_out[0]"},
+        "clock": {"period_ns": 20, "domains": ["c"]},
+    }
+    with pytest.raises(ttlib.TTError, match="clk or one ui_in/uio_in bit"):
+        ttlib.clock_port(multi)
+    out = {**multi, "clock": {"period_ns": 20, "domains": ["o"]}}
+    with pytest.raises(ttlib.TTError, match="clk or one ui_in/uio_in bit"):
+        ttlib.clock_port(out)
+
+
+def test_harden_config_sets_clock_port_from_a_spare_input_bit(tmp_path):
+    spec = {
+        "top": "divider",
+        "ports": {"osc_out": {"dir": "input", "width": 1},
+                 "count": {"dir": "output", "width": 8}},
+        "tt_pins": {"osc_out": "ui_in[0]", "count": "uo_out[7:0]"},
+        "clock": {"period_ns": 20, "domains": ["osc_out"]},
+    }
+    config = ttlib.harden_config(spec, [tmp_path / "divider.v"],
+                                 tmp_path / "tt_um_divider.v", tmp_path)
+    assert config["CLOCK_PORT"] == "ui_in[0]"
+
+
+def test_harden_config_sets_clock_port_clk_for_a_clk_mapping(tmp_path):
+    spec = {**COUNTER8_SPEC, "clock": {"period_ns": 20, "domains": ["clk"]}}
+    config = ttlib.harden_config(spec, [tmp_path / "counter8.v"],
+                                 tmp_path / "tt_um_counter8.v", tmp_path)
+    assert config["CLOCK_PORT"] == "clk"
+
+
+def test_harden_config_leaves_the_template_default_clock_port_with_no_domain(tmp_path):
+    config = ttlib.harden_config(COUNTER8_SPEC, [tmp_path / "counter8.v"],
+                                 tmp_path / "tt_um_counter8.v", tmp_path)
+    assert config["CLOCK_PORT"] == "clk"  # the vendored template's default
+
+
+def test_load_harden_override_refuses_clock_port(tmp_path):
+    path = tmp_path / "config.override.json"
+    path.write_text('{"CLOCK_PORT": "ui_in[0]"}', encoding="utf-8")
+    with pytest.raises(ttlib.TTError, match="CLOCK_PORT"):
+        ttlib.load_harden_override(path)
+    assert "CLOCK_PORT" in ttlib.forbidden_override_keys()
+
+
 def test_load_harden_override_absent_is_empty_and_bad_json_is_refused(tmp_path):
     assert ttlib.load_harden_override(tmp_path / "config.override.json") == {}
     bad = tmp_path / "config.override.json"

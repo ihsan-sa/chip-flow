@@ -32,8 +32,10 @@ You are a subagent (P5). Files are the interface. Run scripts through
 - A real generator for the pattern, from `corpus/ade/mirror/layout/
   gen_mirror.py` or `corpus/ade/r2r_dac/layout/gen_r2r_dac.py` - the house
   style for `engine/lib/layoutlib.py`'s API (`gf180_cells()`, `fet_pads()`,
-  `psub_tap()`, `rect()`, `finalize()`), read them for shape, not copied
-  verbatim for a different block.
+  `psub_tap()`, `rect()`, `finalize()`), read for shape, not copied
+  verbatim for a different block. When the block you are building is one
+  of those two rungs, read only the OTHER one: its own generator is the
+  answer key below.
 - NOT `netlist/` or `sizing/` of any OTHER block you are not building -
   and never the answer-key `layout/`/`layout_ref/` of a corpus rung you
   are being asked to reproduce.

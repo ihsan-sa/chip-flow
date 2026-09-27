@@ -101,6 +101,29 @@ def test_negative_setup_slack_is_a_violation(tmp_path, monkeypatch, capsys):
     assert "setup_violation" in kinds
 
 
+def test_infinite_slack_is_a_clock_unconstrained_violation_not_a_pass(tmp_path, monkeypatch, capsys):
+    ws = make_ws_with_harden(tmp_path, corners=("nom_tt_025C_3v30",))
+    _patch_common(monkeypatch, tmp_path)
+
+    def fake_run(cmd, **kwargs):
+        return subprocess.CompletedProcess(
+            cmd, 0, stdout="worst slack max INF\nworst slack min INF\n" + CLEAN_COUNTS, stderr="")
+    monkeypatch.setattr(check_timing.subprocess, "run", fake_run)
+
+    code = check_timing.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 1, out
+    assert out["status"] == "violations"
+    kinds = {v["kind"] for v in out["violations"]}
+    assert kinds == {"clock_unconstrained"}
+    assert "setup_violation" not in kinds and "hold_violation" not in kinds
+    # never Infinity in the JSON payload
+    corner = out["corners"]["nom_tt_025C_3v30"]
+    assert corner["setup_ws"] is None and corner["hold_ws"] is None
+    text = json.dumps(out)
+    assert "Infinity" not in text
+
+
 def test_all_corners_positive_slack_pass(tmp_path, monkeypatch, capsys):
     ws = make_ws_with_harden(tmp_path, corners=("nom_tt_025C_3v30", "max_ss_125C_3v00"))
     _patch_common(monkeypatch, tmp_path)

@@ -18,7 +18,12 @@ Passes when every corner's worst setup AND hold slack is >= 0 and
 `report_check_types` finds no max-slew/max-cap/max-fanout violator
 (gates.yaml's `timing` row). Fault this gate must catch: "a chain that
 misses the spec's clock" (docs/design.md 1.5) - a design whose slowest
-corner runs the clock period into negative setup slack.
+corner runs the clock period into negative setup slack. A DIFFERENT fault
+this gate catches: a corner whose worst slack is INF, not negative - the
+SDC's clock reaches no path at all (a block clocked from a tt_pins bit the
+template's default CLOCK_PORT does not name), which run() reports as a
+`clock_unconstrained` violation rather than letting `inf >= 0` pass it
+silently.
 
 Failure classification (the same three-way split check_harden.py uses):
   - no `harden/runs/run/final/` at all -> CheckError (harden has not run;
@@ -28,12 +33,15 @@ Failure classification (the same three-way split check_harden.py uses):
     CheckError (a launcher/tool failure is a refusal, never recorded as a
     plain slack violation the fix loop could waive as "just timing", and
     never a pass on a check that did not run).
-  - every corner's STA completes and reports a negative slack or a
-    reported violator -> a `violations` finding, exit 1.
+  - every corner's STA completes and reports a negative slack, an infinite
+    (unconstrained) slack, or a reported violator -> a `violations`
+    finding, exit 1. An infinite slack is never recorded in the `corners`
+    payload as `Infinity` (not valid JSON) - `None` instead.
 """
 from __future__ import annotations
 
 import argparse
+import math
 import re
 import subprocess
 import sys
@@ -51,7 +59,11 @@ from checklib import CheckError  # noqa: E402
 SCRIPT = "check_timing"
 EDA_BIN = REPO / "bin" / "eda"
 TIMEOUT_S = 120.0
-SLACK_RE = re.compile(r"worst slack (max|min)\s+(-?[0-9.]+(?:e-?[0-9]+)?)")
+# OpenSTA prints "worst slack max INF" when no clock reaches any path (the
+# SDC's clock is on a port the design never uses as one): a parseable
+# result, but an unconstrained one - run() turns it into a finding.
+SLACK_RE = re.compile(
+    r"worst slack (max|min)\s+(-?(?:[0-9.]+(?:e-?[0-9]+)?|INF))\b")
 # OpenSTA 3.1.0's `report_check_types -violators` prints a bare section
 # header ("max slew", "max capacitance", "max fanout"), a column header and
 # a dashed rule, then one row per violating pin ending "(VIOLATED)" - never
@@ -186,27 +198,41 @@ def run(argv=None):
               for corner in corners]
 
     violations = []
+    corners_out = {}
     for r in results:
-        if r["setup_ws"] < 0:
+        inf_sides = [side for side, key in (("setup", "setup_ws"),
+                                            ("hold", "hold_ws"))
+                    if math.isinf(r[key])]
+        if inf_sides:
             violations.append(checklib.violation(
-                "timing", "error", None, top, "setup_violation", [],
-                f"corner {r['corner']}: worst setup slack {r['setup_ws']:.4f}ns",
+                "timing", "error", None, top, "clock_unconstrained", [],
+                f"corner {r['corner']}: worst {' and '.join(inf_sides)} "
+                "slack is unconstrained (INF) - no clock reaches any path "
+                "in this corner; check the SDC's clock port against "
+                "spec.yaml's clock.domains mapped through tt_pins",
                 "opensta", corner=r["corner"]))
-        if r["hold_ws"] < 0:
-            violations.append(checklib.violation(
-                "timing", "error", None, top, "hold_violation", [],
-                f"corner {r['corner']}: worst hold slack {r['hold_ws']:.4f}ns",
-                "opensta", corner=r["corner"]))
+        else:
+            if r["setup_ws"] < 0:
+                violations.append(checklib.violation(
+                    "timing", "error", None, top, "setup_violation", [],
+                    f"corner {r['corner']}: worst setup slack {r['setup_ws']:.4f}ns",
+                    "opensta", corner=r["corner"]))
+            if r["hold_ws"] < 0:
+                violations.append(checklib.violation(
+                    "timing", "error", None, top, "hold_violation", [],
+                    f"corner {r['corner']}: worst hold slack {r['hold_ws']:.4f}ns",
+                    "opensta", corner=r["corner"]))
         for line in r["violators"]:
             violations.append(checklib.violation(
                 "timing", "error", None, top, "slew_or_cap_or_fanout_violation",
                 [], f"corner {r['corner']}: {line}", "opensta",
                 corner=r["corner"]))
+        corners_out[r["corner"]] = {
+            "setup_ws": None if "setup" in inf_sides else r["setup_ws"],
+            "hold_ws": None if "hold" in inf_sides else r["hold_ws"]}
 
     payload = checklib.report(SCRIPT, ws / "harden", violations, top=top,
-                              corners={r["corner"]: {"setup_ws": r["setup_ws"],
-                                                     "hold_ws": r["hold_ws"]}
-                                      for r in results})
+                              corners=corners_out)
     return payload, args.out
 
 

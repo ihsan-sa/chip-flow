@@ -467,3 +467,92 @@ def test_applicable_true_or_absent_still_evaluates_pass_fail():
         "status"] == "fail"
     assert gate.evaluate("mc", g, {"violations": [], "applicable": False})[
         "status"] == "not_applicable"
+
+
+# A check that refuses: its gate exits 2 and records no result.
+ERROR_CHECK = '''
+def run(argv=None):
+    raise RuntimeError("the tool could not run")
+'''
+
+
+def test_error_after_a_pass_leaves_that_pass_stale(tmp_path, capsys):
+    """A gate that did not run is a refusal, never a pass: an exit-2 run
+    after a recorded pass must stop that pass reading as fresh (resume,
+    attest), while the error itself is still never recorded as a result.
+    The next recorded run clears the mark."""
+    import attest
+    import statelib
+    ws = make_ws(tmp_path)
+    gates_yaml = make_gates_yaml(tmp_path)
+    ok_dir = make_checks_dir(tmp_path)
+    base = ["--gate", "lint", "--workspace", str(ws), "--gates",
+            str(gates_yaml)]
+    assert gate.main(base + ["--checks-dir", str(ok_dir)]) == 0
+    capsys.readouterr()
+    st = state_mod.State.load(ws / "state.json")
+    assert "lint" in st.resume_summary()["gates_passed_fresh"]
+
+    err_dir = tmp_path / "errchecks"
+    err_dir.mkdir()
+    (err_dir / "check_fakegate.py").write_text(ERROR_CHECK, encoding="utf-8")
+    # --no-record leaves the state alone, errors included
+    assert gate.main(base + ["--checks-dir", str(err_dir),
+                             "--no-record"]) == 2
+    capsys.readouterr()
+    st = state_mod.State.load(ws / "state.json")
+    assert "lint" in st.resume_summary()["gates_passed_fresh"]
+
+    assert gate.main(base + ["--checks-dir", str(err_dir)]) == 2
+    out = json.loads(capsys.readouterr().out)
+    assert out["status"] == "error"
+    assert out["stale_mark"]["marked"] is True
+    st = state_mod.State.load(ws / "state.json")
+    g = st.data["gates"]["lint"]
+    assert (g["status"], g["attempts"]) == ("pass", 1)   # error not recorded
+    [mark] = g["stale"]
+    assert mark["edit_class"] == "gate_error"
+    assert "could not run" in mark["error"]
+    summary = st.resume_summary()
+    assert "lint" not in summary["gates_passed_fresh"]
+    assert "lint" in summary["gates_stale"]
+    imap = statelib.load_map()
+    fresh = statelib.freshness_report(st.data, ws, imap)
+    check = attest.gate_check(ws, "vde", "lint", st.data, imap, fresh)
+    assert check["ok"] is False
+    assert "ended in error" in check["reason"]
+
+    assert gate.main(base + ["--checks-dir", str(ok_dir)]) == 0
+    capsys.readouterr()
+    st = state_mod.State.load(ws / "state.json")
+    assert "stale" not in st.data["gates"]["lint"]
+    assert "lint" in st.resume_summary()["gates_passed_fresh"]
+
+
+def test_error_config_mistake_marks_nothing(tmp_path, capsys):
+    """Only the check's own error distrusts the gate's record; a mistake in
+    the call (an unknown gate) never reaches the check and marks nothing."""
+    ws = make_ws(tmp_path)
+    gates_yaml = make_gates_yaml(tmp_path)
+    assert gate.main(["--gate", "lint", "--workspace", str(ws), "--gates",
+                      str(gates_yaml), "--checks-dir",
+                      str(make_checks_dir(tmp_path))]) == 0
+    capsys.readouterr()
+    assert gate.main(["--gate", "nope", "--workspace", str(ws), "--gates",
+                      str(gates_yaml)]) == 2
+    out = json.loads(capsys.readouterr().out)
+    assert "stale_mark" not in out
+    data = json.loads((ws / "state.json").read_text(encoding="utf-8"))
+    assert "stale" not in data["gates"]["lint"]
+
+
+def test_mark_gate_error_without_a_state_or_a_record(tmp_path):
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    assert gate.mark_gate_error("lint", "boom", scratch)["marked"] is False
+    ws = make_ws(tmp_path)
+    r = gate.mark_gate_error("lint", "boom", ws)
+    assert (r["ok"], r["marked"]) == (True, False)
+    (ws / "state.json").write_text("{not json", encoding="utf-8")
+    r = gate.mark_gate_error("lint", "boom", ws)
+    assert (r["ok"], r["marked"]) == (False, False)
