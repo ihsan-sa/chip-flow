@@ -254,5 +254,12 @@ def test_stimulus_fault_classifier(tmp_path):
     assert sf({"type": "AttributeError",
                "traceback": _tb(hold, "dut.x.value = 1")
                + _tb(lib, "raise AttributeError()")}, ws) is None
+    # a helper's own raise is a judgement of the design, like an assert
+    helper = str(ws / "tb" / "helpers.py")
+    assert sf({"type": "TimeoutError",
+               "traceback": _tb(hold, "await v.wait_lock(dut)")
+               + _tb(helper, 'raise TimeoutError("no lock")')}, ws) is None
+    assert sf({"type": "TimeoutError",
+               "traceback": _tb(helper, "raise")}, ws) is None
     assert sf({"type": "ValueError", "traceback": ""}, ws) is None
     assert sf({"type": None, "traceback": ""}, ws) is None

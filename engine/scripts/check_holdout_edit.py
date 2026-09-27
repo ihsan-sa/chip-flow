@@ -22,10 +22,13 @@ Refused (each a finding, exit 1):
                             if/for/while/with headers that enclose it (so
                             `if False:` around an assert, or fewer loop cases,
                             counts); multiset per function
-  holdout_bound_changed     a constant (literal-only) value bound to a name a
-                            judgement reads, or a module-level constant,
-                            changed - an expected value moved out of the
-                            assert is still an expected value
+  holdout_bound_changed     an assignment to a name a judgement reads was
+                            added, removed or changed - a literal value, a
+                            call's callee or which of its arguments are
+                            literals, or any other value's text - or a
+                            module-level constant changed: an expected or
+                            observed value moved out of the assert is still
+                            one (a computed call argument may change)
   holdout_control_changed   a return/break/continue/try-except was added to
                             or removed from a function that judges
   holdout_model_changed     a plain (non-async) helper function defined in
@@ -95,7 +98,12 @@ class _Walk(ast.NodeVisitor):
 
     def _judge(self, node: ast.AST) -> None:
         self.judged[" | ".join(self.guards + [ast.unparse(node)])] += 1
-        self.reads |= {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+        # a comprehension's own loop variable (`for _, x in ...` inside an
+        # assert) is local to it, not a name the function binds
+        local = {n.id for c in ast.walk(node) if isinstance(c, ast.comprehension)
+                 for n in ast.walk(c.target) if isinstance(n, ast.Name)}
+        self.reads |= {n.id for n in ast.walk(node)
+                       if isinstance(n, ast.Name)} - local
 
     def _guarded(self, header: str, node: ast.AST) -> None:
         self.guards.append(header)
@@ -162,19 +170,47 @@ class _Walk(ast.NodeVisitor):
     visit_Lambda = visit_FunctionDef
 
 
-def _const_binds(fn: ast.AST, names: set[str]) -> Counter:
+def _value_sig(value: ast.AST) -> str:
+    """What an assignment feeds a judgement, at the resolution an edit may
+    not move it: a literal-only value by its text; a call by its callee and,
+    per argument, whether it is a literal (`decode_n(code)` -> `decode_n(0)`
+    freezes the input, so it counts) - but not the text of a computed
+    argument, since stimulus timing (`m.rises(t0 + settle)`) may change;
+    anything else (a list, an arithmetic expression) by its full text."""
+    if isinstance(value, ast.Await):
+        value = value.value
+    if _is_const(value):
+        return "const " + ast.unparse(value)
+    if isinstance(value, ast.Call):
+        args = ["const " + ast.unparse(a) if _is_const(a) else "expr"
+                for a in value.args]
+        args += [f"{k.arg}=" + ("const " + ast.unparse(k.value)
+                                if _is_const(k.value) else "expr")
+                 for k in value.keywords]
+        return f"call {ast.unparse(value.func)}({', '.join(args)})"
+    return "value " + ast.unparse(value)
+
+
+def _binds(fn: ast.AST, names: set[str]) -> Counter:
+    """Every assignment to a name a judgement reads, as `name <- sig`: a
+    changed, added or removed one means the observed or expected value
+    moved even though every assert's text stayed put. A tuple unpack keys
+    each judged name on the whole value, so `fb, rises, _ = await f(...)`
+    for `fb, rises = await f(...)` (a helper grew a return) is unchanged."""
     out: Counter = Counter()
     for node in ast.walk(fn):
         if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
             targets = (node.targets if isinstance(node, ast.Assign)
                        else [node.target])
-            value = node.value
-            if value is None or not _is_const(value):
+            if node.value is None:
                 continue
+            sig = _value_sig(node.value)
+            if isinstance(node, ast.AugAssign):
+                sig = f"{type(node.op).__name__}= {sig}"
             for t in targets:
-                hit = {n.id for n in ast.walk(t) if isinstance(n, ast.Name)}
-                if hit & names:
-                    out[ast.unparse(node)] += 1
+                for hit in sorted({n.id for n in ast.walk(t)
+                                   if isinstance(n, ast.Name)} & names):
+                    out[f"{hit} <- {sig}"] += 1
     return out
 
 
@@ -197,7 +233,7 @@ def summarise(py: Path) -> dict:
             "decorators": [ast.unparse(d) for d in node.decorator_list],
             "judged": w.judged,
             "control": w.control if w.judged else Counter(),
-            "binds": _const_binds(node, w.reads),
+            "binds": _binds(node, w.reads),
             "model": (ast.dump(node)
                       if isinstance(node, ast.FunctionDef) else None),
         }

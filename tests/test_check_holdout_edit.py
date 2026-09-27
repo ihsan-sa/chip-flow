@@ -39,6 +39,7 @@ async def test_lock(dut):
     fb, rises = await v.pfd_setup(dut, [-10.0] * 60)
     await Timer(1000, unit="ns")
     assert int(dut.lock.value) == 1, "lock not high"
+    assert all(x <= 0.5 for _, x in v.pulses(fb)), "other side pulsed"
 
 
 # req: REQ-DIV
@@ -90,6 +91,14 @@ LOOSENINGS = {
                       "holdout_model_changed"),
     "constant_changed": ("REF_T = 100.0", "REF_T = 90.0",
                          "holdout_bound_changed"),
+    "observed_faked": ("r = v.rises(dut)", "r = [0, want * n * v.TV]",
+                       "holdout_bound_changed"),
+    "input_frozen": ("n = decode_n(code)\n", "n = decode_n(0)\n",
+                     "holdout_bound_changed"),
+    "observed_overridden": ("        r = v.rises(dut)\n",
+                            "        r = v.rises(dut)\n"
+                            "        r = [0, want * n * v.TV]\n",
+                            "holdout_bound_changed"),
 }
 
 

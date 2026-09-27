@@ -25,9 +25,10 @@ judges - check_holdout_edit.py and state.py's `holdout_stimulus_edit`
 enforce that), never to the rtl fixer. It is one only when all three hold:
 the exception is not an AssertionError; the innermost traceback frame is a
 file inside the workspace (holdout/ or tb/), not cocotb or the simulator;
-and that frame's line is not an `assert` (an `int()` of an X-valued signal
-inside an assert raises ValueError from cocotb's own code - that is the
-design's). Anything else stays `holdout_failed`. The finding names the
+and that frame's line is neither an `assert` nor a `raise` (an `int()` of
+an X-valued signal inside an assert raises ValueError from cocotb's own
+code, and a tb helper's `raise TimeoutError("no lock")` is a helper judging
+the design - both are the design's). Anything else stays `holdout_failed`. The finding names the
 exception class only, never the test, its file or its message.
 
 Fault this gate must catch (gates.yaml): "UART parity inverted where the
@@ -79,7 +80,9 @@ def stimulus_fault(res: dict, ws: Path) -> str | None:
     except OSError:
         return None
     code = lines[i + 1].strip() if i + 1 < len(lines) else ""
-    if not inside or code.startswith("assert ") or code == "assert":
+    # an assert or a raise in workspace code is a judgement of the design
+    # (check_holdout_edit.py counts a raise as one too), not stimulus
+    if not inside or re.match(r"(assert|raise)\b", code):
         return None
     return etype.rsplit(".", 1)[-1]
 
