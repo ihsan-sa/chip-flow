@@ -9,8 +9,10 @@ not through `bin/eda mcy`, which cannot resolve it, docs/design.md 1.2 and
 check_env.py's own check_mcy for why; this launches it the same way
 check_env.py does, `eda python3 <the real mcy script>`) over a scratch mcy
 project under `<workspace>/log/mutate/` (recreated fresh every run - a stale
-mutation database is worse than a slower gate). `[script]` reads rtl/ and
-elaborates with a fixed `--top` from spec.yaml; `mutate -list <size> -seed
+mutation database is worse than a slower gate). `[script]` reads rtl/
+without SYNTHESIS defined (what the sim gate tests, so a PDK cell kept
+under `ifdef SYNTHESIS` is not left in the mutants) and elaborates with a
+fixed `--top` from spec.yaml; `mutate -list <size> -seed
 <seed>` (yosys's own pass, gates.yaml's "fixed seed, N mutants") samples the
 design for candidate mutations; `[test sim]` (mutate_runner.py, one process
 per mutant) yosys-applies each mutation to the frozen design and runs the
@@ -108,6 +110,7 @@ EDA_BIN = REPO / "bin" / "eda"
 MCY_REL = "foss/tools/yosys/bin/mcy"  # check_env.py's own MCY_REL, mirrored
 MUTATE_RUNNER = SCRIPTS / "mutate_runner.py"
 MCY_SUBDIR = "log/mutate"
+BASELINE_BUILD_ERROR = "baseline_build_error.txt"  # mutate_runner.py writes it
 DEFAULT_SIZE = 20
 DEFAULT_SEED = 1
 KILL_RATE_MIN = 0.9
@@ -156,7 +159,14 @@ def collect_sources(ws: Path) -> list[Path]:
 
 def write_config(mcy_dir: Path, rtl_files: list[Path], top: str, tb_dir: Path,
                  size: int, seed: int) -> None:
-    reads = "\n".join(f"read_verilog -sv {f.resolve()}" for f in rtl_files)
+    # -nosynthesis: yosys defines SYNTHESIS by default, but the sim gate
+    # (Icarus, no define) tests the `else` side of an `ifdef SYNTHESIS`. A
+    # PDK cell kept under SYNTHESIS (a gf180mcu delay cell, say) would
+    # otherwise stay in every mutant as a black box Icarus has no model
+    # for, and a mutant of the behavioural side is judged by the very
+    # tests that passed it.
+    reads = "\n".join(f"read_verilog -sv -nosynthesis {f.resolve()}"
+                      for f in rtl_files)
     config = f"""\
 [options]
 size {size}
@@ -220,7 +230,12 @@ def check_baseline(db_path: Path) -> None:
     passes a tb that tests nothing. This is the one place that baseline's
     own tag is read, so it must PASS (mcy's "SURVIVED": the unmutated
     design behaves, as expected, under the visible tests) before a kill
-    rate computed from anything else is trusted at all."""
+    rate computed from anything else is trusted at all.
+
+    A baseline that never built (yosys could not write it back out, or
+    Icarus refused the netlist) is reported as that, with the tool's own
+    error, off the BASELINE_BUILD_ERROR file mutate_runner.py leaves in the
+    mcy project directory - not as the tests failing."""
     con = sqlite3.connect(str(db_path))
     try:
         row = con.execute(
@@ -237,6 +252,12 @@ def check_baseline(db_path: Path) -> None:
         tags = {t for (t,) in con.execute(
             "SELECT tag FROM tags WHERE mutation_id = 1")}
         if "KILLED" in tags:
+            build_error = db_path.parent.parent / BASELINE_BUILD_ERROR
+            if build_error.is_file():
+                raise CheckError(
+                    "the unmutated design did not build, so no test ran: "
+                    + build_error.read_text(encoding="utf-8",
+                                            errors="replace").strip())
             raise CheckError("the unmutated design fails the visible tests")
         if "SURVIVED" not in tags:
             raise CheckError("mcy's own baseline (mutation id 1) never got "

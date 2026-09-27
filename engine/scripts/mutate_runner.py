@@ -14,6 +14,10 @@ resulting mutated netlist. Writes `output.txt` with one `<idx> PASS|FAIL`
 line per input line: PASS = every visible test still passed (the mutant
 SURVIVED, undetected), FAIL = at least one visible test failed, or the
 mutated netlist would not even build (the mutant was KILLED).
+
+When mcy's own `-mode none` baseline fails to build (yosys or Icarus), the
+tool's error goes to PRJDIR/baseline_build_error.txt, so check_mutate.py
+can say the design did not build rather than that the tests failed.
 """
 from __future__ import annotations
 
@@ -27,6 +31,16 @@ SCRIPTS = Path(__file__).resolve().parent
 ENGINE = SCRIPTS.parent
 sys.path.insert(0, str(ENGINE / "lib"))
 import cocotblib  # noqa: E402
+
+BASELINE_BUILD_ERROR = "baseline_build_error.txt"  # check_mutate.py reads it
+
+
+def tail(path: Path, n: int = 20) -> str:
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return f"(no log at {path.name})"
+    return "\n".join(lines[-n:])
 
 
 def main(argv=None) -> int:
@@ -47,6 +61,7 @@ def main(argv=None) -> int:
         if not line.strip():
             continue
         idx, mutate_cmd = line.split(None, 1)
+        baseline = "-mode none" in mutate_cmd
         mutated_v = taskdir / f"mutated_{idx}.v"
         ys = taskdir / f"mutate_{idx}.ys"
         # techmap before write_verilog: a design with an un-lowered
@@ -65,6 +80,10 @@ def main(argv=None) -> int:
             ["yosys", "-ql", str(taskdir / f"mutate_{idx}.log"), str(ys)],
             cwd=str(taskdir)).returncode
         if yosys_rc != 0 or not mutated_v.is_file():
+            if baseline:
+                (prjdir / BASELINE_BUILD_ERROR).write_text(
+                    "yosys could not write it out:\n"
+                    + tail(taskdir / f"mutate_{idx}.log"), encoding="utf-8")
             # the mutation itself did not even produce a legal netlist -
             # that is caught, not survived.
             results.append((idx, "FAIL"))
@@ -80,6 +99,11 @@ def main(argv=None) -> int:
                                          for r in parsed.values())
             results.append((idx, "FAIL" if killed else "PASS"))
         except Exception:  # noqa: BLE001 - a build/run crash means "caught"
+            # no sim.vvp: iverilog itself refused the netlist
+            if baseline and not (build_dir / "sim.vvp").is_file():
+                (prjdir / BASELINE_BUILD_ERROR).write_text(
+                    "Icarus could not build it:\n"
+                    + tail(build_dir / "sim.log"), encoding="utf-8")
             results.append((idx, "FAIL"))
 
     with open(taskdir / "output.txt", "w", encoding="utf-8") as f:
