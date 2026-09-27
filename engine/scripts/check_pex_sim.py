@@ -32,8 +32,7 @@ Ground is checked before the bench runs. A reference subckt that reaches
 ngspice's global ground (a node `0`, or its alias `gnd`) without a port for
 it needs the extracted netlist to carry a node of that name too - magic
 names a net `0` when the layout puts a non-pin text label "0" on it (a
-drawing-layer label such as metal1 34/0, as corpus/ade/r2r_dac's generator
-does; a pin-layer label would make it a port and change the pin set).
+drawing-layer label such as metal1 34/0; a pin-layer label would make it a port and change the pin set).
 Without one, the layout's ground is a local net of magic's own naming and
 the bench runs with it floating. The gate never guesses which extracted net
 is ground - a substrate net and a ground wire both carry magic-made names,
@@ -157,7 +156,7 @@ def ground_finding(ref_text: str, ref_pins: list[str], extracted_text: str,
         "net of magic's own naming, so the bench would run with it "
         "floating. Fix in layout/gen_<block>.py (the layout-fixer): put a "
         "non-pin text label \"0\" on the ground net's drawing layer (e.g. "
-        "metal1 34/0, as corpus/ade/r2r_dac/layout/gen_r2r_dac.py does), "
+        "metal1 34/0), "
         "not on a pin/label layer, which would add a port and change the "
         "pin set", "magic")
 

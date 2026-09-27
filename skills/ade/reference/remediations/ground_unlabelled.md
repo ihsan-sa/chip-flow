@@ -11,9 +11,9 @@ no bench. Routes to `layout` (the layout-fixer).
 the ground net, on the metal's drawing layer (metal1 is
 `layoutlib.GF180_LAYER["metal1"]`, 34/0), passed in `finalize()`'s labels
 list after the pins. Magic then names the net `0` without making it a
-port. `corpus/ade/r2r_dac/layout/gen_r2r_dac.py` does exactly this, and
-its `labels.sort` puts a non-pin label last
-(`PINS.index(l[0]) if l[0] in PINS else 99`).
+port. If the generator sorts its labels into pin order, keep the non-pin
+label last (e.g. `PINS.index(l[0]) if l[0] in PINS else 99`). Don't open a
+corpus rung's own `layout/` for this: that is the rung's answer key.
 
 **Trap:** never put the `0` label on a pin/label layer
 (`metal1_label`, 34/10): that makes it a port, the pin set no longer
