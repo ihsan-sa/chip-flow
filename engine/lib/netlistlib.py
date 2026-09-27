@@ -115,6 +115,128 @@ def parse_devices(netlist_text: str) -> list[dict]:
     return out
 
 
+# Every SPICE element letter, as the name bench_strength's coverage report
+# uses for it. parse_devices() above only reads `x` lines; parse_elements()
+# below reads every element line, so a device no mutation class covers is
+# named in the report instead of silently left out of the tally.
+ELEMENT_KINDS = {
+    "x": "subckt_instance", "b": "behavioural_source", "e": "vcvs",
+    "g": "vccs", "f": "cccs", "h": "ccvs", "r": "resistor",
+    "c": "capacitor", "l": "inductor", "k": "coupling", "m": "mosfet",
+    "d": "diode", "q": "bjt", "j": "jfet", "z": "mesfet", "v": "vsource",
+    "i": "isource", "s": "switch", "w": "switch", "t": "tline",
+    "o": "tline", "u": "tline", "y": "tline", "a": "xspice", "n": "osdi",
+    "p": "tline"}
+
+
+def parse_elements(netlist_text: str) -> list[dict]:
+    """[{ref, kind, line}] for EVERY element line in netlist_text, in file
+    order - `x` instances and every other element letter (ELEMENT_KINDS;
+    an unknown letter reads as kind "unknown"). Dot-cards, comments, `+`
+    continuations and anything between `.control` and `.endc` are not
+    elements. `ref` lowercases only the element letter, as parse_devices
+    does."""
+    out = []
+    in_control = False
+    for lineno, raw in enumerate(netlist_text.splitlines(), 1):
+        line = strip_comment(raw).strip()
+        if not line:
+            continue
+        low = line.lower()
+        if low.startswith(".control"):
+            in_control = True
+            continue
+        if low.startswith(".endc"):
+            in_control = False
+            continue
+        if in_control or line[0] in ".+$;":
+            continue
+        tok = line.split()[0]
+        ref = tok[0].lower() + tok[1:]
+        out.append({"ref": ref,
+                    "kind": ELEMENT_KINDS.get(ref[0], "unknown"),
+                    "line": lineno})
+    return out
+
+
+BSOURCE_RE = re.compile(r"^\s*([bB]\S*)\s+(\S+)\s+(\S+)\s+([vViI])\s*=\s*(.*?)\s*$")
+
+
+def _split_expression(rest: str) -> tuple[str, str, str, str] | None:
+    """(open, expr, close, trailing) for a B source's right-hand side: a
+    '...' or {...} expression, or one bare token followed only by k=v
+    params. None when the expression's extent cannot be told for sure (a
+    bare expression with spaces, an unclosed quote or brace)."""
+    if rest.startswith("'"):
+        end = rest.find("'", 1)
+        if end < 0:
+            return None
+        return "'", rest[1:end], "'", rest[end + 1:].strip()
+    if rest.startswith("{"):
+        depth = 0
+        for i, ch in enumerate(rest):
+            depth += ch == "{"
+            depth -= ch == "}"
+            if depth == 0:
+                return "{", rest[1:i], "}", rest[i + 1:].strip()
+        return None
+    parts = rest.split()
+    if not parts or not all("=" in t for t in parts[1:]):
+        return None
+    return "", parts[0], "", " ".join(parts[1:])
+
+
+def parse_bsources(netlist_text: str) -> dict[str, dict]:
+    """{ref.lower(): {ref, p, n, quantity: v|i, open, expr, close,
+    trailing, line, unmutable}} for every `b<ref> n+ n- v=EXPR` /
+    `i=EXPR` behavioural source in netlist_text. `unmutable` is None when
+    the line can be mutated soundly on its own, else the reason it
+    cannot: the expression runs onto a `+` continuation line, or its
+    extent cannot be told for sure."""
+    lines = netlist_text.splitlines()
+    out = {}
+    for idx, raw in enumerate(lines):
+        line = strip_comment(raw)
+        if not line.strip() or line.lstrip()[0] not in "bB":
+            continue
+        ref0 = line.split()[0]
+        ref = "b" + ref0[1:]
+        nxt = next((ln for ln in lines[idx + 1:]
+                    if strip_comment(ln).strip()), "")
+        m = BSOURCE_RE.match(line)
+        split = _split_expression(m.group(5)) if m else None
+        entry = {"ref": ref, "line": idx + 1, "unmutable": None}
+        if nxt.lstrip().startswith("+"):
+            entry["unmutable"] = ("its expression continues onto a '+' "
+                                  "line - join it onto one line")
+        elif m is None:
+            entry["unmutable"] = ("not the `b<ref> n+ n- v=EXPR` / "
+                                  "`i=EXPR` form")
+        elif split is None:
+            entry["unmutable"] = ("the expression's extent is ambiguous - "
+                                  "wrap it in '...' or {...}")
+        else:
+            entry.update(p=m.group(2), n=m.group(3),
+                         quantity=m.group(4).lower(), open=split[0],
+                         expr=split[1], close=split[2], trailing=split[3])
+        out[ref.lower()] = entry
+    return out
+
+
+def unmutable_reason(element: dict, netlist_text: str) -> str:
+    """Why device_mutants() generated nothing for this parse_elements()
+    entry (a declared device it could not mutate)."""
+    kind = element["kind"]
+    if kind == "behavioural_source":
+        src = parse_bsources(netlist_text).get(element["ref"].lower())
+        if src and src["unmutable"]:
+            return src["unmutable"]
+    if kind == "subckt_instance":
+        return ("no w/l or r_width/r_length, no nfet/pfet model to flip and "
+                "fewer than two nodes to disconnect")
+    return f"no mutation class covers a {kind} element"
+
+
 def subckt_pins(netlist_text: str) -> dict[str, list[str]]:
     """{subckt_name.lower(): [pin, ...]} for every `.subckt NAME p1 p2 ...`
     THIS netlist file itself declares - used to exclude a subckt's own
@@ -190,9 +312,15 @@ def device_mutants(netlist_text: str, device_refs: list[str],
     size_doubled/connection_removed (a device's own W or a terminal, from
     netlist_text's `x...` lines), type_flipped (an nfet<->pfet swap at the
     same voltage rating, netlist_text), bias_halved (a plain `i`/`v` source
-    declared in bench_text, e.g. a mirror's reference current)."""
+    declared in bench_text, e.g. a mirror's reference current). A
+    behavioural `b...` source in netlist_text gets two: output_stuck (its
+    expression replaced by 0) and gain_halved (its expression times 0.5,
+    kept inside the line's own '...' or {...}); one parse_bsources() marks
+    unmutable gets none. Any other declared ref gets none either - the
+    caller names it (parse_elements, unmutable_reason)."""
     devices = {d["ref"]: d for d in parse_devices(netlist_text)}
     sources = parse_sources(bench_text) if bench_text else {}
+    bsources = parse_bsources(netlist_text)
     mutants: list[dict] = []
     for ref in device_refs:
         dev = devices.get(ref)
@@ -208,6 +336,12 @@ def device_mutants(netlist_text: str, device_refs: list[str],
             flip = _flip_target(model)
             if flip:
                 mutants.append(_retype_mutant(ref, dev, flip))
+            continue
+        bsrc = bsources.get(ref.lower())
+        if bsrc is not None:
+            if bsrc["unmutable"] is None:
+                mutants.append(_bstuck_mutant(ref, bsrc))
+                mutants.append(_bgain_mutant(ref, bsrc))
             continue
         src = sources.get(ref.lower())
         if src is not None:
@@ -299,3 +433,27 @@ def _bias_mutant(ref: str, src: dict) -> dict:
     return {"id": f"{ref}_bias_halved", "ref": ref, "kind": "bias_halved",
            "target": "bench", "describe": f"{ref}: bias halved",
            "apply": apply}
+
+
+def _bsource_line(src: dict, expr: str) -> str:
+    rhs = f"{src['open']}{expr}{src['close']}"
+    tail = f" {src['trailing']}" if src["trailing"] else ""
+    return f"{src['ref']} {src['p']} {src['n']} {src['quantity']}={rhs}{tail}"
+
+
+def _bstuck_mutant(ref: str, src: dict) -> dict:
+    def apply(text: str) -> str:
+        new_line = _bsource_line(dict(src, open="", close=""), "0")
+        return _replace_line(text, src["line"], new_line)
+    return {"id": f"{ref}_output_stuck", "ref": ref, "kind": "output_stuck",
+            "target": "netlist",
+            "describe": f"{ref}: output stuck at 0", "apply": apply}
+
+
+def _bgain_mutant(ref: str, src: dict) -> dict:
+    def apply(text: str) -> str:
+        new_line = _bsource_line(src, f"({src['expr']})*0.5")
+        return _replace_line(text, src["line"], new_line)
+    return {"id": f"{ref}_gain_halved", "ref": ref, "kind": "gain_halved",
+            "target": "netlist",
+            "describe": f"{ref}: expression gain halved", "apply": apply}

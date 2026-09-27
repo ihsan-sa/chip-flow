@@ -20,6 +20,26 @@ killed, bar the per-mutant rulings below. A SURVIVOR (a mutant no bench
 catches) is the fault this gate exists to name: "bounds wide enough to
 pass anything".
 
+A declared behavioural `b...` source in netlist/*.cir gets its own two
+mutants (netlistlib.device_mutants): output_stuck (its expression replaced
+by 0) and gain_halved (its expression times 0.5). Coverage is reported
+over every device, not only the mutated ones: `devices_total` counts each
+element of the netlist (netlistlib.parse_elements - every element letter,
+so B/E/G/F/H sources, primitives and non-PDK `x` instances too) plus each
+declared ref outside it, `devices_mutated` the ones at least one mutant
+ran for, and `unmutated` lists the rest as [{device, kind, reason}]. A
+device in that list never enters `total_mutants`, `killed` or `survived`,
+because no mutant of it ran. A DECLARED device in it (spec.yaml `devices`
+names it, but no mutation class covers it: an E/G/F/H source, a B source
+whose expression runs onto a `+` line or has no clear extent, a bench
+source that is not a plain numeric `i`/`v`, a ref found nowhere) is an
+error, `device_not_mutated`: the spec made it accountable and the gate
+could not test it, so the gate fails. An UNDECLARED netlist element is a
+warning, `device_undeclared`: spec.yaml `devices` is the owner's
+accountable set (a block may leave a device out with a written reason, as
+bandgap's startup network is), so it does not fail the gate, but it is
+named so a kill tally never reads as covering the whole netlist.
+
 A bench's bounds must equal the spec's (speclib, bench_bound_value_mismatch),
 so a mutant that moves a measure a long way but stays inside the spec would
 otherwise be a survivor no bench-writer could legally kill. A bound in
@@ -328,6 +348,42 @@ def check_below_spread(ruling: dict, mutant: dict, tt_measures: set[str],
                          "a real effect a bench must catch, not spread")
 
 
+def coverage_gaps(netlist_text: str, declared: list,
+                  mutants) -> list[dict]:
+    """[{device, kind, reason, declared}] for every device no mutant was
+    generated for: each netlist element (netlistlib.parse_elements - every
+    element letter, not only `x` lines) and each declared ref that is in
+    neither the netlist nor, as a mutable source, any bench. None of them
+    is ever in the killed tally, because no mutant of theirs ran."""
+    mutated = {str(m["ref"]).lower() for m in mutants}
+    want = {str(r).lower() for r in declared}
+    out: list[dict] = []
+    seen: set[str] = set()
+    for el in netlistlib.parse_elements(netlist_text):
+        ref = el["ref"].lower()
+        if ref in seen:
+            continue
+        seen.add(ref)
+        if ref in mutated:
+            continue
+        if ref in want:
+            reason = netlistlib.unmutable_reason(el, netlist_text)
+        else:
+            reason = "not in spec.yaml devices"
+        out.append({"device": el["ref"], "kind": el["kind"],
+                    "reason": reason, "declared": ref in want})
+    for r in declared:
+        ref = str(r).lower()
+        if ref in seen or ref in mutated:
+            continue
+        seen.add(ref)
+        out.append({"device": str(r), "kind": "unknown", "declared": True,
+                    "reason": "neither an element of the netlist nor a "
+                    "plain `i`/`v` source with a numeric value in any tb/ "
+                    "bench"})
+    return out
+
+
 def run(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--workspace", required=True, help="block workspace")
@@ -418,10 +474,16 @@ def run(argv=None):
             entry["benches_tested"].append(bench_path.name)
             entry["measures"][bench_path.name] = outcome.get("measures") or {}
 
+    unmutated = coverage_gaps(netlist_text, devices, by_id.values())
     if not by_id:
         raise CheckError(
             "no device mutants were generated - check spec.yaml 'devices' "
-            "against the netlist's own x-line refdes and tb/'s bias sources")
+            "against the netlist's own x-line refdes and tb/'s bias sources"
+            " (unmutated: " + ", ".join(
+                f"{u['device']} ({u['reason']})" for u in unmutated) + ")")
+    elements = netlistlib.parse_elements(netlist_text)
+    devices_total = len({e["ref"].lower() for e in elements}
+                        | {str(r).lower() for r in devices})
 
     total = len(by_id)
     survivors = [m for m in by_id.values() if not m["killed"]]
@@ -483,6 +545,23 @@ def run(argv=None):
                 "bounds - the bench cannot tell this design apart from a "
                 "faulty one", "netlistlib"))
 
+    for u in unmutated:
+        if u["declared"]:
+            violations.append(checklib.violation(
+                "bench_strength", "error", None, None, "device_not_mutated",
+                [u["device"]],
+                f"{u['device']} ({u['kind']}) is in spec.yaml devices but no "
+                f"mutant was generated for it: {u['reason']} - it is not in "
+                "the killed tally, and the gate cannot vouch for the bench "
+                "on it", "netlistlib"))
+        else:
+            violations.append(checklib.violation(
+                "bench_strength", "warning", None, None, "device_undeclared",
+                [u["device"]],
+                f"{u['device']} ({u['kind']}) is in the netlist but not in "
+                "spec.yaml devices, so it was never mutated - the kill "
+                "tally does not cover it", "netlistlib"))
+
     def fact(m: dict) -> dict:
         f = {"kind": m["kind"], "killed": m["killed"],
              "describe": m["describe"]}
@@ -496,6 +575,10 @@ def run(argv=None):
         SCRIPT, ws / "netlist", violations, top=spec.get("top"),
         total_mutants=total, killed=total - len(survivors),
         survived=len(survivors),
+        devices_total=devices_total,
+        devices_mutated=devices_total - len(unmutated),
+        unmutated=[{k: u[k] for k in ("device", "kind", "reason")}
+                   for u in unmutated],
         killed_by_sensitivity=sum(1 for m in by_id.values()
                                   if "sensitivity_kill" in m),
         equivalent=len(equivalent), below_spread=len(below),

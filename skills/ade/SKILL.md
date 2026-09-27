@@ -119,7 +119,7 @@ P6 -> done and never visits P7/P8.
 | netlist_lint | P4 | every device a gf180mcu_fd_pr model, no floating node, every declared device instantiated, a clean ngspice dry run | netlist/, tb/ |
 | sim_tt | P4 | every `.measure` inside its bound at typical | netlist/, tb/, sizing |
 | sim_pvt | P4 | every measure inside its bound at every corner (the default five, never fewer, or the spec's own PVT grid) | netlist/, tb/, sizing |
-| bench_strength | P4 | every device mutant (size doubled, connection removed, type flipped, bias halved) pushes a measure out | netlist/, tb/, spec devices |
+| bench_strength | P4 | every device mutant (size doubled, connection removed, type flipped, bias halved; a B source's output stuck and gain halved) pushes a measure out; a declared device no mutant covers fails it, an undeclared one is a warning, and `devices_mutated` of `devices_total` says how much ran | netlist/, tb/, spec devices |
 | mc | P4 | Monte Carlo yield >= `mc.yield_min`, only when `mc.enabled: true` | netlist/, tb/, spec mc |
 | drc | P5 | 0 findings from klayout's GF180 signoff deck (magic DRC is not run) | layout/gen_<block>.py |
 | lvs | P5 | netgen: the generated layout matches `netlist/<block>.cir` at its sizing | layout/, netlist/, sizing |
@@ -256,9 +256,10 @@ layout-fixer read `netlist/` and `sizing/` and edit only `layout/`.
 
 - **`mc` not applicable is never recorded.** A spec with no
   `mc.enabled: true` (every corpus rung) makes `check_mc.py` answer
-  `applicable: false`, which `gate.py` cannot record (the result is keyed
-  on spec.yaml, the gate's inputs are netlist/ and tb/), and `gate.py
-  --commit` still titles its commit "mc pass". `set-phase` and `release`
+  `applicable: false`, and `gate.py` answers `status: not_applicable`
+  (exit 0): it records nothing (a result keyed on netlist/ and tb/ would
+  stay fresh after the spec turned MC on) and `--commit` commits nothing,
+  since the message titles a pass. `set-phase` and `release`
   both re-ask the spec and skip mc when it asks for none, so no `--force`
   is needed; a spec that turns MC on makes mc owed again. Never force past
   any other name in a `set-phase` refusal - it is a real gap.
