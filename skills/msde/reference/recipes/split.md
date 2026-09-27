@@ -11,6 +11,10 @@ crosses between the two sides.
   entry missing one rather than compare nothing with nothing.
 - `digital_spec.yaml` and `analog_spec.yaml` - each an `interface:` list
   with the same entries, plus whatever that side's own spec needs.
+- On a Tiny Tapeout analog tile, `interface.yaml`'s `ua_pins:
+  {<pin>: <k>}` maps every analog pad to `ua[k]`, and `analog_spec.yaml`'s
+  `pads:` lists the same pins. A pad is never in `signals:`: top_harden
+  and precheck route pads only from `ua_pins` (`corpus/msde/dac_tile/`).
 - `digital/brief/spec.md` and `analog/brief/spec.md` - the brief each
   nested run starts from, naming its side's crossing signals exactly as
   `interface.yaml` does.
@@ -20,7 +24,10 @@ crosses between the two sides.
 ## The gate
 
 `split` fails on any `signal_missing_from_spec`, `signal_not_declared` or
-`<field>_mismatch` finding. The fix is always to make the three files
+`<field>_mismatch` finding, on `pad_in_signals` (a signal that is a
+`ua_pins` key, an analog `pads` entry or named `ua...`) and on
+`pad_missing_from_ua_pins` (an analog `pads` entry `ua_pins` does not
+map). The fix is always to make the three files
 agree, and the question is which one is wrong: `interface.yaml` is the
 authority unless the brief says otherwise.
 

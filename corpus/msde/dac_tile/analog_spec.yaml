@@ -4,6 +4,9 @@
 # spec.yaml `interface:` section (engine/scripts/check_split.py's own
 # docstring).
 top: dac_tile_analog
+# Analog pins that leave the chip on a ua pad - never crossing signals.
+# `split` checks each is mapped in interface.yaml's ua_pins.
+pads: [vout]
 interface:
   - name: bmsb
     direction: d2a
