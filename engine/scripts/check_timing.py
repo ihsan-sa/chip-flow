@@ -34,6 +34,7 @@ Failure classification (the same three-way split check_harden.py uses):
 from __future__ import annotations
 
 import argparse
+import math
 import re
 import subprocess
 import sys
@@ -51,7 +52,11 @@ from checklib import CheckError  # noqa: E402
 SCRIPT = "check_timing"
 EDA_BIN = REPO / "bin" / "eda"
 TIMEOUT_S = 120.0
-SLACK_RE = re.compile(r"worst slack (max|min)\s+(-?[0-9.]+(?:e-?[0-9]+)?)")
+# OpenSTA prints "worst slack max INF" when no clock reaches any path (the
+# SDC's clock is on a port the design never uses as one): a parseable
+# result, but an unconstrained one - run() turns it into a finding.
+SLACK_RE = re.compile(
+    r"worst slack (max|min)\s+(-?(?:[0-9.]+(?:e-?[0-9]+)?|INF))\b")
 # OpenSTA 3.1.0's `report_check_types -violators` prints a bare section
 # header ("max slew", "max capacitance", "max fanout"), a column header and
 # a dashed rule, then one row per violating pin ending "(VIOLATED)" - never

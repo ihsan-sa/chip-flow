@@ -613,7 +613,8 @@ HARDEN_OVERRIDE_NAME = "config.override.json"
 _TEMPLATE_LOCK_MARKER = "DO NOT CHANGE ANYTHING BELOW THIS POINT"
 # Keys the engine sets itself in harden_config(). CLOCK_PERIOD is the
 # spec's (clock.period_ns) - relaxing it here would pass timing by moving
-# the goalposts; CLOCK_PORT is fixed by the generated wrapper.
+# the goalposts; CLOCK_PORT is the spec's too (clock_port(): clock.domains
+# through tt_pins), so an override cannot point STA at the wrong pin.
 _ENGINE_OWNED_KEYS = frozenset({
     "DESIGN_NAME", "VERILOG_FILES", "DIE_AREA", "FP_DEF_TEMPLATE", "VDD_PIN",
     "GND_PIN", "RT_MAX_LAYER", "PDK_ROOT", "TIMING_VIOLATION_CORNERS",
@@ -675,9 +676,10 @@ def load_harden_override(path: Path) -> dict:
             "(tile/PDK keys, the design's own file list, the template's "
             "DO-NOT-CHANGE block, and CLOCK_PERIOD - the clock target is "
             "spec.yaml's clock.period_ns and is not relaxed through the "
-            "harden config). Remove those keys; a timing fix goes through "
-            "resizer/placement keys or the RTL, a period change through "
-            "spec_edit.")
+            "harden config - and CLOCK_PORT, which is spec.yaml's "
+            "clock.domains mapped through tt_pins). Remove those keys; a "
+            "timing fix goes through resizer/placement keys or the RTL, a "
+            "period or clock-pin change through spec_edit.")
     return data
 
 
@@ -700,12 +702,47 @@ SIGNOFF_REPAIR_CONFIG = {
 }
 
 
+_CLOCK_IN_BASES = {"clk", "ui_in", "uio_in"}
+
+
+def clock_port(spec: dict) -> str | None:
+    """The wrapper's top-level port that carries the spec's clock, for
+    LibreLane's CLOCK_PORT: spec.yaml's single `clock.domains` entry mapped
+    through `tt_pins` - `clk` for a block clocked by the tile's clk pin,
+    `ui_in[0]` for one clocked by a spare input bit (an msde divider fed by
+    a ring oscillator). An inverting `~` map still enters on that pin.
+    None when the spec names no domain, or its domain has no tt_pins entry
+    (a clock a hard macro drives): the template's `clk` then stands, and a
+    design it leaves unclocked shows up as the timing gate's
+    clock_unconstrained finding. TTError on more than one domain (LibreLane's
+    base SDC constrains one clock) or on a mapping that is not one input
+    bit."""
+    domains = (spec.get("clock") or {}).get("domains") or []
+    if not isinstance(domains, list) or not domains:
+        return None
+    if len(domains) > 1:
+        raise TTError(f"clock.domains {domains} names more than one clock; "
+                      "harden constrains exactly one clock port - keep the "
+                      "one the block's flops run on")
+    expr = (spec.get("tt_pins") or {}).get(domains[0])
+    if expr is None:
+        return None
+    pin = parse_pin_expr(expr)
+    if pin["base"] not in _CLOCK_IN_BASES or pin["hi"] != pin["lo"]:
+        raise TTError(f"clock domain {domains[0]!r} maps to tt_pins {expr!r}; "
+                      "a clock must map to clk or one ui_in/uio_in bit")
+    if pin["hi"] is None:
+        return pin["base"]
+    return f"{pin['base']}[{pin['hi']}]"
+
+
 def harden_config(spec: dict, rtl_files: list[Path], wrapper_path: Path,
                   pdk_root: Path, tiles: str | None = None,
                   override: dict | None = None) -> dict:
     """The merged LibreLane config.json: the vendored template's own
     defaults, overlaid with this design's DESIGN_NAME/VERILOG_FILES/
-    DIE_AREA/FP_DEF_TEMPLATE/clock (docs/design.md 1.5's harden row) and the
+    DIE_AREA/FP_DEF_TEMPLATE/clock (period and clock_port()'s CLOCK_PORT,
+    docs/design.md 1.5's harden row) and the
     vendored tech.py's gf180mcuD-specific keys (LIB_SYNTH, STA_CORNERS,
     ...) - the same three layers project.py's own create_user_config()/
     golden_harden() apply, read from the files this module vendors rather
@@ -752,6 +789,9 @@ def harden_config(spec: dict, rtl_files: list[Path], wrapper_path: Path,
     })
     if isinstance(period, (int, float)):
         config["CLOCK_PERIOD"] = float(period)
+    port = clock_port(spec)
+    if port is not None:
+        config["CLOCK_PORT"] = port
     config.update(tech.librelane_config)
     config.update(SIGNOFF_REPAIR_CONFIG)
     macros = spec.get("macros") or []
