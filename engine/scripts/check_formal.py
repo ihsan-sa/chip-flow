@@ -26,6 +26,21 @@ back to native. Under slang a property's sby id is its hierarchical name
 else the one id whose last dotted component it is (two is refused as
 ambiguous). The report carries `frontend` and `frontend_why`.
 
+Clocks. Without sby's `multiclock on`, every flop ticks on every solver
+step whatever its clock does, so a design with more than one clock, a
+negedge flop or an async reset/latch is modelled wrongly: two input clocks
+tied by an `assume` (a prescaler, a divider) make the assumptions
+unsatisfiable, and an engine that does not check that then passes every
+assert vacuously. The same probe dumps every flop, latch and clocked
+check of the flattened model (clocking) and needs_multiclock turns
+`multiclock on` for every task when it finds two or more clock signals, a
+negative-edge one, or an async reset/load/latch cell. spec.yaml's
+`formal: {multiclock: true}` forces it on; `multiclock: false` on a design
+that needs it is refused. Under multiclock a clock is a free input and a
+solver step is one clock EDGE, not a cycle, so `depth`/`cover_depth` count
+edges (about twice the cycles). The report carries `multiclock` and
+`multiclock_why`.
+
 spec.yaml names which wrapper module to prep (`formal: {top}`, default
 `<top>_formal`), how deep to look, and which requirements that wrapper must
 prove (`check: formal|both` requirements each carry a `property:` label
@@ -67,6 +82,10 @@ Three sby TASKS, same model; smt and pdr at `depth`, cov at `cover_depth`:
        <skipped> there instead). An unreached cover is an error
        cover_not_reached naming the depth and telling the fixer to raise
        formal.cover_depth, never the prove depth.
+       The same task also covers every ASSERT (`chformal -assert2cover`,
+       which keeps the assert's own id): a cover that is not reached means
+       no trace within `cover_depth` ever enables that assert - see
+       vacuous below.
 
 Per-property (ASSERT-kind) verdict, applied per `property:` label:
   proven   smt task's own testcase has no <failure> AND smt's basecase AND
@@ -86,6 +105,11 @@ Per-property (ASSERT-kind) verdict, applied per `property:` label:
            for a safety property, so a PDR counterexample the k-induction
            run did not also find is treated as a real failure, not
            dismissed).
+  vacuous  smt/pdr passed it (proven or bounded), but the cov task never
+           reached it as a cover: no trace within `cover_depth` enables the
+           assert (an `assume` or a gate condition rules out every state it
+           checks, or the assumptions contradict each other). An error
+           vacuous_pass - a vacuous pass never reads as a pass.
 
 Refuses (CheckError, never a pass) rather than reports a finding when: no
 requirement in spec.yaml has check: formal|both (an empty property set -
@@ -95,7 +119,9 @@ a `property:` label spec.yaml names is not found as an ASSERT testcase in
 sby's own model (the id sby echoes back, not a text search - a rename, or
 under slang an immediate assert outside a named block, leaves the id
 missing); a label that matches two ids; formal.depth missing or not a
-positive int, or cover_depth/timeout_s malformed (see Depth above); slang needed but unavailable or
+positive int, or cover_depth/timeout_s/multiclock malformed (see Depth
+above); `multiclock: false` on a design that needs it (see Clocks above);
+slang needed but unavailable or
 unable to read the design (see Frontend above); any sby task fails to reach a DONE line at all (a crashed
 launcher, a solver missing, a syntax error before the model even builds).
 """
@@ -138,6 +164,14 @@ LINE_COMMENT_RE = re.compile(r"//[^\n]*")
 SLANG_SO = "foss/tools/slang-yosys-plugin/slang.so"
 PROBE_MARK = "check_formal: property cells"
 PROPERTY_CELLS = "t:$check t:$assert t:$assume t:$cover t:$live t:$fair"
+CLOCK_MARK = "check_formal: clocked cells"
+# every storage cell proc can leave, plus clocked checks ($check's TRG)
+CLOCKED_CELLS = "t:$*dff* t:$*dlatch* t:$sr t:$check t:$memrd* t:$memwr*"
+# cells whose output changes off a clock edge - async2sync, which sby runs
+# without multiclock, turns them into something they are not
+ASYNC_CELLS = {"$adff", "$adffe", "$aldff", "$aldffe", "$dffsr", "$dffsre",
+               "$dlatch", "$adlatch", "$dlatchsr", "$sr"}
+CELL_RE = re.compile(r"(?m)^\s*cell (\$\S+) (\S+)$")
 
 
 def collect_sources(ws: Path, sub: str, exts=(".v", ".sv")) -> list[Path]:
@@ -256,20 +290,27 @@ def yosys_reads(frontend: str, sv_files: list[Path], rtl_files: list[Path],
 
 def write_sby(path: Path, sv_files: list[Path], rtl_files: list[Path],
              formal_top: str, mode: str, engine: str, depth: int,
-             frontend: str = "native", slang_so: Path | None = None) -> None:
+             frontend: str = "native", slang_so: Path | None = None,
+             multiclock: bool = False, vacuity: bool = False) -> None:
+    """One task's .sby. `multiclock` turns sby's multiclock mode on (see
+    Clocks above); `vacuity` turns every assert into a cover of itself
+    (the cov task's non-vacuity check, see vacuous above)."""
     files = "\n".join(str(f.resolve()) for f in (*sv_files, *rtl_files))
     reads = yosys_reads(frontend, sv_files, rtl_files, formal_top, slang_so)
+    prep = f"prep -top {formal_top}" + (
+        "\nchformal -assert2cover" if vacuity else "")
     path.write_text(f"""\
 [options]
 mode {mode}
 depth {depth}
+multiclock {"on" if multiclock else "off"}
 
 [engines]
 {engine}
 
 [script]
 {reads}
-prep -top {formal_top}
+{prep}
 
 [files]
 {files}
@@ -309,7 +350,8 @@ def probe(frontend: str, sv_files: list[Path], rtl_files: list[Path],
     script = (yosys_reads(frontend, sv_files, rtl_files, formal_top, slang_so)
               .replace("\n", "; ")
               + f"; hierarchy -top {formal_top}; proc; flatten; "
-              f"log {PROBE_MARK}; select -list {PROPERTY_CELLS}")
+              f"log {PROBE_MARK}; select -list {PROPERTY_CELLS}; "
+              f"opt_clean; log {CLOCK_MARK}; dump {CLOCKED_CELLS}")
     try:
         proc = subprocess.run([str(EDA_BIN), "yosys", "-p", script],
                               capture_output=True, text=True,
@@ -318,6 +360,73 @@ def probe(frontend: str, sv_files: list[Path], rtl_files: list[Path],
     except subprocess.TimeoutExpired as exc:
         raise CheckError(f"yosys ({frontend} probe) timed out: {exc}") from exc
     return (proc.stdout or "") + (proc.stderr or "")
+
+
+def clocking(log: str) -> dict | None:
+    """{"clocks": [signal, ...], "negedge": [cell, ...], "async": [cell
+    type, ...]} over the probe's dump of every flop, latch and clocked
+    check in the flattened model (opt_clean first, so one net has one
+    name), or None when the probe never reached the dump. Pure."""
+    if CLOCK_MARK not in log:
+        return None
+    text = log.split(CLOCK_MARK, 1)[1]
+    clocks, negedge, asyncs = set(), [], set()
+    starts = list(CELL_RE.finditer(text))
+    for i, m in enumerate(starts):
+        ctype, name = m.group(1), m.group(2)
+        body = text[m.end():starts[i + 1].start() if i + 1 < len(starts)
+                    else len(text)]
+        if ctype in ASYNC_CELLS:
+            asyncs.add(ctype)
+        port, pol = (("TRG", "TRG_POLARITY") if ctype == "$check"
+                     else ("CLK", "CLK_POLARITY"))
+        conn = re.search(rf"(?m)^\s*connect \\{port} (.+)$", body)
+        if ctype.startswith("$mem") and not re.search(
+                r"(?m)^\s*parameter \\CLK_ENABLE \d+'[01x]*1", body):
+            continue  # an asynchronous memory port has no clock
+        if conn is None or conn.group(1).strip() in ("{ }", "1'x"):
+            continue  # an unclocked check, or a cell with no clock port
+        clocks.add(conn.group(1).strip())
+        pm = re.search(rf"(?m)^\s*parameter \\{pol} \d+'([01x]+)$", body)
+        if pm and "0" in pm.group(1):
+            negedge.append(name)
+    return {"clocks": sorted(clocks), "negedge": sorted(negedge),
+            "async": sorted(asyncs)}
+
+
+def needs_multiclock(clk: dict | None, spec: dict) -> tuple[bool, str | None]:
+    """(multiclock on?, why). On when the design has two or more clock
+    signals, a negative-edge one or an async/latch cell (clocking), or
+    when spec.yaml says `formal: {multiclock: true}`. `multiclock: false`
+    on a design that needs it is refused, never obeyed. Pure."""
+    # brief: "multiclock when the design or spec needs it"
+    want = (spec.get("formal") or {}).get("multiclock")
+    if want is not None and not isinstance(want, bool):
+        raise CheckError(f"spec.yaml formal.multiclock is {want!r} - it "
+                         "must be true or false (or absent to let the gate "
+                         "decide from the design's clocks)")
+    if clk is None:
+        raise CheckError("the yosys probe never reached its dump of clocked "
+                         "cells, so the gate cannot tell whether the design "
+                         "needs sby's multiclock mode")
+    reasons = []
+    if len(clk["clocks"]) > 1:
+        reasons.append(f"{len(clk['clocks'])} clock signals "
+                       f"({', '.join(clk['clocks'])})")
+    if clk["negedge"]:
+        reasons.append(f"negative-edge cell(s) {', '.join(clk['negedge'][:3])}")
+    if clk["async"]:
+        reasons.append(f"async reset/latch cell(s) {', '.join(clk['async'])}")
+    why = "; ".join(reasons) or None
+    if why and want is False:
+        raise CheckError(
+            f"spec.yaml formal.multiclock is false but the design has {why}"
+            " - without multiclock every flop ticks on every solver step, "
+            "which is not this design; remove formal.multiclock or set it "
+            "true")
+    if want and not why:
+        return True, "spec.yaml formal.multiclock: true"
+    return bool(why), why
 
 
 def slang_plugin() -> Path | None:
@@ -333,8 +442,10 @@ def slang_plugin() -> Path | None:
 
 
 def pick_frontend(sv_files: list[Path], rtl_files: list[Path],
-                  formal_top: str) -> tuple[str, str | None, Path | None]:
-    """(frontend, why slang was needed or None, slang .so). Native unless
+                  formal_top: str
+                  ) -> tuple[str, str | None, Path | None, str]:
+    """(frontend, why slang was needed or None, slang .so, that frontend's
+    probe log - clocking reads it). Native unless
     it would be unsound: a hierarchical reference it leaves undriven, a
     `bind` it drops, or fewer properties in its flattened model than
     slang's (anything else it dropped). Slang needed but missing or unable
@@ -356,7 +467,7 @@ def pick_frontend(sv_files: list[Path], rtl_files: list[Path],
         why = (f"yosys's native frontend keeps {native_n} property cell(s) "
                f"where yosys-slang keeps {slang_n}")
     if why is None:
-        return "native", None, None
+        return "native", None, None, native_log
     if slang_so is None:
         raise CheckError(
             f"formal/*.sv uses {why}, which yosys's native frontend drops "
@@ -367,7 +478,7 @@ def pick_frontend(sv_files: list[Path], rtl_files: list[Path],
         raise CheckError(
             f"formal/*.sv uses {why}, so it must be read by yosys-slang, "
             f"and yosys-slang could not read it: {slang_log[-2000:]}")
-    return "slang", why, slang_so
+    return "slang", why, slang_so, slang_log
 
 
 def run_sby(sby_dir: Path, config: Path, workdir_name: str,
@@ -473,6 +584,28 @@ def classify_property(label: str, rid: str, smt_case: dict,
         f"induction={smt_sub['induction']!r}")
 
 
+def vacuity_verdict(label: str, rid: str, verdict: str, violation,
+                    cov_case: dict, cover_depth: int, cover_key: str):
+    """(verdict, violation) after the cov task's cover of this assert
+    (`chformal -assert2cover`). A proven or bounded assert whose cover was
+    never reached is "vacuous", an error: no trace enables it, so its pass
+    checked nothing. A failed one stays failed (its counterexample already
+    reached it). Pure."""
+    # brief: "a vacuous pass must not read as a pass" - cov_case["failed"]
+    # is the assert's cover NOT reached
+    if verdict == "failed" or not cov_case["failed"]:
+        return verdict, violation
+    return "vacuous", checklib.violation(
+        "formal", "error", None, None, "vacuous_pass", [rid],
+        f"requirement {rid} (property {label}): passed only vacuously - no "
+        f"trace within {cover_depth} steps (spec.yaml formal.{cover_key}) "
+        "ever enables this assert, so it checked nothing; an assume or the "
+        "assert's own condition rules out every state it guards (with "
+        "several clocks, check formal.multiclock is on). Fix the "
+        "assumptions, or raise formal.cover_depth if the state is reachable "
+        "only later", "sby-smtbmc", depth=cover_depth)
+
+
 def wrong_kind_labels(props: dict[str, str],
                       smt_cases: dict[str, dict]) -> list[str]:
     """`property:` labels among `props` whose sby-model testcase is not an
@@ -554,8 +687,9 @@ def run(argv=None):
 
     sv_files = collect_sources(ws, "formal", (".sv", ".v"))
     rtl_files = collect_sources(ws, "rtl")
-    frontend, frontend_why, slang_so = pick_frontend(
+    frontend, frontend_why, slang_so, probe_log = pick_frontend(
         sv_files, rtl_files, formal_top)
+    multiclock, multiclock_why = needs_multiclock(clocking(probe_log), spec)
 
     sby_dir = ws / SBY_SUBDIR
     sby_dir.mkdir(parents=True, exist_ok=True)
@@ -575,7 +709,8 @@ def run(argv=None):
         config = sby_dir / f"{name}.sby"
         cover = mode == "cover"
         write_sby(config, sv_files, rtl_files, formal_top, mode, engine,
-                  cover_depth if cover else depth, frontend, slang_so)
+                  cover_depth if cover else depth, frontend, slang_so,
+                  multiclock=multiclock, vacuity=cover)
         output, workdir = run_sby(
             sby_dir, config, name,
             settings["cover_timeout_s" if cover else "prove_timeout_s"])
@@ -646,18 +781,26 @@ def run(argv=None):
             "check: formal|both must point at an assert's own Verilog "
             "label, never a cover's")
 
-    violations = []
-    proven, bounded, failed = [], [], []
-    for label, rid in sorted(props.items()):
-        verdict, violation = classify_property(
-            label, rid, smt_cases[label], smt_sub, pdr_status, depth)
-        {"proven": proven, "bounded": bounded, "failed": failed}[verdict].append(rid)
-        if violation is not None:
-            violations.append(violation)
-
     cov_cases = testcases["cov"]
     cover_key = ("cover_depth" if (spec.get("formal") or {}).get(
         "cover_depth") is not None else "depth")
+    violations = []
+    proven, bounded, failed, vacuous = [], [], [], []
+    for label, rid in sorted(props.items()):
+        verdict, violation = classify_property(
+            label, rid, smt_cases[label], smt_sub, pdr_status, depth)
+        cov_case = cov_cases.get(ids[label])
+        if cov_case is None:
+            raise CheckError(f"assert {ids[label]} appears in the smt model "
+                             "but not as a cover in the cover task's own "
+                             "model - its non-vacuity was never checked")
+        verdict, violation = vacuity_verdict(
+            label, rid, verdict, violation, cov_case, cover_depth, cover_key)
+        {"proven": proven, "bounded": bounded, "failed": failed,
+         "vacuous": vacuous}[verdict].append(rid)
+        if violation is not None:
+            violations.append(violation)
+
     covers = {pid: c for pid, c in testcases["smt"].items()
               if c["type"] == "COVER"}
     for pid in sorted(covers):
@@ -680,8 +823,10 @@ def run(argv=None):
     payload = checklib.report(
         SCRIPT, ws / "rtl", violations, top=top, formal_top=formal_top,
         depth=depth, cover_depth=cover_depth, frontend=frontend, frontend_why=frontend_why,
+        multiclock=multiclock, multiclock_why=multiclock_why,
         proven=sorted(proven), bounded=sorted(bounded),
-        failed=sorted(failed), smt_status=smt_status, pdr_status=pdr_status,
+        failed=sorted(failed), vacuous=sorted(vacuous),
+        smt_status=smt_status, pdr_status=pdr_status,
         cover_points=sorted(covers))
     return payload, args.out
 

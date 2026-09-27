@@ -406,7 +406,9 @@ def run_numeric(argv=None):
         # run would score - reusing sim_run.run_workspace_benches directly,
         # never a re-implementation of it.
         full_corner_list = corners_mod.spec_corners(
-            corners_mod.load(), spec.get("corners", "default"))
+            corners_mod.load(), spec.get("corners", "default"),
+            corners_mod.passive_devices(sim_run.find_netlist(ws).read_text(
+                encoding="utf-8", errors="replace")))
         full_corner = sim_run.run_workspace_benches(
             ws, eda_bin=eda_bin, corners=full_corner_list,
             timeout=args.timeout, check="sim_pvt")
