@@ -88,6 +88,23 @@ Digital (`/vde`):
 | precheck | tt-support-tools precheck, pinned | passes | a wrong top module name in info.yaml |
 | release | attest, strict | every applicable gate has a fresh recorded pass on the current inputs; waivers carry reason, approval and durability | an RTL edit after harden, which must refuse |
 
+**Declared async-reset cuts.** A flop cleared asynchronously by a combinational function of other
+registered signals (a self-resetting loop — e.g. a PFD's up/dn flops, each cleared by `AND(up, dn)`)
+is correct in sim but is a real combinational loop to sby's `multiclock on` prep step (`clk2fflogic`
+has nothing else to turn the async clear into): `formal` fails with "Found logic loop", never a
+silent pass. `formal.async_reset_cuts: [{signal, why}, ...]` in a block's `spec.yaml` names, per
+instance, which net's asynchronous reset is modelled instead as sampled one clock late — the gate
+inserts a one-bit register between the net and the reset it drives, in the formal model only, built
+from a flattened RTLIL copy of the design (never the RTL, and never reachable through the sby
+`[script]`, since sby's own multiclock prep runs after any script step could touch it). Nothing in
+the RTL changes; sim and holdout keep proving the real zero-delay behaviour, including the reset's
+own glitch width, which the cut cannot and does not prove — the gate JSON records the note that the
+property proof holds under a one-step reset delay, not the RTL's zero-delay glitch behaviour, next to
+the applied `async_reset_cuts` list, so a reader of the JSON sees exactly what was modelled away. A
+"Found logic loop" that does not match a declared cut is refused (exit 2) with a remediation naming
+`formal.async_reset_cuts` — an undeclared loop is never silently absorbed, and a declaration is never
+inferred from the loop itself.
+
 Analog (`/ade`):
 
 | gate | tool | passes when | planted fault it must catch |
