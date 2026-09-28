@@ -115,6 +115,37 @@ Per-property (ASSERT-kind) verdict, applied per `property:` label:
            checks, or the assumptions contradict each other). An error
            vacuous_pass - a vacuous pass never reads as a pass.
 
+Async self-reset loops. A tri-state PFD's classic `AND(up, dn)` async clear
+(both flops cleared the instant they are both set) is correct in sim and in
+holdout, but under `multiclock on` sby's own clk2fflogic turns it into a
+combinational loop - the clear depends combinationally on the very flops it
+clears - and the smt2 step refuses with "Found logic loop in module X"
+before any property is even attempted. Rewriting the RTL with an `` ifdef
+FORMAL `` to break that loop is not this gate's route (docs/design.md says
+why): the loop is cut in the FORMAL MODEL ONLY, never in rtl/ or
+formal/*.sv, and only when spec.yaml's `formal.async_reset_cuts` names the
+exact instance. Each entry is `{signal, why}` - `signal` the flop's own Q
+net, dotted the same way a hierarchical reference already is elsewhere in
+this file (`dut.up`), `why` the reason a human wrote down (async_reset_cuts,
+never inferred from the netlist). Before sby ever runs, build_cut_il preps
+and flattens the design once, then cut_async_reset_net text-edits the
+resulting RTLIL: a new one-bit `$dff` samples the flop's old ARST net on its
+own CLK, and the flop's ARST is repointed to that now-registered copy - a
+real net-level cut, computed and inspectable (`log/formal/cut.il`), not a
+synthesis directive. Every sby task then reads that .il directly instead of
+the source files. Only a plain async-reset flop (`$adff`/`$adffe`) is
+covered; a `signal` that resolves to another async cell ($dffsr, $dlatch,
+...) or to nothing at all is refused (async_reset_cut_signal), same as a
+loop nobody declared (see below). The report carries `async_reset_cuts`
+(the applied entries) and, when any were applied, `async_reset_cuts_note`:
+the proof this run reports as proven/bounded holds for the design's clock
+edges under a ONE-STEP-DELAYED version of the cut reset, not the RTL's own
+zero-delay async clear - it cannot show the glitch-width reset behaviour
+(both flops briefly both-set before the real, instant clear catches up),
+which stays sim's job, never formal's (docs/design.md says the same).
+Each applied cut is also an info finding (async_reset_cut_applied), so a
+pass resting on a cut never reads as an unqualified pass.
+
 Refuses (CheckError, never a pass) rather than reports a finding when: no
 requirement in spec.yaml has check: formal|both (an empty property set -
 docs/design.md section 2's own silent-failure concern, applied here: a
@@ -127,7 +158,11 @@ positive int (a missing one is the formal_depth_missing finding, not a
 refusal), or cover_depth/timeout_s/multiclock malformed (see Depth above); `multiclock: false` on a design that needs it (see Clocks above);
 slang needed but unavailable or
 unable to read the design (see Frontend above); any sby task fails to reach a DONE line at all (a crashed
-launcher, a solver missing, a syntax error before the model even builds).
+launcher, a solver missing, a syntax error before the model even builds);
+formal.async_reset_cuts is malformed, names a signal that is not a plain
+async-reset flop's Q, or a task's own log shows "Found logic loop" in a
+module and no cut was declared for it (async_reset_cut_signal /
+async_reset_loop_undeclared - see Async self-reset loops above).
 """
 from __future__ import annotations
 
@@ -176,6 +211,15 @@ CLOCKED_CELLS = "t:$*dff* t:$*dlatch* t:$sr t:$check t:$memrd* t:$memwr*"
 ASYNC_CELLS = {"$adff", "$adffe", "$aldff", "$aldffe", "$dffsr", "$dffsre",
                "$dlatch", "$adlatch", "$dlatchsr", "$sr"}
 CELL_RE = re.compile(r"(?m)^\s*cell (\$\S+) (\S+)$")
+# the only async-reset cell shapes cut_async_reset_net knows how to cut - a
+# plain CLK+ARST flop, nothing with a SET port, a latch, or an enable that
+# changes what ARST means (see cut_async_reset_net)
+ASYNC_CUT_CELL_TYPES = ("$adff", "$adffe")
+CUT_IL_NAME = "cut.il"
+LOGIC_LOOP_RE = re.compile(r"(?i)found logic loop in module (\S+?)[:!]")
+ASYNC_CUT_FIX = (" (spec.yaml formal.async_reset_cuts: [{signal, why}, ...] "
+                 "- see check_formal.py's own docstring, 'Async self-reset "
+                 "loops')")
 
 
 def collect_sources(ws: Path, sub: str, exts=(".v", ".sv")) -> list[Path]:
@@ -299,6 +343,170 @@ def formal_settings(spec: dict) -> dict:
             "cover_timeout_s": cover_timeout}
 
 
+def async_reset_cuts(spec: dict) -> list[dict]:
+    """[{signal, why}, ...] from spec.yaml formal.async_reset_cuts - the
+    declared, per-instance route for a self-resetting async-reset loop (see
+    this module's docstring, "Async self-reset loops"). `[]` when the key
+    is absent: this abstraction is opt-in, never inferred. Each `signal`
+    names the flop's own Q net, dotted the way a hierarchical reference
+    already is elsewhere in this gate (`dut.up`); each `why` is the human
+    reason it was declared - required and non-empty, so a cut can never be
+    silent. CheckError on anything malformed, including a signal declared
+    twice. Pure."""
+    cfg = spec.get("formal") or {}
+    cuts = cfg.get("async_reset_cuts")
+    if cuts is None:
+        return []
+    if not isinstance(cuts, list):
+        raise CheckError("spec.yaml formal.async_reset_cuts must be a list "
+                         "of {signal, why} entries" + ASYNC_CUT_FIX)
+    out: list[dict] = []
+    seen: set[str] = set()
+    for i, entry in enumerate(cuts):
+        where = f"spec.yaml formal.async_reset_cuts[{i}]"
+        if not isinstance(entry, dict):
+            raise CheckError(f"{where} must be a mapping" + ASYNC_CUT_FIX)
+        unknown = set(entry) - {"signal", "why"}
+        if unknown:
+            raise CheckError(f"{where}: unknown field(s) "
+                             f"{', '.join(sorted(unknown))}" + ASYNC_CUT_FIX)
+        signal, why = entry.get("signal"), entry.get("why")
+        if not isinstance(signal, str) or not signal.strip():
+            raise CheckError(f"{where}: 'signal' must be a non-empty "
+                             "hierarchical net name - the async-reset "
+                             "flop's own Q (e.g. `dut.up`)" + ASYNC_CUT_FIX)
+        if not isinstance(why, str) or not why.strip():
+            raise CheckError(f"{where}: 'why' must be a non-empty string - "
+                             "the cut is declared per instance, never "
+                             "inferred from the netlist" + ASYNC_CUT_FIX)
+        if signal in seen:
+            raise CheckError(f"{where}: signal {signal!r} is listed twice"
+                             + ASYNC_CUT_FIX)
+        seen.add(signal)
+        out.append({"signal": signal, "why": why})
+    return out
+
+
+CELL_BLOCK_START_RE = re.compile(r"^(\s*)cell (\$\S+) (\S+)$")
+
+
+def cut_async_reset_net(text: str, signal: str) -> tuple[str, str]:
+    """(edited RTLIL text, cut cell's type) after text-editing one
+    already-`prep -top`'d-and-`flatten`'d module's RTLIL (see build_cut_il)
+    so the flop whose own Q is `signal` no longer feeds its ARST port
+    combinationally: a new one-bit $dff samples the flop's old ARST net on
+    the flop's own CLK (same CLK_POLARITY), and the flop's own ARST
+    connection is repointed to that now-registered copy - a real net-level
+    edit, never a synthesis directive. Only $adff/$adffe (a plain
+    CLK+ARST reset flop) is covered (ASYNC_CUT_CELL_TYPES); `signal` naming
+    a different async cell ($dffsr, $dlatch, ...) or no cell's Q at all is a
+    CheckError, same wording either way - this route does not (yet) know
+    how to cut it, or the RTL was renamed since spec.yaml was written.
+    Pure (no I/O, no yosys) so the edit itself is testable without sby."""
+    lines = text.split("\n")
+    q_line = f"connect \\Q \\{signal}"
+    other_type: str | None = None
+    i, n = 0, len(lines)
+    while i < n:
+        m = CELL_BLOCK_START_RE.match(lines[i])
+        if not m:
+            i += 1
+            continue
+        j = i + 1
+        while lines[j].strip() != "end":
+            j += 1
+        block = lines[i:j + 1]
+        if any(bl.strip() == q_line for bl in block):
+            ctype = m.group(2)
+            if ctype not in ASYNC_CUT_CELL_TYPES:
+                other_type = ctype
+                break
+            indent = m.group(1)
+            clk = arst = clk_pol = None
+            for bl in block:
+                bs = bl.strip()
+                if bs.startswith("connect \\CLK "):
+                    clk = bs.split(" ", 2)[2]
+                elif bs.startswith("connect \\ARST "):
+                    arst = bs.split(" ", 2)[2]
+                elif bs.startswith("parameter \\CLK_POLARITY "):
+                    clk_pol = bs.split(" ", 2)[2]
+            if clk is None or arst is None or clk_pol is None:
+                raise CheckError(
+                    f"formal.async_reset_cuts names {signal!r}: its "
+                    f"{ctype} cell has no CLK/ARST/CLK_POLARITY this gate "
+                    "can read - not a plain async-reset flop"
+                    + ASYNC_CUT_FIX)
+            cut_wire = f"\\{signal}$async_cut"
+            new_block = []
+            for ln in block:
+                if ln.strip() == f"connect \\ARST {arst}":
+                    body_indent = ln[:len(ln) - len(ln.lstrip())]
+                    new_block.append(f"{body_indent}connect \\ARST {cut_wire}")
+                else:
+                    new_block.append(ln)
+            cut_cell = [
+                f"{indent}wire {cut_wire}",
+                f"{indent}cell $dff \\{signal}$async_cut_reg",
+                f"{indent}  parameter \\WIDTH 1",
+                f"{indent}  parameter \\CLK_POLARITY {clk_pol}",
+                f"{indent}  connect \\CLK {clk}",
+                f"{indent}  connect \\D {arst}",
+                f"{indent}  connect \\Q {cut_wire}",
+                f"{indent}end",
+            ]
+            edited = lines[:i] + cut_cell + new_block + lines[j + 1:]
+            return "\n".join(edited), ctype
+        i = j + 1
+    if other_type is not None:
+        raise CheckError(
+            f"formal.async_reset_cuts names {signal!r}, but it is a "
+            f"{other_type} cell's Q, not $adff/$adffe - this route only "
+            "cuts a plain async-reset flop" + ASYNC_CUT_FIX)
+    raise CheckError(
+        f"formal.async_reset_cuts names {signal!r}, which is not any "
+        "cell's own Q in the flattened formal model - check the flop's net "
+        "name (dotted the way a hierarchical reference is elsewhere in "
+        "this gate, e.g. `dut.up`) and that it still exists"
+        + ASYNC_CUT_FIX)
+
+
+def build_cut_il(sby_dir: Path, frontend: str, sv_files: list[Path],
+                 rtl_files: list[Path], formal_top: str,
+                 slang_so: Path | None, cuts: list[dict]) -> tuple[Path, list[dict]]:
+    """Prep and flatten the design once (own yosys run, before sby ever
+    sees it), apply every declared cut (cut_async_reset_net) in spec.yaml
+    order, and write the result to sby_dir/CUT_IL_NAME. Returns (that path,
+    [{signal, why, cell_type}, ...] - the applied abstraction, for the gate
+    JSON). `flatten` only runs on this path (never for a design with no
+    declared cuts): cut_async_reset_net needs the flop's Q as one flat net
+    name, the same dotted convention a hierarchical reference already uses
+    in this gate."""
+    reads = yosys_reads(frontend, sv_files, rtl_files, formal_top, slang_so)
+    raw_path = sby_dir / "precut.il"
+    script = (reads.replace("\n", "; ")
+              + f"; prep -top {formal_top}; flatten; write_rtlil {raw_path}")
+    try:
+        proc = subprocess.run([str(EDA_BIN), "yosys", "-p", script],
+                              capture_output=True, text=True,
+                              encoding="utf-8", errors="replace",
+                              timeout=PROBE_TIMEOUT_S)
+    except subprocess.TimeoutExpired as exc:
+        raise CheckError(f"yosys (async_reset_cuts prep) timed out: {exc}") from exc
+    if proc.returncode != 0 or not raw_path.is_file():
+        raise CheckError(
+            "yosys could not prep the design to apply formal."
+            f"async_reset_cuts: {(proc.stdout + proc.stderr)[-2000:]}")
+    text = raw_path.read_text(encoding="utf-8")
+    applied = []
+    for cut in cuts:
+        text, ctype = cut_async_reset_net(text, cut["signal"])
+        applied.append({**cut, "cell_type": ctype})
+    cut_path = sby_dir / CUT_IL_NAME
+    cut_path.write_text(text, encoding="utf-8")
+    return cut_path, applied
+
+
 def yosys_reads(frontend: str, sv_files: list[Path], rtl_files: list[Path],
                 formal_top: str, slang_so: Path | None) -> str:
     """The yosys commands that read the design for `frontend` - "native"
@@ -316,14 +524,23 @@ def yosys_reads(frontend: str, sv_files: list[Path], rtl_files: list[Path],
 def write_sby(path: Path, sv_files: list[Path], rtl_files: list[Path],
              formal_top: str, mode: str, engine: str, depth: int,
              frontend: str = "native", slang_so: Path | None = None,
-             multiclock: bool = False, vacuity: bool = False) -> None:
+             multiclock: bool = False, vacuity: bool = False,
+             cut_il: Path | None = None) -> None:
     """One task's .sby. `multiclock` turns sby's multiclock mode on (see
     Clocks above); `vacuity` turns every assert into a cover of itself
-    (the cov task's non-vacuity check, see vacuous above)."""
+    (the cov task's non-vacuity check, see vacuous above). `cut_il`
+    (build_cut_il's output) reads that already-prepped, already-cut RTLIL
+    directly instead of the source files and skips `prep` (it was already
+    prepped, and flattened, to make the cut) - the declared
+    formal.async_reset_cuts route."""
     files = "\n".join(str(f.resolve()) for f in (*sv_files, *rtl_files))
-    reads = yosys_reads(frontend, sv_files, rtl_files, formal_top, slang_so)
-    prep = f"prep -top {formal_top}" + (
-        "\nchformal -assert2cover" if vacuity else "")
+    if cut_il is not None:
+        reads = f"read_rtlil {cut_il.resolve()}"
+        prep = "chformal -assert2cover" if vacuity else ""
+    else:
+        reads = yosys_reads(frontend, sv_files, rtl_files, formal_top, slang_so)
+        prep = f"prep -top {formal_top}" + (
+            "\nchformal -assert2cover" if vacuity else "")
     path.write_text(f"""\
 [options]
 mode {mode}
@@ -731,6 +948,13 @@ def run(argv=None):
             import shutil
             shutil.rmtree(stale)
 
+    cuts = async_reset_cuts(spec)
+    cut_il = applied_cuts = None
+    if cuts:
+        cut_il, applied_cuts = build_cut_il(
+            sby_dir, frontend, sv_files, rtl_files, formal_top, slang_so,
+            cuts)
+
     tasks = {
         "smt": ("prove", "smtbmc yices"),
         "pdr": ("prove", "abc pdr"),
@@ -743,7 +967,7 @@ def run(argv=None):
         cover = mode == "cover"
         write_sby(config, sv_files, rtl_files, formal_top, mode, engine,
                   cover_depth if cover else depth, frontend, slang_so,
-                  multiclock=multiclock, vacuity=cover)
+                  multiclock=multiclock, vacuity=cover, cut_il=cut_il)
         output, workdir = run_sby(
             sby_dir, config, name,
             settings["cover_timeout_s" if cover else "prove_timeout_s"])
@@ -753,6 +977,15 @@ def run(argv=None):
         # unusable model) is refused here too, before any per-property
         # classification gets a chance to fold it into bounded/proven.
         if done_status(output) == "ERROR":
+            loop = LOGIC_LOOP_RE.search(output)
+            if loop is not None:
+                raise CheckError(
+                    f"sby ({name} task) reached DONE (ERROR): a "
+                    f"combinational loop in module {loop.group(1)} "
+                    "(clk2fflogic under multiclock turned a self-resetting "
+                    "async loop into one) - either it is a real bug, or "
+                    "declare the cut per instance in spec.yaml "
+                    "formal.async_reset_cuts" + ASYNC_CUT_FIX)
             raise CheckError(
                 f"sby ({name} task) reached DONE (ERROR): "
                 f"{output[-2000:]}")
@@ -853,6 +1086,26 @@ def run(argv=None):
                 "sby-smtbmc",
                 depth=cover_depth))
 
+    async_note = (
+        "smt/pdr's proven/bounded verdicts above hold for the design's "
+        "clock edges under a ONE-STEP-DELAYED version of each cut reset "
+        "(formal.async_reset_cuts), not the RTL's own zero-delay async "
+        "clear; the glitch-width reset behaviour (both flops briefly "
+        "both-set before the real, instant clear catches up) is not "
+        "covered here - that stays sim's job"
+    ) if applied_cuts else None
+    # "a declared abstraction must never read as an unqualified pass": each
+    # applied cut is also an info finding, so a pass that rests on one always
+    # carries it in the findings list, not only in a side field.
+    for cut in applied_cuts or []:
+        violations.append(checklib.violation(
+            "formal", "info", None, None, "async_reset_cut_applied", [],
+            f"formal model cuts the async reset of {cut['signal']} "
+            f"({cut['cell_type']}) with a one-step register "
+            f"(spec.yaml formal.async_reset_cuts, why: {cut['why']}): "
+            "every verdict here holds under that one-step reset delay, "
+            "not the RTL's zero-delay clear - glitch-width reset behaviour "
+            "stays with sim", "check_formal", signal=cut["signal"]))
     payload = checklib.report(
         SCRIPT, ws / "rtl", violations, top=top, formal_top=formal_top,
         depth=depth, cover_depth=cover_depth, frontend=frontend, frontend_why=frontend_why,
@@ -860,7 +1113,9 @@ def run(argv=None):
         proven=sorted(proven), bounded=sorted(bounded),
         failed=sorted(failed), vacuous=sorted(vacuous),
         smt_status=smt_status, pdr_status=pdr_status,
-        cover_points=sorted(covers))
+        cover_points=sorted(covers),
+        async_reset_cuts=applied_cuts or [],
+        async_reset_cuts_note=async_note)
     return payload, args.out
 
 
