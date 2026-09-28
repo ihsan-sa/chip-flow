@@ -143,6 +143,8 @@ edges under a ONE-STEP-DELAYED version of the cut reset, not the RTL's own
 zero-delay async clear - it cannot show the glitch-width reset behaviour
 (both flops briefly both-set before the real, instant clear catches up),
 which stays sim's job, never formal's (docs/design.md says the same).
+Each applied cut is also an info finding (async_reset_cut_applied), so a
+pass resting on a cut never reads as an unqualified pass.
 
 Refuses (CheckError, never a pass) rather than reports a finding when: no
 requirement in spec.yaml has check: formal|both (an empty property set -
@@ -1092,6 +1094,18 @@ def run(argv=None):
         "both-set before the real, instant clear catches up) is not "
         "covered here - that stays sim's job"
     ) if applied_cuts else None
+    # "a declared abstraction must never read as an unqualified pass": each
+    # applied cut is also an info finding, so a pass that rests on one always
+    # carries it in the findings list, not only in a side field.
+    for cut in applied_cuts or []:
+        violations.append(checklib.violation(
+            "formal", "info", None, None, "async_reset_cut_applied", [],
+            f"formal model cuts the async reset of {cut['signal']} "
+            f"({cut['cell_type']}) with a one-step register "
+            f"(spec.yaml formal.async_reset_cuts, why: {cut['why']}): "
+            "every verdict here holds under that one-step reset delay, "
+            "not the RTL's zero-delay clear - glitch-width reset behaviour "
+            "stays with sim", "check_formal", signal=cut["signal"]))
     payload = checklib.report(
         SCRIPT, ws / "rtl", violations, top=top, formal_top=formal_top,
         depth=depth, cover_depth=cover_depth, frontend=frontend, frontend_why=frontend_why,

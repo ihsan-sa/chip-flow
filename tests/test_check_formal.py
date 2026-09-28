@@ -1055,5 +1055,11 @@ def test_pfd_loop_proves_with_the_declared_cut(tmp_path, capsys):
     assert {c["signal"] for c in out["async_reset_cuts"]} == {"dut.up", "dut.dn"}
     assert all(c["cell_type"] == "$adff" for c in out["async_reset_cuts"])
     assert "one-step-delayed" in out["async_reset_cuts_note"].lower()
+    # the abstraction shows as a finding per cut, never an unqualified pass
+    applied = [v for v in out["violations"]
+               if v["kind"] == "async_reset_cut_applied"]
+    assert {v["signal"] for v in applied} == {"dut.up", "dut.dn"}
+    assert all(v["severity"] == "info" and "one-step" in v["msg"]
+               for v in applied)
     gate_result = gate.evaluate("formal", _formal_gate_row(), out)
     assert gate_result["status"] == "pass", gate_result

@@ -100,7 +100,8 @@ from a flattened RTLIL copy of the design (never the RTL, and never reachable th
 the RTL changes; sim and holdout keep proving the real zero-delay behaviour, including the reset's
 own glitch width, which the cut cannot and does not prove — the gate JSON records the note that the
 property proof holds under a one-step reset delay, not the RTL's zero-delay glitch behaviour, next to
-the applied `async_reset_cuts` list, so a reader of the JSON sees exactly what was modelled away. A
+the applied `async_reset_cuts` list, and each cut is also an info finding (`async_reset_cut_applied`),
+so a pass resting on a cut never reads as an unqualified pass. A
 "Found logic loop" that does not match a declared cut is refused (exit 2) with a remediation naming
 `formal.async_reset_cuts` — an undeclared loop is never silently absorbed, and a declaration is never
 inferred from the loop itself.
