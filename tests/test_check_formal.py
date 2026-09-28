@@ -860,3 +860,200 @@ def test_vacuity_verdict_turns_an_unreached_pass_into_an_error():
     failed = check_formal.vacuity_verdict(
         "L", "R", "failed", {"kind": "property_failed"}, miss, 20, "depth")
     assert failed == ("failed", {"kind": "property_failed"})
+
+
+# --- async_reset_cuts (docs/design.md's "Async self-reset loops" route:
+# ece298a's tri-state PFD, module pll_pfd, clears both flops asynchronously
+# from AND(up, dn) - correct in sim, but clk2fflogic under multiclock turns
+# that into a combinational loop sby's smt2 step refuses to model at all) ---
+
+def test_async_reset_cuts_absent_is_empty():
+    assert check_formal.async_reset_cuts({}) == []
+    assert check_formal.async_reset_cuts({"formal": {"depth": 4}}) == []
+
+
+def test_async_reset_cuts_reads_declared_entries():
+    cuts = check_formal.async_reset_cuts({"formal": {"async_reset_cuts": [
+        {"signal": "dut.up", "why": "PFD AND(up,dn) self-clear"},
+    ]}})
+    assert cuts == [{"signal": "dut.up", "why": "PFD AND(up,dn) self-clear"}]
+
+
+@pytest.mark.parametrize("cuts, needle", [
+    ("not a list", "must be a list"),
+    ([1], "must be a mapping"),
+    ([{"signal": "dut.up", "why": "x", "extra": 1}], "unknown field"),
+    ([{"why": "x"}], "'signal' must be"),
+    ([{"signal": ""}], "'signal' must be"),
+    ([{"signal": "dut.up", "why": ""}], "'why' must be"),
+    ([{"signal": "dut.up", "why": "a"},
+      {"signal": "dut.up", "why": "b"}], "listed twice"),
+])
+def test_async_reset_cuts_refuses_malformed_entries(cuts, needle):
+    with pytest.raises(check_formal.CheckError, match=needle):
+        check_formal.async_reset_cuts({"formal": {"async_reset_cuts": cuts}})
+
+
+def test_logic_loop_re_matches_sbys_own_wording():
+    m = check_formal.LOGIC_LOOP_RE.search(
+        "smt2: ERROR: Found logic loop in module pll_pfd! See cell ...")
+    assert m and m.group(1) == "pll_pfd"
+
+
+# A tiny, hand-built RTLIL fixture standing in for a real yosys `prep -top
+# X; flatten` of a two-flop async-clear PFD (built and inspected once
+# against a real toolchain run - see progress.md - and frozen here so the
+# text-edit itself is testable without sby/yosys).
+CUT_FIXTURE_IL = """\
+module \\pfd_formal
+  wire \\dut.clk
+  wire \\dut.up
+  wire \\dut.dn
+  wire \\dut.rst_comb
+  cell $and $and$rst_comb
+    connect \\Y \\dut.rst_comb
+    connect \\A \\dut.up
+    connect \\B \\dut.dn
+  end
+  cell $adff \\dut.$procdff$up
+    parameter \\WIDTH 1
+    parameter \\CLK_POLARITY 1'1
+    parameter \\ARST_VALUE 1'0
+    parameter \\ARST_POLARITY 1'1
+    connect \\Q \\dut.up
+    connect \\D \\dut.up_next
+    connect \\CLK \\dut.clk
+    connect \\ARST \\dut.rst_comb
+  end
+  cell $dlatch \\dut.$latch$weird
+    connect \\Q \\dut.dn
+    connect \\EN \\dut.clk
+    connect \\D \\dut.rst_comb
+  end
+end
+"""
+
+
+def test_cut_async_reset_net_repoints_arst_through_a_new_registered_wire():
+    edited, ctype = check_formal.cut_async_reset_net(CUT_FIXTURE_IL, "dut.up")
+    assert ctype == "$adff"
+    assert "connect \\ARST \\dut.up$async_cut" in edited
+    assert "cell $dff \\dut.up$async_cut_reg" in edited
+    assert "connect \\D \\dut.rst_comb" in edited  # the new dff samples the old net
+    # the original combinational net is untouched elsewhere (still drives
+    # whatever else read it before the cut, just no longer ARST directly)
+    assert "connect \\Y \\dut.rst_comb" in edited
+
+
+def test_cut_async_reset_net_refuses_an_unknown_signal():
+    with pytest.raises(check_formal.CheckError, match="not any cell's own Q"):
+        check_formal.cut_async_reset_net(CUT_FIXTURE_IL, "dut.nope")
+
+
+def test_cut_async_reset_net_refuses_a_non_adff_cell():
+    # dut.dn is a $dlatch's own Q here - not this route's job (ASYNC_CELLS
+    # already covers latches/dffsr for the multiclock probe; this route
+    # only ever cuts a plain CLK+ARST flop)
+    with pytest.raises(check_formal.CheckError, match=r"\$dlatch.*not \$adff"):
+        check_formal.cut_async_reset_net(CUT_FIXTURE_IL, "dut.dn")
+
+
+# --- real toolchain: a small PFD that reproduces ece298a's own bug ---
+
+PFD_RTL = """\
+module pfd(input wire clk, input wire ref_i, input wire fb_i,
+          output reg up, output reg dn);
+  wire rst_comb = up & dn;
+  always @(posedge clk or posedge rst_comb)
+    if (rst_comb) up <= 1'b0;
+    else if (ref_i) up <= 1'b1;
+  always @(posedge clk or posedge rst_comb)
+    if (rst_comb) dn <= 1'b0;
+    else if (fb_i) dn <= 1'b1;
+endmodule
+"""
+
+# a property that holds under a one-step-delayed reset (once up and dn are
+# both set, the cut clears them the very next cycle - see progress.md for
+# why this shape, not a same-cycle "never both" one) but says nothing about
+# the RTL's own zero-delay glitch width, which is sim's job, never formal's
+PFD_FORMAL_SV = """\
+module pfd_formal (input wire clk, input wire ref_i, input wire fb_i);
+  wire up, dn;
+  pfd dut (.clk(clk), .ref_i(ref_i), .fb_i(fb_i), .up(up), .dn(dn));
+`ifdef FORMAL
+  reg past_valid = 0;
+  always @(posedge clk) past_valid <= 1;
+  always @(posedge clk)
+    if (past_valid)
+      CLEARS_NEXT_CYCLE: assert (!($past(up) && $past(dn)) || (!up && !dn));
+`endif
+endmodule
+"""
+
+PFD_SPEC_TMPL = """\
+top: pfd
+requirements:
+  - id: REQ-PFD-RESET
+    text: once up and dn are both set, the cut clears them the next cycle
+    check: formal
+    property: CLEARS_NEXT_CYCLE
+formal:
+  depth: 12
+  multiclock: true
+{cuts}
+"""
+
+
+def make_pfd_ws(tmp_path: Path, declare_cut: bool) -> Path:
+    ws = tmp_path / "pfd_ws"
+    (ws / "rtl").mkdir(parents=True)
+    (ws / "spec").mkdir(parents=True)
+    (ws / "formal").mkdir(parents=True)
+    (ws / "rtl" / "pfd.v").write_text(PFD_RTL, encoding="utf-8")
+    (ws / "formal" / "pfd_formal.sv").write_text(PFD_FORMAL_SV, encoding="utf-8")
+    cuts = (
+        "  async_reset_cuts:\n"
+        "    - signal: dut.up\n"
+        "      why: \"tri-state PFD AND(up,dn) self-clear - ece298a "
+        "track/pll pll_pfd, see docs/design.md\"\n"
+        "    - signal: dut.dn\n"
+        "      why: \"same self-clear, the dn flop\"\n"
+    ) if declare_cut else ""
+    (ws / "spec" / "spec.yaml").write_text(
+        PFD_SPEC_TMPL.format(cuts=cuts), encoding="utf-8")
+    return ws
+
+
+@pytest.mark.slow
+def test_pfd_loop_fails_without_the_declared_cut(tmp_path, capsys):
+    ws = make_pfd_ws(tmp_path, declare_cut=False)
+    code = check_formal.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 2, out
+    assert "combinational loop" in out["error"].lower()
+    assert "async_reset_cuts" in out["remediation"]
+
+
+@pytest.mark.slow
+def test_pfd_loop_proves_with_the_declared_cut(tmp_path, capsys):
+    ws = make_pfd_ws(tmp_path, declare_cut=True)
+    code = check_formal.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    # the loop is gone (no DONE (ERROR), no CheckError) and abc pdr - a
+    # second, non-k-induction algorithm - proves the property outright;
+    # smtbmc's own k-induction here only reaches "bounded" (this toy
+    # fixture's $past-gated property isn't k-inductive at any small k, a
+    # known k-induction limitation, not a defect in the cut itself - see
+    # progress.md), which this gate already documents as its own passing
+    # outcome, never a failure (bounded_not_proven is severity "info").
+    assert code == 1, out  # findings (the info-severity bounded_not_proven), not an error
+    assert out["failed"] == [] and out["vacuous"] == []
+    assert out["bounded"] == ["REQ-PFD-RESET"] or out["proven"] == ["REQ-PFD-RESET"]
+    assert out["pdr_status"] == "PASS"
+    assert len(out["async_reset_cuts"]) == 2
+    assert {c["signal"] for c in out["async_reset_cuts"]} == {"dut.up", "dut.dn"}
+    assert all(c["cell_type"] == "$adff" for c in out["async_reset_cuts"])
+    assert "one-step-delayed" in out["async_reset_cuts_note"].lower()
+    gate_result = gate.evaluate("formal", _formal_gate_row(), out)
+    assert gate_result["status"] == "pass", gate_result
