@@ -24,7 +24,11 @@ ASCII.
 from __future__ import annotations
 
 import json
+import os
+import signal
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 
@@ -164,3 +168,72 @@ def cli_wrap(script: str, fn) -> int:
                           "remediation": str(exc)}))
         return 2
     return emit(payload, out)
+
+
+# A tool that forks its own workers (mcy -> mutate_runner.py -> vvp, sby ->
+# solvers) outlives a plain subprocess.run(timeout=): the timeout kills the
+# one child it started, and a caller that dies kills nothing. Nine mutate
+# sims once ran for two days that way, reparented to init, after their
+# pytest runs were gone. bin/eda exec()s every tool through the image's
+# ld.so, so the "wrapper" is the tool's own process and passes signals on
+# fine; what was missing is killing the whole tree. run_group() puts the
+# tool in a process group of its own and SIGKILLs that group when the call
+# ends for any reason: exit, timeout, an exception (KeyboardInterrupt too),
+# and - through a /bin/sh watchdog holding the read end of a pipe only this
+# process writes - this process dying outright, SIGKILL included.
+_GUARD = 'read _ ; kill -KILL -"$0" 2>/dev/null'  # dash: no --
+
+
+def _kill_group(pgid: int) -> None:
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def run_group(cmd: list[str], timeout: float | None = None,
+              **popen_kw) -> subprocess.CompletedProcess:
+    """subprocess.run(cmd, timeout=timeout, **popen_kw) for a tool whose
+    children must not outlive the call: every process the tool starts dies
+    with it, on timeout (TimeoutExpired is raised as subprocess.run does),
+    on exit, and when this process is killed. popen_kw takes what Popen
+    does (cwd, capture_output, text, encoding, errors, env...)."""
+    if popen_kw.pop("capture_output", False):
+        popen_kw["stdout"] = popen_kw["stderr"] = subprocess.PIPE
+    proc = subprocess.Popen(cmd, start_new_session=True, **popen_kw)
+    # its own session too, so a terminal ^C cannot take the guard down
+    # before this process has cleaned up; a clean env, because the caller's
+    # may carry bin/eda's LD_PRELOAD, built for the image's libc, not /bin/sh's
+    guard = subprocess.Popen(["/bin/sh", "-c", _GUARD, str(proc.pid)],
+                             stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL, start_new_session=True,
+                             env={"PATH": "/usr/bin:/bin"})
+    deadline = None if timeout is None else time.monotonic() + timeout
+    try:
+        # communicate() alone would wait for EOF on the pipes, which a
+        # backgrounded straggler holds open after the tool itself has exited
+        while True:
+            left = None if deadline is None else deadline - time.monotonic()
+            try:
+                out, err = proc.communicate(
+                    timeout=0.5 if left is None else max(0.0, min(0.5, left)))
+                break
+            except subprocess.TimeoutExpired:
+                if proc.poll() is not None:
+                    _kill_group(proc.pid)
+                    out, err = proc.communicate()
+                    break
+                if left is not None and left <= 0:
+                    _kill_group(proc.pid)
+                    out, err = proc.communicate()
+                    raise subprocess.TimeoutExpired(cmd, timeout, out,
+                                                    err) from None
+    finally:
+        # the guard goes first, so it cannot fire later at a pgid reused
+        guard.kill()
+        guard.wait()
+        guard.stdin.close()
+        _kill_group(proc.pid)  # stragglers the leader left behind
+        if proc.returncode is None:
+            proc.wait()
+    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
