@@ -40,6 +40,18 @@ and tying the wrong one would pass a layout that is wired wrong - so a
 missing ground label is a `ground_unlabelled` finding for the layout
 generator, and no bench is run on that netlist.
 
+Probes are checked the same way, before the bench runs. A bench that reads
+a net inside the extracted cell (`v(xdut.s1)` in its .control block, where
+`xdut` instantiates the top cell) needs that net to keep its name through
+extraction, and magic keeps a name only where the layout puts a text label
+on the net. An unlabelled net comes back as `a_..#`, and ngspice then
+either warns that the vector is not available or refuses the whole run
+with an error that names no net. So a probed net that the reference
+netlist has and the extracted netlist does not is a `probe_unlabelled`
+finding for the layout generator, one per net, and no bench is run. A
+probe of a net the reference does not have either is a bench bug, not a
+layout one, and is left to ngspice to refuse.
+
 "the worst corner" (docs/design.md 1.5) is not run here - M9's own
 boundary is proving the extract-then-resim path on typical; the full
 corner sweep is `/ade`'s `sim_pvt`-style job, out of scope until the skill
@@ -161,6 +173,56 @@ def ground_finding(ref_text: str, ref_pins: list[str], extracted_text: str,
         "pin set", "magic")
 
 
+# a voltage probe in a .control block: v(), vdb(), vm(), vp(), vr(), vi()
+PROBE_RE = re.compile(r"\bv(?:db|m|p|r|i)?\(([^()]*)\)", re.IGNORECASE)
+
+
+def probed_nets(bench_text: str, topcell: str) -> set[str]:
+    """Every net (lowercased) the bench's .control block probes one level
+    inside an instance of `topcell` - `net` for `v(xdut.net)`. A top-level
+    node or a deeper path is not the extracted cell's own net name."""
+    lines = netlistlib.join_continuations(bench_text)
+    insts = set()
+    for line in lines:
+        tokens = [t for t in line.split() if "=" not in t]
+        if (len(tokens) > 1 and tokens[0][0] in "xX"
+                and tokens[-1].lower() == topcell.lower()):
+            insts.add(tokens[0].lower())
+    nets: set[str] = set()
+    in_control = False
+    for line in lines:
+        low = line.split()[0].lower()
+        if low.startswith(".control"):
+            in_control = True
+        elif low.startswith(".endc"):
+            in_control = False
+        elif in_control:
+            for m in PROBE_RE.finditer(line):
+                for arg in m.group(1).split(","):
+                    parts = arg.strip().lower().split(".")
+                    if len(parts) == 2 and parts[0] in insts and parts[1]:
+                        nets.add(parts[1])
+    return nets
+
+
+def probe_findings(bench_text: str, ref_text: str, extracted_text: str,
+                   topcell: str, rel_gds: str) -> list[dict]:
+    """A `probe_unlabelled` finding for each net the bench probes inside
+    the top cell that the reference has and the extraction does not."""
+    missing = ((probed_nets(bench_text, topcell) & element_nodes(ref_text))
+               - element_nodes(extracted_text))
+    return [checklib.violation(
+        "pex_sim", "error", rel_gds, topcell, "probe_unlabelled", [net],
+        f"the pex bench probes {topcell}'s net {net!r}, which the reference "
+        f"netlist has, but the extracted netlist has no node {net!r} - magic "
+        "keeps a net's name only where the layout labels it, so the bench "
+        "would read a vector that does not exist. Fix in "
+        "layout/gen_<block>.py (the layout-fixer): put a non-pin text label "
+        f"\"{net}\" on that net's drawing layer (e.g. metal1 34/0), not on "
+        "a pin/label layer, which would add a port and change the pin set",
+        "magic") for net in sorted(missing)]
+
+
 def run(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--workspace", required=True, help="block workspace")
@@ -199,20 +261,23 @@ def run(argv=None):
     extracted.write_text(reorder_pins(raw_text, topcell, ref_pins),
                          encoding="utf-8")
 
-    # a floating ground is not a bench worth running: the finding alone
-    ground = ground_finding(ref_text, ref_pins, raw_text, topcell,
-                            str(gds_path.relative_to(ws)))
-    if ground is not None:
+    pdk = layoutlib.pdk_root()
+    bench_text = bench_tpl.read_text(encoding="utf-8").format(
+        pdk=pdk, extracted=extracted.resolve())
+
+    # a floating ground or an unlabelled probe is not a bench worth running:
+    # the findings alone
+    rel_gds = str(gds_path.relative_to(ws))
+    ground = ground_finding(ref_text, ref_pins, raw_text, topcell, rel_gds)
+    unrun = ([ground] if ground is not None else []) + probe_findings(
+        bench_text, ref_text, raw_text, topcell, rel_gds)
+    if unrun:
         payload = checklib.report(
-            SCRIPT, ws / "layout", [ground], topcell=topcell,
-            gds=str(gds_path.relative_to(ws)),
+            SCRIPT, ws / "layout", unrun, topcell=topcell, gds=rel_gds,
             extracted=str(extracted.relative_to(ws)),
             parasitics=parasitics, measured={})
         return payload, args.out
 
-    pdk = layoutlib.pdk_root()
-    bench_text = bench_tpl.read_text(encoding="utf-8").format(
-        pdk=pdk, extracted=extracted.resolve())
     bench_path = work_dir / f"{block}_pex_tb.cir"
     layoutlib.fresh(bench_path)
     bench_path.write_text(bench_text, encoding="utf-8")
