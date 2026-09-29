@@ -19,6 +19,9 @@ per mutant) yosys-applies each mutation to the frozen design and runs the
 workspace's VISIBLE tb/ cocotb suite against it - PASS = survived, FAIL =
 killed. A mutant mcy tags `-mode none` is its own built-in do-nothing
 baseline (not a real mutation) and is excluded from every count here.
+Every mcy, sby and yosys run goes through checklib.run_group(), so a
+timeout, or this process being killed, takes the tool's whole process tree
+(mcy's sims included) down with it.
 
 Kill-rate classification (this script's own scheme - gates.yaml names three
 must-kill CLASSES but not a mechanism; nothing in mcy exposes a mutation's
@@ -196,7 +199,7 @@ print(f"mutants={{tags()}} killed={{tags('KILLED')}} survived={{tags('SURVIVED')
 
 def run_mcy(mcy_dir: Path, mcy_real: Path, nproc: int) -> None:
     def mcy(*args: str) -> subprocess.CompletedProcess:
-        return subprocess.run(
+        return checklib.run_group(
             [str(EDA_BIN), "python3", str(mcy_real), *args], cwd=str(mcy_dir),
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=INIT_TIMEOUT_S if args and args[0] == "init"
@@ -437,7 +440,7 @@ def prove_reachable(work: Path, timeout: float = PDR_TIMEOUT_S
     (pdr / "miter.sby").write_text(
         PDR_SBY.format(timeout=max(1, int(timeout) - 5)), encoding="utf-8")
     try:
-        proc = subprocess.run(
+        proc = checklib.run_group(
             [str(EDA_BIN), "sby", "-f", "miter.sby"], cwd=str(pdr),
             capture_output=True, text=True, encoding="utf-8",
             errors="replace", timeout=timeout)
@@ -485,7 +488,7 @@ def prove_signal_induction(design_il: Path, mutation: str, work: Path,
         top=top, design=design_il.resolve(), mutation=mutation, depth=EQUIV_DEPTH,
         timeout=int(timeout), base_held=BASE_HELD), encoding="utf-8")
     try:
-        proc = subprocess.run(
+        proc = checklib.run_group(
             [str(EDA_BIN), "yosys", "-q", "-l", "equiv.log", "-s", "equiv.ys"],
             cwd=str(sig), capture_output=True, text=True, encoding="utf-8",
             errors="replace", timeout=timeout)
@@ -588,7 +591,7 @@ def prove_whole(design_il: Path, mutation: str, work: Path,
         top=top, design=design_il.resolve(), mutation=mutation, depth=EQUIV_DEPTH,
         timeout=int(timeout), base_held=BASE_HELD), encoding="utf-8")
     try:
-        proc = subprocess.run(
+        proc = checklib.run_group(
             [str(EDA_BIN), "yosys", "-q", "-l", "equiv.log", "-s", "equiv.ys"],
             cwd=str(work), capture_output=True, text=True, encoding="utf-8",
             errors="replace", timeout=timeout)
