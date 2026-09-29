@@ -545,6 +545,26 @@ def compared_devices(setup: Path) -> set[str]:
     return {m.lower() for m in _SETUP_DEVICE_RE.findall(text)}
 
 
+def setup_spelling(text: str, setup: Path) -> str:
+    """text with every device model the PDK's netgen setup names respelt
+    the way the setup spells it. SPICE is case-blind, but the setup finds
+    a class with Tcl's case-exact lsearch, so a reference calling
+    cap_mim_2f0ff never meets its "equate classes cap_mim_2f0_m4m5_noshield
+    cap_mim_2f0fF" line nor its property rules, and a matching MIM cap
+    reads as a device mismatch. Comment lines are left as written."""
+    spelt = _SETUP_DEVICE_RE.findall(
+        setup.read_text(encoding="utf-8", errors="replace"))
+    if not spelt:
+        return text
+    word = re.compile(r"\b(" + "|".join(map(re.escape, spelt)) + r")\b",
+                      re.IGNORECASE)
+    canon = {name.lower(): name for name in spelt}
+    return "".join(
+        line if line.lstrip().startswith("*") else
+        word.sub(lambda m: canon[m.group(1).lower()], line)
+        for line in text.splitlines(keepends=True))
+
+
 def std_cell_subckts(netlist_text: str) -> tuple[str, list[str]]:
     """(the .SUBCKT text, their names) of every PDK standard cell
     netlist_text calls but does not define, with the cells those call in

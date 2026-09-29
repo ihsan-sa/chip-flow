@@ -30,6 +30,12 @@ it (layoutlib.std_cell_subckts) and netgen flattens the reference to the
 same level. Any cell netgen still has to black-box, other than the PDK
 device classes whose properties its setup compares, is a refusal.
 
+A device model the netlist spells in another case than the PDK's netgen
+setup (cap_mim_2f0ff for its cap_mim_2f0fF) is respelt in that copy too
+(layoutlib.setup_spelling): SPICE is case-blind but the setup's class
+lookups are not, so the MIM cap would never be equated with the extracted
+cap_mim_2f0_m4m5_noshield.
+
 A netgen result counts as PASS only on a final "Circuits match uniquely."
 with no property error anywhere in the log (layoutlib.run_netgen_lvs), so a
 device sized differently in the generator than in the netlist (gates.yaml's
@@ -153,7 +159,9 @@ def run(argv=None):
     if sizing:
         text, applied = sized_reference(ref_text, ref_cell, sizing)
     text, std_cells = with_std_cells(text)
-    if applied or std_cells:
+    spelt = layoutlib.setup_spelling(text, layoutlib.netgen_setup())
+    if applied or std_cells or spelt != text:
+        text = spelt
         ref_for_lvs = work_dir / f"{block}.lvs{ref_path.suffix}"
         ref_for_lvs.write_text(text, encoding="utf-8")
 

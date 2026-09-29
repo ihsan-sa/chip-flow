@@ -34,7 +34,7 @@ edited the run by hand (docs/design.md section 3). Harder rungs are higher up.
 | rung | counts | why not | held-out | kill rate | area | worst slack ns | fix attempts | tokens | cost USD | wall s | scored | note |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | sensor_counted | no | hand edits | n/a | - | - | - | 4 | - | 69.50 | 28795 | 2026-09-25 | all gates green on the merged engine; 2 hand edits are the mutant_rulings files carrying planning-seat per-mutant rulings; wall includes waits on rulings |
-| ring_osc_div | no | 6 gate(s) not green | n/a | - | - | - | 0 | - | - | 132 | 2026-09-27 | msde session run 2026-09-27; analog sim_pvt green once the owner's H1 MIM ruling went through the new scope-out route; parked at analog P4 because the phase advance was refused on the box (raised to iiks1) |
+| ring_osc_div | no | 6 gate(s) not green | n/a | - | - | - | 0 | - | - | 287354 | 2026-09-29 | msde session run 2026-09-29; analog P5 layout by the layout-writer, drc/lvs/pex_sim green; analog parked at H2 (H2-534a39) awaiting the owner, so the msde join and top gates wait on it; lvs needed the netgen-setup spelling fix |
 | dac_spi | not run | | | | | | | | | | | |
 | sar_adc | not run | | | | | | | | | | | |
 
