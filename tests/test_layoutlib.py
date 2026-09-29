@@ -514,3 +514,24 @@ def test_run_netgen_lvs_refuses_a_black_box_it_cannot_size(tmp_path, monkeypatch
     with pytest.raises(layoutlib.LayoutError, match="buf_20 as black boxes"):
         layoutlib.run_netgen_lvs(
             tmp_path, "a.spice", "a", "b.spice", "b", "out.log")
+
+
+def test_setup_spelling_respells_setup_devices_only(tmp_path):
+    # ring_osc_div's netlist called cap_mim_2f0ff; the PDK setup's
+    # case-exact lsearch for cap_mim_2f0fF missed it, so the equate with
+    # the extracted cap_mim_2f0_m4m5_noshield never ran and LVS failed.
+    setup = tmp_path / "setup.tcl"
+    setup.write_text("lappend devices cap_mim_2f0fF\n"
+                     "lappend devices ppolyf_u\n", encoding="utf-8")
+    text = ("* xc0 a b cap_mim_2f0ff is a comment\n"
+            "xc1 a b CAP_MIM_2F0FF c_width=1e-5\n"
+            "xr1 a b vss ppolyf_u r_width=1u\n"
+            "xc2 a b cap_mim_2f0ffx c_width=1e-5\n")
+    assert layoutlib.setup_spelling(text, setup) == (
+        "* xc0 a b cap_mim_2f0ff is a comment\n"
+        "xc1 a b cap_mim_2f0fF c_width=1e-5\n"
+        "xr1 a b vss ppolyf_u r_width=1u\n"
+        "xc2 a b cap_mim_2f0ffx c_width=1e-5\n")
+    empty = tmp_path / "empty.tcl"
+    empty.write_text("# no devices\n", encoding="utf-8")
+    assert layoutlib.setup_spelling(text, empty) == text

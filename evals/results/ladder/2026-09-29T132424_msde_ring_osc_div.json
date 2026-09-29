@@ -1,0 +1,36 @@
+{
+ "skill": "msde",
+ "rung": "ring_osc_div",
+ "block": "ring_osc_div",
+ "run": "ring_osc_div",
+ "phase": "P2",
+ "scored_at": "2026-09-29T17:24:24+00:00",
+ "counts": false,
+ "gates_green": false,
+ "gate_problems": [
+  "cosim: no recorded result",
+  "precheck: no recorded result",
+  "top_drc: no recorded result",
+  "top_harden: no recorded result",
+  "top_lvs: no recorded result",
+  "release: no recorded pass"
+ ],
+ "gates_passed": [
+  "split"
+ ],
+ "hand_edits": 0,
+ "held_out": {
+  "status": "n/a",
+  "why": "msde has no holdout gate"
+ },
+ "kill_rate": null,
+ "line_pct": null,
+ "area": null,
+ "worst_slack_ns": null,
+ "fix_attempts": 0,
+ "tokens": null,
+ "cost_usd": null,
+ "wall_s": 287354,
+ "note": "msde session run 2026-09-29; analog P5 layout by the layout-writer, drc/lvs/pex_sim green; analog parked at H2 (H2-534a39) awaiting the owner, so the msde join and top gates wait on it; lvs needed the netgen-setup spelling fix",
+ "kind": "skill"
+}
