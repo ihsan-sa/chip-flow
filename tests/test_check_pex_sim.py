@@ -255,6 +255,87 @@ def test_floating_ground_is_a_finding_and_no_bench_runs(unlaunchable_eda,
     assert out["measured"] == {}
 
 
+# ring_osc_div as #44 found it: the bench reads the stage nets inside the
+# extracted cell, and a stage net with no layout label came back a_..#
+RING_REF = (".subckt blk a b\nr1 a s1 1k\nr2 s1 s2 1k\nr3 s2 b 1k\n"
+            ".ends\n")
+RING_BENCH = ("* {pdk} {extracted}\nv1 in 0 dc 1\nxdut in 0 blk\n"
+              ".control\nop\nprint v(xdut.s1)\n"
+              "meas tran t1 when v(xdut.s2, in)=0.5\n+ rise=1\n"
+              "print vdb(in) v(xdut.xinv.q) v(xother.s9)\n.endc\n.end\n")
+
+
+def test_probed_nets_reads_one_level_inside_the_top_cell_only():
+    assert check_pex_sim.probed_nets(RING_BENCH, "blk") == {"s1", "s2"}
+
+
+def test_probe_finding_names_each_unlabelled_net():
+    ext = ".subckt blk a b\nR0 a s1 1k\nR1 s1 a_5_5# 1k\nR2 a_5_5# b 1k\n.ends\n"
+    found = check_pex_sim.probe_findings(RING_BENCH, RING_REF, ext, "blk",
+                                         "layout/blk.gds")
+    assert [(v["kind"], v["refs"]) for v in found] == [
+        ("probe_unlabelled", ["s2"])]
+    assert "label" in found[0]["msg"] and "layout-fixer" in found[0]["msg"]
+
+
+def test_probe_of_a_net_the_reference_lacks_is_no_finding():
+    # a bench typo is the bench's bug, not the layout's: ngspice refuses it
+    ext = ".subckt blk a b\nR0 a a_1_1# 1k\nR1 a_1_1# b 1k\n.ends\n"
+    bench = RING_BENCH.replace("xdut.s1", "xdut.s7").replace("xdut.s2", "xdut.s8")
+    assert check_pex_sim.probe_findings(bench, RING_REF, ext, "blk", "g") == []
+
+
+def _ring_ws(ws, monkeypatch, ext_text):
+    import layoutlib
+    (ws / "netlist" / "blk.cir").write_text(RING_REF, encoding="utf-8")
+    (ws / "layout_ref" / "blk_pex_tb.cir").write_text(
+        RING_BENCH, encoding="utf-8")
+
+    def extracted(work_dir, gds, cell, parasitics):
+        p = work_dir / f"{cell}.pex.spice"
+        p.write_text(ext_text, encoding="utf-8")
+        return p, ""
+
+    monkeypatch.setattr(layoutlib, "run_magic_extract", extracted)
+
+
+def test_unlabelled_probe_is_a_finding_and_no_bench_runs(unlaunchable_eda,
+                                                         tmp_path,
+                                                         monkeypatch):
+    import layoutlib
+    _ring_ws(unlaunchable_eda, monkeypatch,
+             ".subckt blk a b\nR0 a a_5_5# 1k\nR1 a_5_5# s2 1k\n"
+             "R2 s2 b 1k\nC0 a b 0.1f\n.ends\n")
+
+    def no_sim(*a, **k):
+        raise AssertionError("the bench ran with a probe that is not there")
+
+    monkeypatch.setattr(layoutlib, "run_eda", no_sim)
+    code, out = run_json(["--workspace", str(unlaunchable_eda)], tmp_path)
+    assert code == 1, out
+    assert [(v["kind"], v["refs"]) for v in out["violations"]] == [
+        ("probe_unlabelled", ["s1"])]
+    assert out["measured"] == {}
+
+
+def test_labelled_probes_run_the_bench(unlaunchable_eda, tmp_path,
+                                       monkeypatch):
+    import layoutlib
+    _ring_ws(unlaunchable_eda, monkeypatch,
+             ".subckt blk a b\nR0 a s1 1k\nR1 s1 s2 1k\nR2 s2 b 1k\n"
+             "C0 a b 0.1f\n.ends\n")
+
+    class Proc:
+        returncode = 0
+        stderr = ""
+        stdout = "x = 5.0e-01\n"
+
+    monkeypatch.setattr(layoutlib, "run_eda", lambda *a, **k: Proc())
+    code, out = run_json(["--workspace", str(unlaunchable_eda)], tmp_path)
+    assert code == 0, out
+    assert out["measured"] == {"x": 0.5}
+
+
 @pytest.mark.slow
 def test_clean_mirror_pex_sim_passes(tmp_path):
     ws = make_ws(tmp_path, "mirror")
