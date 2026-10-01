@@ -26,13 +26,16 @@ JSON out, exit 0/1/2. Keep output ASCII. **No web tools.**
 
 1. **A plain wrapper first.** Write a wrapper module that INSTANTIATES the
    DUT directly and forwards its ports; yosys's native `read -formal`
-   frontend reads it. A property that needs a DUT register (an invariant
-   induction needs) may use a hierarchical reference (`dut.q`) or a `bind`:
-   check_formal sees either and reads the design with yosys-slang instead,
-   which flattens them. Under slang an immediate assert keeps its label
+   frontend reads it. A property that needs a DUT register or memory (an
+   invariant induction needs - a FIFO's pointer distance, a counter's
+   range) uses a hierarchical reference (`dut.q`, `dut.mem[0]`):
+   check_formal sees it and reads the design with yosys-slang instead,
+   which resolves it. Under slang an immediate assert keeps its label
    only inside a named block (`always @(posedge clk) begin : props ...
    end`), or write it as a concurrent `LABEL: assert property (@(posedge
-   clk) ...)`; an unlabeled one is refused as a missing property.
+   clk) ...)`; an unlabeled one is refused as a missing property. Slang
+   reads no signal inside an `initial` block, so `initial assume (rst)` is
+   refused: assume reset as `always @* if (!past_valid) assume (rst);`.
 2. **Native: no SVA `assert property (@(posedge clk) ...)`.** yosys's own
    formal frontend does not parse it (a syntax error at the `@`). In a
    plain wrapper only PROCEDURAL ("immediate") `assert (...)`/`cover
