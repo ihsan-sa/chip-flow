@@ -18,10 +18,16 @@ free input - or drops the assert outright inside a named block. So before
 sby runs, pick_frontend probes the design with both frontends (hierarchy,
 proc, flatten, then count property cells) and switches every task to the
 yosys-slang plugin (`read_slang`, which resolves both) when native reports a
-dotted implicit identifier, formal/*.sv holds a `bind`, or native's model
-has fewer property cells than slang's. Slang needed but missing from the
-toolchain, or unable to read the design, is a refusal - never a quiet fall
-back to native. Under slang a property's sby id is its hierarchical name
+dotted implicit identifier, formal/*.sv holds a `bind`, native's model
+has fewer property cells than slang's, or native could not read the design
+at all while slang could (a hierarchical reference inside an expression,
+`dut.a - dut.b`, stops native with an AST_AUTOWIRE error before it logs the
+implicit identifier). A probe counts as reaching its property count only
+when its own `log` line is in the output on a line of its own - yosys
+echoes the whole -p script first, marks included. Slang needed but missing
+from the toolchain, or unable to read the design, is a refusal - never a
+quiet fall back to native - and so is neither frontend reading it (the
+refusal names both errors). Under slang a property's sby id is its hierarchical name
 (`dut.u_chk.LABEL`, `blk.LABEL`); a `property:` label matches an exact id,
 else the one id whose last dotted component it is (two is refused as
 ambiguous). The report carries `frontend` and `frontend_why`.
@@ -579,12 +585,32 @@ def hier_refs(native_log: str) -> list[str]:
     return sorted(set(IMPLICIT_HIER_RE.findall(native_log)))
 
 
+def probe_error(log: str) -> str:
+    """The line saying why a probe failed: slang's own `file:line: error:`
+    first (its ERROR line only says elaboration failed), else yosys's
+    first ERROR line, else a note that the log has neither."""
+    m = (re.search(r"(?m)^.*: error: .*$", log)
+         or re.search(r"(?m)^.*ERROR:.*$", log))
+    return m.group(0).strip()[-300:] if m else "no error line in its log"
+
+
+def after_mark(log: str, mark: str) -> str | None:
+    """The probe log past the line its own `log <mark>` printed, or None
+    when the probe never got there. Anchored to a whole line because yosys
+    echoes the whole -p script first ("-- Running command `...log <mark>;
+    ...`"), so a bare substring test passes even for a probe that died
+    reading the design."""
+    m = re.search(rf"(?m)^{re.escape(mark)}$", log)
+    return log[m.end():] if m else None
+
+
 def count_properties(log: str, formal_top: str) -> int | None:
     """Property cells `select -list` printed for the flattened top, or None
     when the probe never reached that command (a parse error)."""
-    if PROBE_MARK not in log:
+    text = after_mark(log, PROBE_MARK)
+    if text is None:
         return None
-    return len(re.findall(rf"(?m)^{re.escape(formal_top)}/\S+$", log))
+    return len(re.findall(rf"(?m)^{re.escape(formal_top)}/\S+$", text))
 
 
 def probe(frontend: str, sv_files: list[Path], rtl_files: list[Path],
@@ -609,9 +635,9 @@ def clocking(log: str) -> dict | None:
     type, ...]} over the probe's dump of every flop, latch and clocked
     check in the flattened model (opt_clean first, so one net has one
     name), or None when the probe never reached the dump. Pure."""
-    if CLOCK_MARK not in log:
+    text = after_mark(log, CLOCK_MARK)
+    if text is None:
         return None
-    text = log.split(CLOCK_MARK, 1)[1]
     clocks, negedge, asyncs = set(), [], set()
     starts = list(CELL_RE.finditer(text))
     for i, m in enumerate(starts):
@@ -689,9 +715,11 @@ def pick_frontend(sv_files: list[Path], rtl_files: list[Path],
     """(frontend, why slang was needed or None, slang .so, that frontend's
     probe log - clocking reads it). Native unless
     it would be unsound: a hierarchical reference it leaves undriven, a
-    `bind` it drops, or fewer properties in its flattened model than
-    slang's (anything else it dropped). Slang needed but missing or unable
-    to read the design is a refusal - never a quiet fall back to native."""
+    `bind` it drops, fewer properties in its flattened model than
+    slang's (anything else it dropped), or a design it could not read that
+    slang could. Slang needed but missing or unable to read the design, or
+    neither frontend reading it, is a refusal - never a quiet fall back to
+    native."""
     native_log = probe("native", sv_files, rtl_files, formal_top, None)
     refs = hier_refs(native_log)
     bind = has_bind(sv_files)
@@ -705,9 +733,23 @@ def pick_frontend(sv_files: list[Path], rtl_files: list[Path],
         why = f"hierarchical reference(s) {', '.join(refs)}"
     elif bind:
         why = "a `bind` statement in formal/*.sv"
+    elif native_n is None and slang_n is not None:
+        # a hierarchical reference inside an expression (`dut.a - dut.b`)
+        # stops native with an AST_AUTOWIRE error before it ever logs the
+        # implicit declaration hier_refs looks for
+        why = ("yosys's native frontend could not read formal/*.sv ("
+               + probe_error(native_log) + ")")
     elif native_n is not None and slang_n is not None and slang_n > native_n:
         why = (f"yosys's native frontend keeps {native_n} property cell(s) "
                f"where yosys-slang keeps {slang_n}")
+    if why is None and native_n is None and slang_so is not None:
+        raise CheckError(
+            "neither yosys frontend could read formal/*.sv with rtl/ - "
+            f"native: {probe_error(native_log)}; yosys-slang: "
+            f"{probe_error(slang_log)}"
+            + ("; slang reads no signal inside an `initial` block, so "
+               "assume reset in an `always @*` on a past_valid flag instead"
+               if "during design initialization" in slang_log else ""))
     if why is None:
         return "native", None, None, native_log
     if slang_so is None:

@@ -17,7 +17,7 @@ edited the run by hand (docs/design.md section 3). Harder rungs are higher up.
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | counter8 | yes |  | pass (1/1) | 1.00 | 1086.6 | 0.29 | 19 | - | - | 14718 | 2026-09-25 | vde session run 2026-09-24/25, workspace runs/counter8-20260924 |
 | uart | yes |  | pass (1/1) | 1.00 | 2309.4 | 0.15 | 53 | - | - | 226452 | 2026-09-27 | vde session run 2026-09-27 in this track's own workspace; every gate green through release (timing after the fixer's harden override, glsim after the fixer's reset for hold, parity re-timed); parked at H2 (H2-97cc79) awaiting the owner |
-| spi_fifo | no | 10 gate(s) not green | pass (1/1) | 0.95 | - | - | 16 | - | - | 18580 | 2026-09-25 | vde session run 2026-09-25, workspace runs/spi_fifo-20260925; stopped at P4 formal: smt prove at depth 96 times out at the gate's 180s (3 runs), and induction can't close because the wrapper can't see DUT registers (sby flow never flattens), escalated |
+| spi_fifo | no | 8 gate(s) not green | pass (1/1) | 1.00 | - | - | 9 | - | - | 1652 | 2026-10-01 | vde session run 2026-10-01, workspace runs/spi_fifo-20261001, after the formal-gate fix: P4 all green (formal 5/5 proven by k-induction and pdr at depth 10 with hierarchical refs into the DUT, mutate 16/16); parked at H1 awaiting the owner's answer, so P5-P8 not run |
 | riscv | not run | | | | | | | | | | | |
 
 ## /ade

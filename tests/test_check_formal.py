@@ -458,6 +458,70 @@ def test_slang_that_cannot_read_the_design_is_refused(tmp_path, capsys,
     assert "dut.q" in out["remediation"] and "could not read" in out["remediation"]
 
 
+# The spi_fifo /vde run's P4 stop: a hierarchical reference inside an
+# expression stops yosys's native frontend with an AST_AUTOWIRE error before
+# it logs the implicit declaration hier_refs looks for, so the gate stayed
+# on native and every sby task died reading the wrapper.
+FORMAL_HIER_EXPR = """\
+module top_formal (input wire clk, input wire rst, output wire [3:0] count);
+  top dut (.clk(clk), .rst(rst), .count(count));
+  always @(posedge clk) begin : props
+    H_INV: assert ((dut.q + 4'd0) <= 4'd9);
+  end
+endmodule
+"""
+
+
+@pytest.mark.slow
+def test_hier_ref_that_crashes_native_proves_under_slang(tmp_path, capsys):
+    ws = _ws_with(tmp_path, RTL_DECADE, FORMAL_HIER_EXPR, "H_INV")
+    code = check_formal.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0, out
+    assert out["frontend"] == "slang" and "could not read" in out["frontend_why"]
+    assert out["proven"] == ["REQ-P"]
+
+
+SLANG_OK_LOG = (f"{check_formal.PROBE_MARK}\ntop_formal/$assert$x\n"
+                f"{check_formal.CLOCK_MARK}\n")
+
+
+CRASHED_NATIVE_LOG = (
+    "-- Running command `read -formal w.sv; hierarchy -top top_formal; "
+    f"proc; flatten; log {check_formal.PROBE_MARK}; select -list t:$assert;"
+    f" opt_clean; log {check_formal.CLOCK_MARK}; dump t:$*dff*' --\n"
+    "w.sv:4: ERROR: Don't know how to detect sign and width for "
+    "AST_AUTOWIRE node!\n")
+
+
+def test_native_that_cannot_read_falls_to_slang(tmp_path, monkeypatch):
+    monkeypatch.setattr(check_formal, "probe", lambda fe, *a:
+                        CRASHED_NATIVE_LOG if fe == "native"
+                        else SLANG_OK_LOG)
+    monkeypatch.setattr(check_formal, "slang_plugin", lambda: tmp_path)
+    fe, why, _, _ = check_formal.pick_frontend([], [], "top_formal")
+    assert fe == "slang" and "detect sign and width" in why
+    # a native read that works keeps native: the fallback is only for a
+    # probe that never reached its property count
+    monkeypatch.setattr(check_formal, "probe", lambda fe, *a: SLANG_OK_LOG)
+    assert check_formal.pick_frontend([], [], "top_formal")[0] == "native"
+
+
+def test_neither_frontend_reading_is_refused_naming_both(tmp_path,
+                                                         monkeypatch):
+    logs = {"native": CRASHED_NATIVE_LOG,
+            "slang": ("ERROR: Design elaboration failed\nw.sv:9:19: error: "
+                      "reading net state during design initialization "
+                      "unsupported\n")}
+    monkeypatch.setattr(check_formal, "probe", lambda fe, *a: logs[fe])
+    monkeypatch.setattr(check_formal, "slang_plugin", lambda: tmp_path)
+    with pytest.raises(check_formal.CheckError) as exc:
+        check_formal.pick_frontend([], [], "top_formal")
+    msg = str(exc.value)
+    assert "AST_AUTOWIRE" in msg and "design initialization" in msg
+    assert "always @*" in msg
+
+
 def test_hier_refs_reads_only_dotted_implicit_identifiers():
     log = ("x.sv:4: Warning: Identifier `\\dut.q' is implicitly declared.\n"
            "x.sv:5: Warning: Identifier `\\plain' is implicitly declared.\n")
@@ -478,6 +542,10 @@ def test_has_bind_ignores_comments(tmp_path):
 def test_count_properties_none_when_probe_never_got_there():
     top = "top_formal"
     assert check_formal.count_properties("ERROR: parse", top) is None
+    # yosys echoes the whole -p script, marks included, before it reads a
+    # file; a probe that died reading is still one that never got there
+    assert check_formal.count_properties(CRASHED_NATIVE_LOG, top) is None
+    assert check_formal.clocking(CRASHED_NATIVE_LOG) is None
     log = f"{check_formal.PROBE_MARK}\ntop_formal/$5\ntop_formal/\\L\n"
     assert check_formal.count_properties(log, top) == 2
 
