@@ -1,0 +1,46 @@
+{
+ "skill": "vde",
+ "rung": "spi_fifo",
+ "block": "spi_fifo-20261001",
+ "run": "spi_fifo-20261001",
+ "phase": "P4",
+ "scored_at": "2026-10-01T19:59:23+00:00",
+ "counts": false,
+ "gates_green": false,
+ "gate_problems": [
+  "drc: no recorded result",
+  "glsim: no recorded result",
+  "harden: no recorded result",
+  "lvs: no recorded result",
+  "precheck: no recorded result",
+  "synth: no recorded result",
+  "timing: no recorded result",
+  "release: no recorded pass"
+ ],
+ "gates_passed": [
+  "cover",
+  "formal",
+  "holdout",
+  "lint",
+  "mutate",
+  "sim",
+  "spec_lint"
+ ],
+ "hand_edits": 0,
+ "held_out": {
+  "status": "pass",
+  "tests_passed": 1,
+  "tests_run": 1,
+  "kinds": []
+ },
+ "kill_rate": 1.0,
+ "line_pct": 100.0,
+ "area": null,
+ "worst_slack_ns": null,
+ "fix_attempts": 9,
+ "tokens": null,
+ "cost_usd": null,
+ "wall_s": 1652,
+ "note": "vde session run 2026-10-01, workspace runs/spi_fifo-20261001, after the formal-gate fix: P4 all green (formal 5/5 proven by k-induction and pdr at depth 10 with hierarchical refs into the DUT, mutate 16/16); parked at H1 awaiting the owner's answer, so P5-P8 not run",
+ "kind": "skill"
+}
