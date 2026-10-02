@@ -2,7 +2,7 @@
 """ladder.py - score one skill run against the corpus ladder, and regenerate
 evals/ladder.md (docs/design.md section 3, "### M6.").
 
-    ladder.py --skill vde --rung uart --run WS --hand-edits N
+    ladder.py --skill vde --rung uart --run WS --hand-edits N [--rulings R]
               [--session-tokens T] [--session-cost-usd C] [--wall-s S]
               [--note TEXT] [--reference]
     ladder.py --regen
@@ -20,6 +20,17 @@ plus the orchestrating session's own, and the wall time.
 Hand edits cannot be read off a workspace, so the caller declares them with
 `--hand-edits`; it is required. A rung COUNTS when every gate is green, the
 held-out tests pass, and there were no hand edits.
+
+Rulings are not hand edits. A ruling is the owner's answer on one mutation
+survivor in a workspace's spec/mutant_rulings.yaml (engine/lib/rulingslib.py),
+a documented human channel like an H-gate answer, so it is scored as its own
+field and does not stop a rung counting. The score counts the entries in
+every spec/mutant_rulings.yaml under the run (a /msde run nests one per side)
+and the caller declares with `--rulings` (default 0) how many of them the
+owner wrote. Nothing stops the run under test writing that file itself - the
+skills only say no agent may - so an entry beyond the declared count is
+scored as an undeclared ruling and stops the rung like a hand edit;
+declaring more than the file holds is an error.
 
 `--reference` marks a run that is not a skill session (the corpus reference
 RTL with its gates run by gate.py, say). Its result is kept, but ladder.md
@@ -52,6 +63,7 @@ sys.path.insert(0, str(ENGINE / "lib"))
 import attest  # noqa: E402
 import checklib  # noqa: E402
 import gate as gate_mod  # noqa: E402
+import rulingslib  # noqa: E402
 import statelib  # noqa: E402
 from checklib import CheckError  # noqa: E402
 
@@ -114,6 +126,29 @@ def run_holdout(ws: Path, skill: str, rung_dir: Path) -> dict:
                              if v.get("kind")})}
 
 
+def count_rulings(ws: Path) -> int:
+    """Entries across every spec/mutant_rulings.yaml under the run."""
+    import yaml
+    n = 0
+    for f in sorted(ws.rglob(rulingslib.RULINGS_REL)):
+        if SKIP_COPY & set(f.relative_to(ws).parts):
+            continue
+        try:
+            data = yaml.safe_load(f.read_text(encoding="utf-8"))
+        except yaml.YAMLError as exc:
+            raise CheckError(f"{f.relative_to(ws)} is not valid YAML: {exc}") from exc
+        if data is None:
+            continue
+        if not isinstance(data, dict):
+            raise CheckError(f"{f.relative_to(ws)} is not a YAML mapping")
+        for key, entries in data.items():
+            if key not in rulingslib.FIELDS or not isinstance(entries, (list, type(None))):
+                raise CheckError(f"{f.relative_to(ws)}: unexpected {key!r} "
+                                 "(see engine/lib/rulingslib.py)")
+            n += len(entries or [])
+    return n
+
+
 def facts(data: dict, gate: str) -> dict:
     return ((data.get("gates") or {}).get(gate, {}).get("last") or {}).get("facts") or {}
 
@@ -133,6 +168,13 @@ def score(args) -> tuple[dict, list[dict]]:
     if data.get("skill") != args.skill:
         raise CheckError(f"the run is a {data.get('skill')!r} workspace, not {args.skill!r}")
 
+    found = count_rulings(ws)
+    if args.rulings < 0 or args.rulings > found:
+        raise CheckError(f"--rulings {args.rulings} declared, but the run's "
+                         f"{rulingslib.RULINGS_REL} files hold {found} entries")
+    # brief: a ruling "does not stop the rung counting", but the run's own
+    # writes to the rulings file are counted "as hand edits"
+    undeclared = found - args.rulings
     green_problems = gates_green(ws, data)
     held = run_holdout(ws, args.skill, rung_dir)
     gates = data.get("gates") or {}
@@ -145,7 +187,7 @@ def score(args) -> tuple[dict, list[dict]]:
         (max(hist) - min(hist)).total_seconds() if len(hist) > 1 else None)
 
     counts = (not green_problems and held["status"] in ("pass", "n/a")
-              and args.hand_edits == 0)
+              and args.hand_edits == 0 and undeclared == 0)
     result = {
         "skill": args.skill, "rung": args.rung, "block": data.get("block"),
         "run": ws.name, "phase": data.get("phase"),
@@ -155,6 +197,8 @@ def score(args) -> tuple[dict, list[dict]]:
         "gate_problems": green_problems,
         "gates_passed": sorted(g for g, e in gates.items() if e.get("status") == "pass"),
         "hand_edits": args.hand_edits,
+        "rulings": args.rulings,
+        "rulings_undeclared": undeclared,
         "held_out": held,
         "kill_rate": facts(data, "mutate").get("kill_rate"),
         "line_pct": facts(data, "cover").get("line_pct"),
@@ -179,6 +223,11 @@ def score(args) -> tuple[dict, list[dict]]:
         violations.append(checklib.violation(
             "ladder", "error", None, args.rung, "hand_edits", [],
             f"{args.hand_edits} hand edit(s) declared", "caller"))
+    if undeclared:
+        violations.append(checklib.violation(
+            "ladder", "error", None, args.rung, "rulings_undeclared", [],
+            f"{undeclared} mutant ruling(s) in the run that the caller did not "
+            "declare as the owner's (--rulings): scored as hand edits", "caller"))
     return result, violations
 
 
@@ -245,12 +294,14 @@ def _why_red(r: dict) -> str:
         bits.append("held-out fails")
     if r["hand_edits"]:
         bits.append("hand edits")
+    if r.get("rulings_undeclared"):
+        bits.append("undeclared rulings")
     return "; ".join(bits)
 
 
-TABLE_HEAD = ["| rung | counts | why not | held-out | kill rate | area | worst slack ns "
-              "| fix attempts | tokens | cost USD | wall s | scored | note |",
-              "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+TABLE_HEAD = ["| rung | counts | why not | held-out | rulings | kill rate | area "
+              "| worst slack ns | fix attempts | tokens | cost USD | wall s | scored | note |",
+              "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
 
 
 def _row(rung: str, r: dict) -> str:
@@ -258,7 +309,7 @@ def _row(rung: str, r: dict) -> str:
     held = h["status"] if h.get("tests_run") is None else \
         f"{h['status']} ({h.get('tests_passed')}/{h.get('tests_run')})"
     return "| " + " | ".join([
-        rung, "yes" if r["counts"] else "no", _why_red(r), held,
+        rung, "yes" if r["counts"] else "no", _why_red(r), held, _fmt(r.get("rulings")),
         _fmt(r.get("kill_rate")), _fmt(r.get("area"), 1),
         _fmt(r.get("worst_slack_ns")), _fmt(r.get("fix_attempts")),
         _fmt(r.get("tokens")), _fmt(r.get("cost_usd")), _fmt(r.get("wall_s")),
@@ -274,7 +325,8 @@ def render(results: Path, fixtures: Path) -> str:
         "",
         "Generated by `evals/ladder.py --regen` from `evals/results/`; do not edit by hand.",
         "A rung counts when every gate is green, the corpus held-out tests pass and nobody",
-        "edited the run by hand (docs/design.md section 3). Harder rungs are higher up.",
+        "edited the run by hand (docs/design.md section 3). The owner's per-mutant rulings",
+        "are counted in their own column and are not hand edits. Harder rungs are higher up.",
         "",
         "| level | vde | ade | msde |",
         "|---|---|---|---|",
@@ -299,7 +351,7 @@ def render(results: Path, fixtures: Path) -> str:
         for row in ladder.get(s) or []:
             r = res.get((s, row["rung"]))
             lines.append(_row(row["rung"], r) if r else
-                         f"| {row['rung']} | not run | | | | | | | | | | | |")
+                         f"| {row['rung']} | not run |" + " |" * 12)
 
     refs = latest_ladder_results(results, "reference")
     if refs:
@@ -371,6 +423,9 @@ def run(argv=None):
     ap.add_argument("--run", help="the run's block workspace")
     ap.add_argument("--hand-edits", type=int,
                     help="hand edits made during the run (required to score)")
+    ap.add_argument("--rulings", type=int, default=0,
+                    help="how many of the run's spec/mutant_rulings.yaml entries the "
+                    "owner wrote (the rest are scored as hand edits)")
     ap.add_argument("--session-tokens", type=int)
     ap.add_argument("--session-cost-usd", type=float)
     ap.add_argument("--wall-s", type=float)

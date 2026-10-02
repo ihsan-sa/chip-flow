@@ -14,7 +14,19 @@
 // cycle gate-window count (REQ-COUNT) is a sim/holdout/mutate/cover job,
 // not a formal one (a k-induction proof at that depth is not what this
 // gate is for).
-module sensor_counted_digital_formal (
+//
+// The DUT is built with a FORMAL_WINDOW-cycle gate window, not 1024. At 1024
+// the cover below needs one whole window, about 2200 solver steps, and ran
+// into check_formal's per-task ceiling; at 8 it is reached in a few dozen.
+// This is sound for every property here: REQ_FORMAL_RESET and
+// REQ_FORMAL_ENABLE never read the window counter, so they hold for any
+// WINDOW or none, and COVER_VALID exercises the same window-end logic, only
+// sooner. What the short window does not check is the 1024 itself and the
+// 255 saturation (8 cycles cannot carry 255 edges); both are REQ-COUNT,
+// check: sim, and tb/ runs the design at its real WINDOW of 1024.
+module sensor_counted_digital_formal #(
+    parameter integer FORMAL_WINDOW = 8
+) (
     input wire clk,
     input wire rst_n,
     input wire en,
@@ -23,7 +35,9 @@ module sensor_counted_digital_formal (
     output wire [7:0] count,
     output wire valid
 );
-  sensor_counted_digital dut (
+  sensor_counted_digital #(
+      .WINDOW(FORMAL_WINDOW)
+  ) dut (
       .clk(clk),
       .rst_n(rst_n),
       .en(en),
@@ -48,7 +62,14 @@ module sensor_counted_digital_formal (
   always @(posedge clk)
     REQ_FORMAL_ENABLE: assert (osc_en == en);
 
-  // A cover point for REQ-VALID (spec.md): valid is actually reachable.
+  // Start from reset, so the cover below is a real reach and not the
+  // solver's free choice of initial register values.
+  always @(posedge clk)
+    if (!past_valid)
+      assume (!rst_n);
+
+  // A cover point for REQ-VALID (spec.md): valid is actually reachable,
+  // through a completed (short) window rather than an arbitrary start state.
   always @(posedge clk)
     if (past_valid)
       COVER_VALID: cover (valid);
