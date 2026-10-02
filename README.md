@@ -5,11 +5,11 @@ blocks, and `/msde` for a mixed-signal task that drives the other two. Each take
 and every result has to pass gates that are hard to fool: lint, simulation, formal proof, hardening, timing, DRC,
 LVS, SPICE at every corner, and planted faults that each gate must catch.
 
-The skills run end to end today. `/vde` has taken an 8-bit counter through every gate to a release, and a UART
-passes every gate and waits only on its human sign-off, as do a current mirror and an R2R DAC from `/ade`. The
-optimise loop cut the UART's area by 30% (3198 to 2249 µm²) over twelve trials, and the winner still passed holdout,
-formal and mutation testing (`docs/runs/optimise-uart/`). `evals/ladder.md` scores every rung, and `docs/design.md`
-is the plan.
+The skills run end to end today. `/vde` has taken an 8-bit counter through every gate to a release, and a UART and an
+SPI peripheral with a FIFO each pass every gate and wait only on their human sign-off, as do a current mirror and an
+R2R DAC from `/ade`. The optimise loop cut the UART's area by 30% (3198 to 2249 µm²) over twelve trials, and the
+winner still passed holdout, formal and mutation testing (`docs/runs/optimise-uart/`). `evals/ladder.md` scores every
+rung, and `docs/design.md` is the plan.
 
 ## Checks on GitHub Actions
 
