@@ -91,9 +91,11 @@ def static_violations(ws: Path, spec: dict, netlist_path: Path,
 def dry_run_violations(ws: Path, timeout: float = DRY_RUN_TIMEOUT) -> list[dict]:
     """Reuse sim_run's own bench materialization at the single 'tt' corner,
     scoring ONLY simlib.detect_engine_errors - bounds are out of scope for
-    this gate (sim_tt's own job)."""
+    this gate (sim_tt's own job). skip_unscored=False: with bounds out of
+    scope, every bench is dry-run, whatever corners its bounds name."""
     result = sim_run.run_workspace_benches(
-        ws, corner_names=["tt"], timeout=timeout, check="netlist_lint")
+        ws, corner_names=["tt"], timeout=timeout, check="netlist_lint",
+        skip_unscored=False)
     violations = []
     for r in result["results"]:
         if r["engine_errors"]:

@@ -258,3 +258,87 @@ def test_netlist_path_is_absolute_for_a_relative_workspace(tmp_path, monkeypatch
     assert rel["NETLIST"] == str(tmp_path / "blocks/b/netlist/b.cir")
     absolute = tmp_path / "x.cir"
     assert sim_run.build_subs(tmp_path, absolute, corner, 3.3, {})["NETLIST"] == str(absolute)
+
+
+# ------------------------------------------------- corners no bound scores
+
+def make_corner_gated_eda(tmp_path: Path) -> Path:
+    """A fake eda that answers like a bench gating its own analysis on tt:
+    a clean measure for the `__tt.cir` deck, ngspice's empty-run text for
+    any other corner's deck."""
+    fake_root = tmp_path / "fake_toolchain"
+    (fake_root / "foss" / "pdks" / "gf180mcuD").mkdir(parents=True)
+    script = tmp_path / "fake_eda_gated"
+    script.write_text(
+        "#!/usr/bin/env bash\n"
+        "if [ \"$1\" = --print-toolchain-root ]; then\n"
+        f"  echo '{fake_root}'\n"
+        "  exit 0\n"
+        "fi\n"
+        "case \"$3\" in\n"
+        f"  *__tt.cir) cat <<'STDOUT'\n{CLEAN_MEASURE_STDOUT}\nSTDOUT\n;;\n"
+        "  *) echo 'Error: incomplete or empty netlist' >&2\n"
+        "     echo 'Note: No ngspice simulations run' >&2 ;;\n"
+        "esac\n",
+        encoding="utf-8")
+    script.chmod(script.stat().st_mode | stat.S_IEXEC)
+    return script
+
+
+def test_tt_only_bench_runs_once_at_tt_and_lists_the_rest_not_scored(tmp_path):
+    ws = make_ws(tmp_path)
+    (ws / "tb" / "widget_tb.bounds.json").write_text(json.dumps(
+        [{"measure": "vout", "min": 1.0, "max": 1.5, "corners": ["tt"]}]),
+        encoding="utf-8")
+    eda = make_corner_gated_eda(tmp_path)
+    result = sim_run.run_workspace_benches(
+        ws, eda_bin=eda, corner_names=["tt", "ss", "ff", "sf", "fs"])
+    assert [r["corner"] for r in result["results"]] == ["tt"]
+    assert result["not_scored"] == [
+        {"bench": "widget_tb.cir", "corner": c,
+         "reason": "no bound in the sidecar is scored at this corner"}
+        for c in ("ss", "ff", "sf", "fs")]
+    assert result["violations"] == []
+    assert not list((ws / "log" / "sim").glob("*__ss.cir"))
+
+
+def test_all_scoped_bound_still_runs_at_every_corner(tmp_path):
+    ws = make_ws(tmp_path)
+    (ws / "tb" / "widget_tb.bounds.json").write_text(json.dumps(
+        [{"measure": "vout", "min": 1.0, "max": 1.5, "corners": ["tt"]},
+         {"measure": "vout", "min": 0.0, "max": 3.0}]), encoding="utf-8")
+    eda = make_corner_gated_eda(tmp_path)
+    result = sim_run.run_workspace_benches(
+        ws, eda_bin=eda, corner_names=["tt", "ss"])
+    assert [r["corner"] for r in result["results"]] == ["tt", "ss"]
+    assert result["not_scored"] == []
+    # ss ran, so the gated bench's empty run there is still reported
+    assert any(v["kind"].startswith("sim_engine_error")
+               for v in result["violations"])
+
+
+def test_bench_run_at_no_corner_is_a_finding(tmp_path):
+    ws = make_ws(tmp_path)
+    (ws / "tb" / "widget_tb.bounds.json").write_text(json.dumps(
+        [{"measure": "vout", "min": 1.0, "max": 1.5, "corners": ["tt"]}]),
+        encoding="utf-8")
+    eda = make_corner_gated_eda(tmp_path)
+    result = sim_run.run_workspace_benches(
+        ws, eda_bin=eda, corner_names=["ss", "ff"])
+    assert result["results"] == []
+    assert [c["corner"] for c in result["not_scored"]] == ["ss", "ff"]
+    assert [(v["kind"], v["severity"]) for v in result["violations"]] == [
+        ("sim_bench_not_run", "error")]
+
+
+def test_skip_unscored_false_runs_every_bench(tmp_path):
+    ws = make_ws(tmp_path)
+    (ws / "tb" / "widget_tb.bounds.json").write_text(json.dumps(
+        [{"measure": "vout", "min": 1.0, "max": 1.5, "corners": ["ss"]}]),
+        encoding="utf-8")
+    eda = make_corner_gated_eda(tmp_path)
+    result = sim_run.run_workspace_benches(
+        ws, eda_bin=eda, corner_names=["tt"], skip_unscored=False)
+    assert [r["corner"] for r in result["results"]] == ["tt"]
+    assert result["not_scored"] == []
+    assert result["violations"] == []

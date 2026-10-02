@@ -45,7 +45,8 @@ def run(argv=None):
     # kinds[0] for this gate ("netlist" for sim_tt).
     payload = checklib.report(SCRIPT, ws / "netlist", result["violations"],
                               top=result["top"], corners=result["corners"],
-                              results=result["results"])
+                              results=result["results"],
+                              not_scored=result["not_scored"])
     return payload, args.out
 
 

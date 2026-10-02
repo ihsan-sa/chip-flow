@@ -112,6 +112,23 @@ def test_meets_at_typical_loses_headroom_at_slow_and_hot(tmp_path, monkeypatch, 
     assert tt_result["violations"] == []
 
 
+def test_a_tt_only_bench_is_not_run_at_the_other_corners(tmp_path, monkeypatch,
+                                                        capsys):
+    # every bound scoped to tt: ss would fail if it ran, so a pass here
+    # means it did not, and the report says where it was not scored
+    ws = make_ws(tmp_path)
+    (ws / "tb" / "mirror_tb.bounds.json").write_text(json.dumps(
+        [{"measure": "iout_ratio", "min": 1.95, "max": 2.05,
+          "corners": ["tt"]}]), encoding="utf-8")
+    monkeypatch.setattr(sim_run, "EDA_BIN", make_corner_sensitive_fake_eda(tmp_path))
+    code = check_sim_pvt.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0, out
+    assert [r["corner"] for r in out["results"]] == ["tt"]
+    assert sorted(n["corner"] for n in out["not_scored"]) == [
+        "ff", "fs", "sf", "ss"]
+
+
 def test_explicit_corner_list_cannot_skip_a_default(tmp_path, monkeypatch, capsys):
     # A spec naming only `[tt, ff]` used to run ONLY those two - ss (the
     # "slow and hot" default corner) never ran, so its bound violation never

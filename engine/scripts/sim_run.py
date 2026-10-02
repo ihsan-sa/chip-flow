@@ -22,6 +22,16 @@ over a netlist with a poly resistor or MIM cap that hard-codes the typical
 passive section while the sweep moves it is a passive_corner_unselected
 error (unselected_passives).
 
+A (bench, corner) pair where every bound in the bench's sidecar has a
+`corners` list that leaves this corner out is not run at all (skip_unscored,
+the default): nothing would be scored there, and a bench that gates its own
+analysis on that list would only make ngspice report an empty run. Each
+skipped pair is listed in the result's `not_scored` ({bench, corner,
+reason}); a bench with any "all"-scoped bound runs at every corner. A bench
+that ends up run at NO requested corner is a `sim_bench_not_run` error,
+never a silent pass. check_netlist_lint passes skip_unscored=False: its dry
+run scores engine errors, not bounds, so it runs every bench.
+
 check_netlist_lint.py, check_sim_tt.py, check_sim_pvt.py and
 check_bench_strength.py call run_workspace_benches()/run_bench_at_corner()
 directly, IN-PROCESS - the same shape check_sim.py uses for cocotblib
@@ -231,12 +241,16 @@ def run_workspace_benches(ws: Path, eda_bin: Path | None = None,
                           corners: list[dict] | None = None,
                           timeout: float = DEFAULT_TIMEOUT,
                           check: str = "sim",
-                          out_subdir: str = "log/sim") -> dict:
+                          out_subdir: str = "log/sim",
+                          skip_unscored: bool = True) -> dict:
     """Run every tb/*.cir with a bounds sidecar at every requested corner
     (default: corners.py's default_corners()) - `corners` passes the corner
     dicts themselves (a spec's grid has names corners.yaml never lists),
-    `corner_names` picks from default_corners by name. Returns {top, corners,
-    results: [run_bench_at_corner() dicts], violations: [flattened]}."""
+    `corner_names` picks from default_corners by name. With skip_unscored, a
+    corner no bound of the bench is scored at is skipped and listed in
+    `not_scored`; a bench skipped at every corner is a sim_bench_not_run
+    error. Returns {top, corners, results: [run_bench_at_corner() dicts],
+    not_scored: [{bench, corner, reason}], violations: [flattened]}."""
     eda_bin = eda_bin or EDA_BIN  # resolved here, not as a stale-bound
     # default value - see toolchain_root()'s own comment on why.
     spec = speclib.load_spec(ws / "spec" / "spec.yaml")
@@ -264,6 +278,8 @@ def run_workspace_benches(ws: Path, eda_bin: Path | None = None,
 
     results = []
     unselected = []
+    not_scored = []
+    not_run = []
     for bench_path, bounds_path in find_benches(ws):
         bounds = simlib.load_bounds(bounds_path)
         template_text = bench_path.read_text(encoding="utf-8")
@@ -281,15 +297,41 @@ def run_workspace_benches(ws: Path, eda_bin: Path | None = None,
                 f"which is recorded from their answer with state.py "
                 f"scope-out, never by editing the bench",
                 "sim_run"))
+        ran = 0
         for corner in corner_list:
+            # Brief: "don't run a (bench, corner) pair when every bound in
+            # that bench's sidecar has a corners list that excludes the
+            # corner" - so it runs when ANY bound is scored here.
+            if skip_unscored and not any(simlib.scored_at(b, corner["name"])
+                                         for b in bounds):
+                not_scored.append({
+                    "bench": bench_path.name, "corner": corner["name"],
+                    "reason": "no bound in the sidecar is scored at this "
+                              "corner"})
+                continue
             subs = build_subs(t_root, netlist_path, corner, nominal_vdd, sizing)
             results.append(run_bench_at_corner(
                 eda_bin, bench_path.name, template_text, bounds, subs,
                 corner, out_dir, timeout, check=check))
+            ran += 1
+        if not ran:
+            # a gate that did not run is a refusal, never a pass
+            not_run.append(checklib.violation(
+                check, "error", f"tb/{bench_path.name}", None,
+                "sim_bench_not_run", [bench_path.name],
+                f"{bench_path.name}: no bound in its sidecar is scored at any "
+                f"of the corners this run sweeps "
+                f"({', '.join(c['name'] for c in corner_list)}), so the bench "
+                f"never ran here. Scope at least one bound's `corners` to a "
+                f"corner in this sweep (or \"all\"), or name the corner in the "
+                f"spec's corner set",
+                "sim_run"))
 
-    violations = unselected + [v for r in results for v in r["violations"]]
+    violations = (unselected + not_run
+                  + [v for r in results for v in r["violations"]])
     return {"top": spec.get("top"), "corners": [c["name"] for c in corner_list],
-           "results": results, "violations": violations}
+           "results": results, "not_scored": not_scored,
+           "violations": violations}
 
 
 def run(argv=None):
@@ -311,7 +353,8 @@ def run(argv=None):
                                    timeout=args.timeout, check=args.check)
     payload = checklib.report(SCRIPT, ws, result["violations"],
                               top=result["top"], corners=result["corners"],
-                              results=result["results"])
+                              results=result["results"],
+                              not_scored=result["not_scored"])
     return payload, args.out
 
 

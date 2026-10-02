@@ -30,6 +30,11 @@ that one: the other passive, process, temperature and supply are swept and
 gated as before. The report's `scoped_out` lists each, with the person's
 quote; a record in state.json that no longer verifies against the H1 answer
 is an error (exit 2), never a silent sweep change.
+
+Unscored corners: a bench is not run at a corner where no bound in its
+sidecar is scored (sim_run.py's module docstring); the report's `not_scored`
+lists each skipped {bench, corner, reason}, and a bench run at no corner of
+the set is a `sim_bench_not_run` error.
 """
 from __future__ import annotations
 
@@ -79,6 +84,7 @@ def run(argv=None):
     # kinds[0] for this gate ("netlist" for sim_pvt).
     payload = checklib.report(SCRIPT, ws / "netlist", violations, top=top,
                               corners=corner_list, results=results,
+                              not_scored=result["not_scored"],
                               scoped_out=scoped_out)
     return payload, args.out
 
