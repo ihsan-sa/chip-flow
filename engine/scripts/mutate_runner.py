@@ -59,6 +59,11 @@ def tail(path: Path, n: int = 20) -> str:
 # assigned in the RTL its src attribute names, so the netlist's update order
 # is the RTL's again. It changes no logic: only the order of updates the
 # standard leaves undefined across blocks.
+# The merged block goes just before its module's `endmodule`, not where its
+# first flop was: write_verilog declares each flop's `reg` right before that
+# flop's own block, so a block left at the first flop's place names regs
+# declared after it, Icarus refuses the netlist ("declaration after use"),
+# and the mutant is scored killed by a build that never ran a test.
 _ALWAYS = re.compile(r"^  always @\((.*\b(?:pos|neg)edge\b.*)\)( begin)?$")
 _SRC = re.compile(r'^\s*\(\* src = "([^"|]+?):(\d+)\.\d+-(\d+)\.\d+[|"]')
 _LHS = re.compile(r"(\\\S+|[A-Za-z_][\w$]*)\s*(?:\[[^\]]*\]\s*)?<=")
@@ -100,6 +105,8 @@ def regroup_flops(text: str) -> str:
     module = 0
     i = 0
     while i < len(lines):
+        if lines[i].startswith("endmodule"):
+            out.extend(("group", k) for k in groups if k[0] == module)
         if lines[i].startswith(("module ", "endmodule")):
             module += 1
         m = _ALWAYS.match(lines[i])
@@ -123,11 +130,11 @@ def regroup_flops(text: str) -> str:
         stmt = body[:-1] if m.group(2) else body  # drop a block's `end`
         key = (module, m.group(1))
         pos = _rtl_position(src, _LHS.search(body[0]).group(1), cache)
-        if key not in groups:
-            groups[key] = []
-            out.append(("group", key))
+        groups.setdefault(key, [])
         groups[key].append((pos is None, pos or (), len(groups[key]), stmt))
         i = j
+    # a fragment with no `endmodule` still keeps its flops
+    out.extend(("group", k) for k in groups if k[0] == module)
     result: list[str] = []
     for item in out:
         if isinstance(item, str):

@@ -317,6 +317,40 @@ def test_regroup_flops_keeps_each_flop_in_its_own_module():
     assert "r <=" not in top
 
 
+def test_regroup_flops_puts_the_block_after_every_flops_reg():
+    # mutate -mode cnot1 on one count bit: write_verilog declared each
+    # slice's reg right before its own block, and the merged block, left at
+    # the first slice's place, named regs declared after it - Icarus
+    # refused the netlist and a tb that asserts nothing "killed" the mutant.
+    import mutate_runner
+    net = "\n".join([
+        "module top(clk, d, count);",
+        "  reg s0;",
+        "  always @(posedge clk)", "    s0 <= d;",
+        "  assign count[0] = s0;",
+        "  reg s1;",
+        "  always @(posedge clk)", "    s1 <= d;",
+        "  assign count[1] = s1;",
+        "endmodule", ""])
+    got = mutate_runner.regroup_flops(net)
+    block = "  always @(posedge clk) begin\n    s0 <= d;\n    s1 <= d;\n  end"
+    # kept: one block, after both declarations and right before endmodule
+    assert block + "\nendmodule" in got
+    assert got.index("reg s1;") < got.index(block)
+    # suppressed: nothing of the merged block is left at the first slice
+    assert got.count("always @(posedge clk)") == 1
+
+
+def test_regroup_flops_keeps_a_fragment_without_endmodule():
+    import mutate_runner
+    got = mutate_runner.regroup_flops(
+        "  always @(posedge clk)\n    q <= d;\n  assign y = q;")
+    # kept: the flop survives even with no endmodule to put it before
+    assert "  always @(posedge clk) begin\n    q <= d;\n  end" in got
+    # suppressed: nothing else is dropped or duplicated
+    assert "  assign y = q;" in got and got.count("q <= d;") == 1
+
+
 def test_no_tb_modules_is_an_error(tmp_path, capsys):
     ws = make_ws(tmp_path, TB_STRONG)
     (ws / "tb" / "test_top.py").unlink()
