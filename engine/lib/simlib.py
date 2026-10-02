@@ -215,6 +215,15 @@ def load_bounds(path: Path) -> list[dict]:
     return out
 
 
+def scored_at(bound: dict, corner: str) -> bool:
+    """Whether `bound` is scored at the corner named `corner`: its
+    `corners` is absent or "all", or a list that names `corner` exactly
+    (compare_bounds and sim_run's bench skip both decide it here, so they
+    can never disagree on a corner name)."""
+    scope = bound.get("corners", "all")
+    return scope == "all" or corner in scope
+
+
 def compare_bounds(bounds: list[dict], measures: dict[str, float],
                    testbench: str, corner: str = "tt",
                    failed_measures: set[str] | None = None,
@@ -236,8 +245,7 @@ def compare_bounds(bounds: list[dict], measures: dict[str, float],
     failed_measures = failed_measures or set()
     out: list[dict] = []
     for b in bounds:
-        scope = b.get("corners", "all")
-        if scope != "all" and corner not in scope:
+        if not scored_at(b, corner):
             continue
         name = b["measure"]
         key = name.lower()

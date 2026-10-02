@@ -209,6 +209,8 @@ FIXER_HINTS: dict[str, str] = {
     "sim_measure_missing": "testbench",
     # a bench that hard-codes res_typical/mimcap_typical under a passive sweep
     "passive_corner_unselected": "testbench",
+    # a bench none of whose bounds is scored at any corner the run sweeps
+    "sim_bench_not_run": "testbench",
     # a step bench's own "did not settle within the window" verdict: the
     # window is already sized from the expected settling, so the block is
     # slower than its design equations said - sizing, not a wider window
