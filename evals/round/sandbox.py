@@ -45,20 +45,28 @@ inside the argv `build_argv` returns. What the sandbox holds, and only that:
     the host CONNECT proxy (proxy.py). The sandbox's only way out is
     HTTPS_PROXY=http://127.0.0.1:PROXY_PORT, served by forward.py.
 
-`export_repo` builds the skill arm's read-only copy of the repo: `git
-archive HEAD` (committed content only) without EXPORT_EXCLUDE.
+`export_repo` builds the skill arm's read-only copy of the repo from the
+WORKING TREE's tracked files (`git ls-files`; uncommitted edits to tracked
+files are in it, untracked files are not), leaving out EXPORT_EXCLUDE
+(corpus/, evals/, tests/, docs/, .github/) except EXPORT_INCLUDE
+(docs/design.md, which the skill's prompts cite). It returns the commit,
+whether the tracked tree was dirty, and a sha256 over the exported tree;
+round.py puts those in every skill-arm run record.
+
+Each run gets its own run dir, so its home/ and claude-projects/ (where
+claude keeps the session transcript `--resume` needs) persist across that
+run's invocations and are bound into no other run's sandbox.
 """
 from __future__ import annotations
 
 import argparse
-import io
+import hashlib
 import json
 import os
 import shutil
 import stat
 import subprocess
 import sys
-import tarfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -77,6 +85,10 @@ PROXY_PORT = 18080
 # score against it, the repo's own tests (they hold corpus copies and
 # fixtures), the design docs (run logs, examples, the eval design) and CI.
 EXPORT_EXCLUDE = ("corpus", "evals", "tests", "docs", ".github")
+# ...except these, which the skill's own prompts cite. docs/design.md is the
+# plan and contract; it names corpus paths but holds no held-out content
+# (the probe fails the run if it ever does).
+EXPORT_INCLUDE = ("docs/design.md",)
 
 # The ~/.claude entries given something other than an empty mask.
 CREDENTIALS = ".credentials.json"
@@ -351,44 +363,74 @@ def prepare_run(run_dir: Path, spec_text: str | None,
         _git(["commit", "-q", "-m", "spec"], work, home)
 
 
+def _git_out(repo: Path, *args: str) -> bytes:
+    return subprocess.run(["git", *args], cwd=repo, check=True,
+                          capture_output=True).stdout
+
+
+def export_files(repo: Path, exclude: tuple[str, ...] = EXPORT_EXCLUDE,
+                 include: tuple[str, ...] = EXPORT_INCLUDE) -> list[str]:
+    """The repo-relative paths the export holds: every tracked file (`git
+    ls-files`) whose top-level path is not in `exclude`, plus each `include`
+    path that is tracked (an exception inside an excluded tree)."""
+    tracked = [f for f in _git_out(Path(repo), "ls-files", "-z")
+               .decode("utf-8", "surrogateescape").split("\0") if f]
+    keep = set(include)
+    return [f for f in tracked
+            if f.split("/", 1)[0] not in exclude or f in keep]
+
+
 def export_repo(repo: Path, dest: Path,
-                exclude: tuple[str, ...] = EXPORT_EXCLUDE) -> dict:
-    """`git archive HEAD` of repo without the `exclude` top-level paths,
-    extracted to dest (made read-only). Returns the commit and file count.
-    Refuses if dest exists, or if any excluded path survives."""
+                exclude: tuple[str, ...] = EXPORT_EXCLUDE,
+                include: tuple[str, ...] = EXPORT_INCLUDE) -> dict:
+    """Copy the WORKING TREE's tracked files (`export_files`) to dest and
+    make them read-only. Returns the commit, whether the tracked tree was
+    dirty (differs from HEAD), a sha256 over every exported path and its
+    content, and the counts. A tracked file deleted in the working tree is
+    left out (listed). A symlink is copied as a link, and refused if it
+    points out of the tree. Refuses if dest exists, or if anything under an
+    excluded path but the `include` list survives."""
     repo, dest = Path(repo), Path(dest)
     if dest.exists():
         raise SandboxError(f"{dest} already exists")
-    commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, check=True,
-                            capture_output=True, text=True).stdout.strip()
-    spec = ["."] + [f":(exclude){e}" for e in exclude]
-    tar_bytes = subprocess.run(["git", "archive", "--format=tar", commit, "--",
-                                *spec], cwd=repo, check=True,
-                               capture_output=True).stdout
+    commit = _git_out(repo, "rev-parse", "HEAD").decode().strip()
+    dirty = bool(_git_out(repo, "status", "--porcelain",
+                          "--untracked-files=no").strip())
+    files = export_files(repo, exclude, include)
     dest.mkdir(parents=True)
-    n = 0
-    with tarfile.open(fileobj=io.BytesIO(tar_bytes)) as tf:
-        members = []
-        for m in tf.getmembers():
-            top = m.name.split("/", 1)[0]
-            if top in exclude:
-                raise SandboxError(f"git archive returned excluded {m.name}")
-            if m.issym() or m.islnk():
-                tgt = os.path.normpath(os.path.join(os.path.dirname(m.name),
-                                                    m.linkname))
-                if os.path.isabs(m.linkname) or tgt.startswith(".."):
-                    raise SandboxError(f"export link leaves the tree: {m.name}")
-            members.append(m)
-            n += m.isfile()
-        tf.extractall(dest, members=members, filter="tar")
-    for top in exclude:
-        if (dest / top).exists():
-            raise SandboxError(f"{dest / top} exists after export")
-    for root, dirs, files in os.walk(dest):
-        for name in files:
-            p = Path(root) / name
-            p.chmod(p.stat().st_mode & ~0o222)
-    return {"commit": commit, "files": n, "excluded": list(exclude)}
+    h = hashlib.sha256()
+    n, missing = 0, []
+    for rel in sorted(files):
+        src = repo / rel
+        out = dest / rel
+        if not os.path.lexists(src):
+            missing.append(rel)
+            continue
+        out.parent.mkdir(parents=True, exist_ok=True)
+        if src.is_symlink():
+            link = os.readlink(src)
+            tgt = os.path.normpath(os.path.join(os.path.dirname(rel), link))
+            if os.path.isabs(link) or tgt == ".." or tgt.startswith("../"):
+                raise SandboxError(f"export link leaves the tree: {rel}")
+            os.symlink(link, out)
+            h.update(f"L {rel} {link}\n".encode())
+        elif src.is_file():
+            data = src.read_bytes()
+            out.write_bytes(data)
+            out.chmod((src.stat().st_mode & 0o555) | 0o444)
+            h.update(f"F {rel} {hashlib.sha256(data).hexdigest()}\n".encode())
+            n += 1
+        else:
+            missing.append(rel)
+    keep = set(include)
+    for root, _dirs, names in os.walk(dest):
+        for name in names:
+            rel = os.path.relpath(os.path.join(root, name), dest)
+            if rel.split("/", 1)[0] in exclude and rel not in keep:
+                raise SandboxError(f"{rel} is excluded but was exported")
+    return {"commit": commit, "dirty": dirty, "files": n,
+            "tree_sha256": h.hexdigest(), "missing": missing,
+            "excluded": list(exclude), "included": list(include)}
 
 
 def main(argv: list[str]) -> int:

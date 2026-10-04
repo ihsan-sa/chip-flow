@@ -23,14 +23,16 @@ which is itself visible inside the sandbox) and arrive on stdin:
     matched whitespace-normalised;
   * the corpus path prefix of the rung's family, CORPUS_PREFIX (spelled in
     two halves here so this file, visible in the sandbox, does not hold it).
-The walk reads every file visible in the sandbox except /proc, /sys, /dev,
+The walk reads every file visible in the sandbox (cfg "roots", default
+["/"]; only tests narrow it) except /proc, /sys, /dev,
 the EDA tree (an unpacked tool image; too big to walk per run) and the OAuth
 credentials file (a secret, never read). It does not follow symlinks, skips
 files over MAX_BYTES (listed), and lists what it could not read. A finding
 is any hash, name, distinctive line or string hit, with one exception: the
-corpus path prefix inside the skill arm's own export (the skill's docs cite
-corpus paths that do not exist in the sandbox) is reported as a mention and
-does not fail. Hashes, names and RTL lines fail everywhere.
+corpus path prefix inside the skill arm's own export (the skill's docs and
+docs/design.md cite corpus paths that do not exist in the sandbox) is
+reported as a mention and does not fail. Hashes, names and RTL lines fail
+everywhere, the skill export included.
 A full walk of /usr and /etc takes minutes, so round.py passes a baseline:
 after the round's first full walk passes, later probes skip (and count)
 files under /usr and /etc whose ctime predates that walk's start, and read
@@ -132,7 +134,7 @@ def _classify(data: bytes) -> bool:
 
 
 def walk(needles: dict, skip_roots: list[str], mention_ok: list[str],
-         skip_files: list[str], root: str = "/",
+         skip_files: list[str], roots: list[str] = ("/",),
          trusted_roots: list[str] = (), trusted_before: float | None = None
          ) -> dict:
     """Read every visible regular file and match it against the needles.
@@ -147,8 +149,8 @@ def walk(needles: dict, skip_roots: list[str], mention_ok: list[str],
                    [s.encode() for s in needles.get("strings", [])]
     rx = re.compile(b"|".join(re.escape(n) for n in byte_needles)) \
         if byte_needles else None
-    line_rx = re.compile(b"|".join(re.escape(" ".join(l.split()).encode())
-                                   for l in needles.get("rtl_lines", []))) \
+    line_rx = re.compile(b"|".join(re.escape(" ".join(ln.split()).encode())
+                                   for ln in needles.get("rtl_lines", []))) \
         if needles.get("rtl_lines") else None
     strings = {s.encode() for s in needles.get("strings", [])}
     skip = [s.rstrip("/") for s in (list(SKIP_ALWAYS) + skip_roots)]
@@ -161,7 +163,7 @@ def walk(needles: dict, skip_roots: list[str], mention_ok: list[str],
     def skipped(path: str) -> bool:
         return any(path == s or path.startswith(s + "/") for s in skip)
 
-    stack = [root]
+    stack = [r.rstrip("/") or "/" for r in roots]
     while stack:
         d = stack.pop()
         try:
@@ -228,7 +230,8 @@ def walk(needles: dict, skip_roots: list[str], mention_ok: list[str],
             "trusted_unchanged": n_trusted, "trusted_roots": trusted,
             "trusted_before": trusted_before,
             "skipped_large": large, "unreadable": unreadable,
-            "skipped_roots": skip, "skipped_files": sorted(skip_files),
+            "roots": list(roots), "skipped_roots": skip,
+            "skipped_files": sorted(skip_files),
             "seconds": round(time.monotonic() - t0, 2)}
 
 
@@ -376,7 +379,7 @@ def run_probe(cfg: dict) -> dict:
     home = Path(cfg.get("home", os.environ.get("HOME", "/home/eval")))
     w = walk(cfg["needles"], cfg.get("skip_roots", []),
              cfg.get("mention_ok", []), cfg.get("skip_files", []),
-             cfg.get("root", "/"), cfg.get("trusted_roots", []),
+             cfg.get("roots", ["/"]), cfg.get("trusted_roots", []),
              cfg.get("trusted_before"))
     n = net_checks(cfg.get("proxy", "127.0.0.1:18080"),
                    cfg.get("deny", list(DENY_TARGETS)),
@@ -389,7 +392,7 @@ def run_probe(cfg: dict) -> dict:
                                            if k != "findings"},
             "net": {k: v for k, v in n.items() if k != "findings"},
             "claude_dir": c["listing"],
-            "root_entries": sorted(os.listdir(cfg.get("root", "/")))}
+            "root_entries": sorted(os.listdir("/"))}
 
 
 def main(argv: list[str]) -> int:

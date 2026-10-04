@@ -16,6 +16,8 @@ What it allows, and nothing else:
     and the OAuth token endpoint's host (a long run must be able to refresh
     its access token, and the refresh has to land in the real credentials
     file - see sandbox.py).
+The socket is bound through a /proc/self/fd path to its directory, so a
+run dir deeper than the 107-byte unix socket limit still works.
 Every request, allowed or denied, is one JSON line in the log:
 {"ts", "method", "target", "allowed", "reason"}. A request header over
 MAX_HEADER bytes, or not complete within HEADER_TIMEOUT_S, is refused.
@@ -79,7 +81,14 @@ class ConnectProxy:
         if self.sock_path.exists() or self.sock_path.is_symlink():
             self.sock_path.unlink()
         lsn = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        lsn.bind(str(self.sock_path))
+        # A unix socket path is limited to 107 bytes and a run dir can be
+        # deeper than that, so bind through a /proc/self/fd path to the
+        # directory: the socket lands at sock_path all the same.
+        dfd = os.open(self.sock_path.parent, os.O_PATH | os.O_DIRECTORY)
+        try:
+            lsn.bind(f"/proc/self/fd/{dfd}/{self.sock_path.name}")
+        finally:
+            os.close(dfd)
         os.chmod(self.sock_path, 0o600)
         lsn.listen(64)
         self._lsn = lsn

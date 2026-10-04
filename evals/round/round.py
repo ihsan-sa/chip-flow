@@ -7,9 +7,12 @@
 The round is 18 headless Claude Code design runs: arms bare and skill x
 detail levels terse, typical, full (corpus/vde/counter8/spec.terse.md,
 spec.md, spec.full.md) x repeats 1-3. Cells run repeat-major (all six cells
-of repeat 1, then 2, then 3, arms alternating) so drift spreads evenly; a
-cell that already has a result in <round>/run-results/ is skipped, so the
-round resumes where it stopped. One process, one run at a time.
+of repeat 1, then 2, then 3; within a repeat terse, typical, full, and bare
+before skill at each level) so drift spreads evenly. A cell that already
+has <round>/run-results/<cell>.json is skipped, so running the same command
+again resumes where the round stopped. One process, one run at a time. The
+round dir defaults to ~/.cc/evals/chip-flow-counter8-round and must be
+outside the repo.
 
 HARD LIMITS, enforced here before and after every run:
   * total spend cap TOTAL_CAP_USD ($500), held in <round>/ledger.json. A run
@@ -18,40 +21,54 @@ HARD LIMITS, enforced here before and after every run:
     run's whole budget for any run that started and never recorded a cost
     (the runner died): the ledger can over-count, never under-count.
   * per-run cap RUN_CAP_USD ($70): claude gets --max-budget-usd
-    min(70, 500 - spent); a resume gets what is left of it. A run whose
-    recorded cost exceeds $70 stops the round. A run whose cost cannot be
-    read from claude's JSON is booked at its whole budget.
+    min(70, 500 - spent); a stand-in resume gets what is left of it (none
+    under MIN_RESUME_USD). A run whose recorded cost exceeds $70 stops the
+    round. A run whose cost cannot be read from claude's JSON is booked at
+    its whole budget.
   * usage limit: before each run `cc-limit status`; a limit in force
     (exit 0) stops the round, it is never waited out. An answer that is
-    neither "limit" (0) nor "clear" (1) stops it too: a check that did not
-    run is a refusal.
+    neither "limit" (0) nor "clear" (1), or a cc-limit that does not run,
+    stops it too: a check that did not run is a refusal.
   * load: while the 1-minute load average exceeds LOAD_MAX (12), sleep
-    LOAD_SLEEP_S and re-check (no model involved).
+    LOAD_SLEEP_S (60 s) and re-check (no model involved).
   * isolation: before EVERY run the probe (probe.py) runs in the exact
     sandbox argv the run will use; anything but a "pass" verdict refuses
-    the run and stops the round.
-  * a wall cap per claude invocation (INVOCATION_WALL_S); the sandbox's
-    whole process group is killed past it.
+    the run and stops the round. The round's first passing probe walks
+    everything; later ones skip /usr and /etc files unchanged since it.
+  * wall caps: INVOCATION_WALL_S (6 h) per claude invocation, PROBE_WALL_S
+    (1 h) per probe, SCORE_WALL_S (4 h) per scoring; past it the process
+    group is killed.
+  * the host credentials file must still be a regular file owned by this
+    user after every run, or the round stops.
+  * a run that raises (sandbox, export, git, I/O) stops the round.
 
-Each run: a fresh workspace <round>/runs/<cell>/<stamp>/work (outside the
-repo), spec.md = the level's brief + evals/arms/footer.md (the same footer
-in both arms), the probe, then a fresh CONNECT proxy (proxy.py) and
-`claude -p PROMPT --output-format json --model claude-opus-5-5
---permission-mode bypassPermissions --disallowedTools WebFetch WebSearch
---max-budget-usd X` in the sandbox (sandbox.py) with cwd /work. Skill arm:
-when claude returns with a human checkpoint presented (blocks/*/state.json
+Each run: a fresh run dir <round>/runs/<cell>/<stamp>/ (outside the repo)
+with work/ (spec.md = the level's brief + evals/arms/footer.md, the same
+footer in both arms, committed in a fresh git repo), home/ and
+claude-projects/ (this run's session transcripts, kept so --resume works
+across its invocations, seen by no other run). The probe, then a fresh
+CONNECT proxy (proxy.py) and `claude -p PROMPT --output-format json --model
+claude-opus-5-5 --permission-mode bypassPermissions --disallowedTools
+WebFetch WebSearch --max-budget-usd X` in the sandbox (sandbox.py), cwd
+/work. Skill arm: the repo's working tree, exported per invocation of this
+script (sandbox.export_repo), read-only at ~/.claude/skills/chip-flow; when
+claude returns with a human checkpoint presented (blocks/*/state.json
 human.<H>.status == "presented"), the runner stands in as an approving
-reviewer and resumes the same session quoting the challenge, at most
-MAX_RESUMES times; each stand-in approval is recorded. Then the run is
-scored on the host by evals/ladder.py (exit 2 = "not scored", recorded).
-One result JSON per run: <round>/run-results/<cell>.json.
+reviewer and resumes the same session with a reply quoting that
+checkpoint's challenge, at most MAX_RESUMES (4) times; each stand-in
+approval is recorded. Then the run is scored on the host by `evals/ladder.py
+... --results-dir <round>/results --no-regen` (exit 2 = "not scored",
+recorded, not fatal). One result JSON per run, <round>/run-results/<cell>.json,
+holding the repo commit and dirty flag, and for the skill arm the export's
+commit, dirty flag and tree hash.
 
 At the end, or when the round stops early, it writes summary.json and
 summary.md (cost and wall per run and per arm, counts per arm), runs
-`scorecard.py --round` when that option exists, and sends exactly ONE
-cc-notify notice with the terminal state. --dry-run prints the plan and the
-limit decisions and runs the probe for each planned cell, but never calls
-claude, writes no ledger entry or result, and sends no notice.
+`scorecard.py --round <round>/results` (round-scorecard.json/.md land
+there; never fatal), and sends exactly ONE cc-notify notice with the
+terminal state. --dry-run prints the plan and the limit decisions and runs
+the probe for each planned cell, but never calls claude, writes no ledger
+entry or result, and sends no notice.
 
 WHAT THE SANDBOX DOES NOT CLOSE (the probe cannot see these):
   * the OAuth credentials are readable inside the sandbox (claude needs
@@ -63,8 +80,8 @@ WHAT THE SANDBOX DOES NOT CLOSE (the probe cannot see these):
     visible unmasked in that run, and entries claude creates there that
     the host lacks land in the real directory (listed in the result as
     host_claude_dir_new).
-  * the skill arm's export is `git archive HEAD`: uncommitted changes in
-    the checkout are not in it.
+  * the probe does not walk the EDA tree (bound read-only; too big) and
+    does not read files over probe.MAX_BYTES (listed in its verdict).
 
 Exit 0 finished (or dry run with every probe passing), 1 stopped early or a
 probe refused, 2 error (with a `remediation`).
@@ -211,15 +228,15 @@ def usage_limit_decision(status_fn) -> dict:
     try:
         rc, text = status_fn()
     except (OSError, subprocess.SubprocessError) as exc:
-        return {"ok": False, "reason": f"usage limit: cc-limit did not run "
-                                        f"({exc}); refusing"}
+        why = f"usage limit: cc-limit did not run ({exc}); refusing"
+        return {"ok": False, "reason": why}
     text = (text or "").strip()
     if rc == 0:
         return {"ok": False, "reason": f"usage limit in force: {text}"}
     if rc == 1:
         return {"ok": True, "status": text or "clear"}
-    return {"ok": False, "reason": f"usage limit: cc-limit status exited {rc} "
-                                    f"({text}); refusing"}
+    why = f"usage limit: cc-limit status exited {rc} ({text}); refusing"
+    return {"ok": False, "reason": why}
 
 
 def wait_for_load(load_fn, sleep_fn, dry_run: bool = False,
@@ -241,8 +258,8 @@ def wait_for_load(load_fn, sleep_fn, dry_run: bool = False,
 
 def overrun_decision(cost: float) -> dict:
     if cost > RUN_CAP_USD:
-        return {"ok": False, "reason": f"per-run overrun: run cost "
-                                        f"${cost:.2f} > ${RUN_CAP_USD:.0f}"}
+        why = f"per-run overrun: run cost ${cost:.2f} > ${RUN_CAP_USD:.0f}"
+        return {"ok": False, "reason": why}
     return {"ok": True}
 
 
@@ -341,15 +358,39 @@ def credentials_state() -> dict:
             "mode": oct(st.st_mode & 0o777)}
 
 
+def repo_state() -> dict:
+    """The repo's HEAD and whether its tracked tree differs from it."""
+    try:
+        commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO,
+                                check=True, capture_output=True,
+                                text=True).stdout.strip()
+        dirty = bool(subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=no"],
+            cwd=REPO, check=True, capture_output=True, text=True).stdout.strip())
+    except (OSError, subprocess.CalledProcessError) as exc:
+        return {"commit": None, "dirty": None, "error": str(exc)}
+    return {"commit": commit, "dirty": dirty}
+
+
+CELL_ERRORS = (sb.SandboxError, RoundError, OSError, ValueError, KeyError,
+               subprocess.SubprocessError, json.JSONDecodeError)
+
+
 class Round:
     """One round. Every outside effect is a method or an injected function,
     so the limit decisions are testable with fakes."""
 
     def __init__(self, round_dir: Path, dry_run: bool = False,
                  status_fn=real_cc_limit_status, load_fn=real_loadavg,
-                 sleep_fn=time.sleep, notify_fn=None, log=None):
+                 sleep_fn=time.sleep, notify_fn=None, log=None,
+                 probe_roots: list[str] | None = None, proxy_connect=None):
         self.dir = Path(round_dir)
         self.dry_run = dry_run
+        # What the probe walks: "/" (everything visible) unless a test
+        # narrows it. The real round never passes probe_roots.
+        self.probe_roots = list(probe_roots) if probe_roots else ["/"]
+        self.proxy_connect = proxy_connect
+        self.export_info: dict | None = None
         self.status_fn, self.load_fn, self.sleep_fn = status_fn, load_fn, sleep_fn
         self.notify_fn = notify_fn or self._notify
         self.log = log or (lambda m: print(f"[round {now()}] {m}",
@@ -366,14 +407,23 @@ class Round:
         return d
 
     def export(self) -> Path:
-        commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO,
-                                check=True, capture_output=True,
-                                text=True).stdout.strip()
-        dest = self.dir / f"export-{commit[:12]}"
-        if not dest.is_dir():
-            info = sb.export_repo(REPO, dest)
-            (self.dir / f"export-{commit[:12]}.json").write_text(
-                json.dumps(info, indent=1), encoding="utf-8")
+        """The skill arm's read-only export of the working tree, built fresh
+        for this invocation and kept as <round>/export-<tree sha256[:12]>
+        (an identical earlier export is reused). Its commit, dirty flag and
+        tree hash go into every skill-arm run record."""
+        tmp = self.dir / f"export-tmp-{os.getpid()}"
+        if tmp.exists():
+            shutil.rmtree(tmp)
+        info = sb.export_repo(REPO, tmp)
+        dest = self.dir / f"export-{info['tree_sha256'][:12]}"
+        if dest.is_dir():
+            shutil.rmtree(tmp)
+        else:
+            os.rename(tmp, dest)
+        info["dir"] = str(dest)
+        (self.dir / f"{dest.name}.json").write_text(
+            json.dumps(info, indent=1), encoding="utf-8")
+        self.export_info = info
         return dest
 
     def layout(self, arm: str, run_dir: Path, export: Path | None) -> sb.Layout:
@@ -403,15 +453,17 @@ class Round:
                               if layout.arm == "skill" else []),
                "proxy": f"127.0.0.1:{sb.PROXY_PORT}",
                "deny": list(probemod.DENY_TARGETS),
-               "allow": probemod.ALLOW_TARGET}
-        if base:
+               "allow": probemod.ALLOW_TARGET,
+               "roots": self.probe_roots}
+        if base and self.probe_roots == ["/"]:
             cfg.update(trusted_roots=list(TRUSTED_ROOTS),
                        trusted_before=base["at_epoch"])
         argv = sb.build_argv(layout, ["/usr/bin/python3",
                                       f"{sb.SB_OPT}/probe.py"])
         started = time.time()
         rd = layout.run_dir
-        with proxymod.ConnectProxy(layout.proxy_sock, rd / "proxy-probe.log"):
+        with proxymod.ConnectProxy(layout.proxy_sock, rd / "proxy-probe.log",
+                                   connect=self.proxy_connect):
             res = run_group(argv, json.dumps(cfg), rd / "probe.stdout",
                             rd / "probe.stderr", PROBE_WALL_S)
         verdict = parse_claude_json(rd / "probe.stdout") or {}
@@ -426,7 +478,7 @@ class Round:
             verdict["detail"] = "the probe printed no verdict: refused"
         (rd / "probe.json").write_text(json.dumps(verdict, indent=1),
                                        encoding="utf-8")
-        if ok and not base:
+        if ok and not base and self.probe_roots == ["/"]:
             (self.dir / "probe-baseline.json").write_text(json.dumps(
                 {"at_epoch": started, "at": now(), "roots": TRUSTED_ROOTS,
                  "run": str(rd)}, indent=1), encoding="utf-8")
@@ -449,7 +501,8 @@ class Round:
         rd = layout.run_dir
         argv = sb.build_argv(layout, cmd)
         out, err = rd / f"claude-{n}.stdout.json", rd / f"claude-{n}.stderr"
-        with proxymod.ConnectProxy(layout.proxy_sock, rd / "proxy.log"):
+        with proxymod.ConnectProxy(layout.proxy_sock, rd / "proxy.log",
+                                   connect=self.proxy_connect):
             res = run_group(argv, None, out, err, INVOCATION_WALL_S)
         j = parse_claude_json(out)
         rec = {"n": n, "cmd": cmd, "stdout": out.name, "stderr": err.name,
@@ -470,7 +523,12 @@ class Round:
         result = {"cell": cid, "skill": SKILL, "rung": RUNG, "arm": arm,
                   "detail": detail, "repeat": repeat, "model": MODEL,
                   "run_dir": str(rd), "workdir": str(layout.work),
-                  "budget_usd": budget, "started": now()}
+                  "budget_usd": budget, "started": now(),
+                  "repo": repo_state()}
+        if arm == "skill":
+            result["export"] = {k: (self.export_info or {}).get(k) for k in
+                                ("commit", "dirty", "tree_sha256", "files",
+                                 "dir")}
         verdict = self.run_probe(layout)
         result["probe"] = {k: verdict.get(k) for k in
                            ("ok", "status", "findings", "probe_rc",
@@ -546,7 +604,7 @@ class Round:
                 "--repeat", str(repeat), "--model", MODEL,
                 "--deliverables", str(work), "--hand-edits", "0",
                 "--session-cost-usd", f"{cost:.4f}", "--wall-s", f"{wall:.1f}",
-                "--results-dir", str(res_dir)]
+                "--results-dir", str(res_dir), "--no-regen"]
         try:
             res = run_group(argv, None, rd / "score.stdout", rd / "score.stderr",
                             SCORE_WALL_S)
@@ -566,13 +624,34 @@ class Round:
 
     # -- the round --------------------------------------------------------
     def run(self, only: str | None = None) -> dict:
-        self.dir.mkdir(parents=True, exist_ok=True)
+        """Plan, gate and run the cells. Past argument checks, every way the
+        round ends - finished, a limit, a refused probe, a run that raised -
+        goes through summarize(), which sends the one notice."""
         cells = plan_cells(only)
+        self.dir.mkdir(parents=True, exist_ok=True)
+        state, reason = "finished", None
+        plans: list[dict] = []
+        try:
+            state, reason = self._run_cells(cells, plans)
+        except CELL_ERRORS as exc:
+            state, reason = "stopped", f"{type(exc).__name__}: {exc}"
+        if self.dry_run:
+            ok = state == "finished"
+            return {"script": "round.py", "status": "pass" if ok else "violations",
+                    "state": "dry-run" if ok else f"dry-run stopped: {reason}",
+                    "plans": plans, "spent_usd": self.ledger.spent()}
+        summary = self.summarize(state, reason)
+        return {"script": "round.py",
+                "status": "pass" if state == "finished" else "violations",
+                "state": state if not reason else f"{state}: {reason}",
+                "plans": plans, "summary": str(self.dir / "summary.md"),
+                "spent_usd": self.ledger.spent(), **summary}
+
+    def _run_cells(self, cells, plans: list[dict]) -> tuple[str, str | None]:
         for d in {c[1] for c in cells}:
             spec_text(d)
         export = self.export() if any(c[0] == "skill" for c in cells) else None
         state, reason = "finished", None
-        plans = []
         for arm, detail, repeat in cells:
             cid = cell_id(arm, detail, repeat)
             if (self.results_dir / f"{cid}.json").is_file():
@@ -585,12 +664,19 @@ class Round:
             if not g["ok"]:
                 state, reason = "stopped", g["reason"]
                 break
-            result = self.run_cell(arm, detail, repeat,
-                                   g["budget"]["run_budget"], export)
+            try:
+                result = self.run_cell(arm, detail, repeat,
+                                       g["budget"]["run_budget"], export)
+            except CELL_ERRORS as exc:
+                state = "stopped"
+                reason = f"{cid} could not run: {type(exc).__name__}: {exc}"
+                break
             plan["probe"] = result["probe"]
             if result.get("refused"):
                 state = "stopped"
-                reason = f"probe refused {cid}: {result['probe'].get('findings') or result['probe'].get('detail')}"
+                pr = result["probe"]
+                reason = (f"probe refused {cid}: "
+                          f"{pr.get('findings') or pr.get('detail')}")
                 (self.dir / "refused").mkdir(exist_ok=True)
                 (self.dir / "refused" / f"{cid}-{now()}.json").write_text(
                     json.dumps(result, indent=1), encoding="utf-8")
@@ -608,25 +694,15 @@ class Round:
                 state = "stopped"
                 reason = f"host credentials file changed: {result['credentials']}"
                 break
-        if self.dry_run:
-            ok = state == "finished"
-            return {"script": "round.py", "status": "pass" if ok else "violations",
-                    "state": "dry-run" if ok else f"dry-run stopped: {reason}",
-                    "plans": plans, "spent_usd": self.ledger.spent()}
-        summary = self.summarize(state, reason)
-        return {"script": "round.py",
-                "status": "pass" if state == "finished" else "violations",
-                "state": state if not reason else f"{state}: {reason}",
-                "plans": plans, "summary": str(self.dir / "summary.md"),
-                "spent_usd": self.ledger.spent(), **summary}
+        return state, reason
 
     # -- summary ----------------------------------------------------------
     def summarize(self, state: str, reason: str | None) -> dict:
         runs = []
         for p in sorted(self.results_dir.glob("*.json")):
             r = json.loads(p.read_text(encoding="utf-8"))
-            runs.append({k: r.get(k) for k in ("cell", "arm", "detail", "repeat",
-                                                "cost_usd", "wall_s")} |
+            keys = ("cell", "arm", "detail", "repeat", "cost_usd", "wall_s")
+            runs.append({k: r.get(k) for k in keys} |
                         {"scored": (r.get("score") or {}).get("scored"),
                          "is_error": any(i.get("is_error") for i in
                                          r.get("invocations", [])),
@@ -667,7 +743,9 @@ class Round:
                + f". {len(runs)} of 18 runs have results, ${summary['spent_usd']:.2f}"
                f" spent. Summary: {self.dir / 'summary.md'}")
         summary["notice"] = self.notify_fn(state, msg)
-        return {"per_arm": per_arm}
+        (self.dir / "summary.json").write_text(json.dumps(summary, indent=1),
+                                               encoding="utf-8")
+        return {"per_arm": per_arm, "notice": summary["notice"]}
 
     def scorecard(self) -> dict:
         """scorecard.py --round when it has that option; never fatal."""
@@ -681,9 +759,9 @@ class Round:
                                capture_output=True, text=True, timeout=300)
             if "--round" not in h.stdout:
                 return {"ran": False, "why": "scorecard.py has no --round"}
-            out, md = self.dir / "round-scorecard.json", self.dir / "round-scorecard.md"
-            r = subprocess.run([eda, "python", str(sc), "--round", str(res_dir),
-                                "--out", str(out), "--md", str(md)],
+            out = res_dir / "round-scorecard.json"
+            md = res_dir / "round-scorecard.md"
+            r = subprocess.run([eda, "python", str(sc), "--round", str(res_dir)],
                                capture_output=True, text=True, timeout=1800)
             return {"ran": True, "rc": r.returncode,
                     "json": str(out) if out.is_file() else None,
