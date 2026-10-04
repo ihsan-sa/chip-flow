@@ -43,6 +43,10 @@ mutate:
   seed: 1
 formal:
   depth: 20
+  # COVER_VALID needs one completed gate window; formal/ builds the DUT
+  # with an 8-cycle window (spec.md), so reset plus a window fits in 40
+  # steps. At the real 1024 it needed ~2200 and ran into the task ceiling.
+  cover_depth: 40
 # Tiny Tapeout GF180 tile pin map (engine/lib/ttlib.py::generate_tt_wrapper).
 # rst_n is already active-low, so no `~` is needed the way counter8's
 # active-high rst needed one.

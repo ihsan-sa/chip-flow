@@ -29,6 +29,11 @@ block would drive at P2"), laid out exactly like a standalone `/vde` rung
   happens while `en` is high. While `en` is low the window counter is held
   at its reset value of 0 - not frozen part-way through a window, so
   re-enabling always starts a fresh, full window.
+- The window length is a parameter, `WINDOW`, defaulting to 1024; the
+  design is that default. Only the formal harness overrides it, with a
+  short window (8), so the formal gate can reach a completed window in a
+  few dozen solver steps: formal covers the window's logic at a reduced
+  length, and simulation covers the full 1024 and the 255 saturation.
 - `rst_n` is a SYNCHRONOUS, active-low reset: while `rst_n` is low, on every
   following clock edge `count` is 0, `valid` is 0 and both internal
   counters are held at 0.

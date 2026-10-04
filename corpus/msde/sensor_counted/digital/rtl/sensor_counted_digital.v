@@ -1,4 +1,10 @@
-module sensor_counted_digital (
+// WINDOW is the gate window in clk cycles: 1024 in the design (spec.md), and
+// set short only by the formal harness, so the formal gate reaches a full
+// window's logic in a few dozen solver steps (formal/'s own header says why
+// that is sound).
+module sensor_counted_digital #(
+    parameter integer WINDOW = 1024
+) (
     input  wire       clk,
     input  wire       rst_n,
     input  wire       en,
@@ -7,7 +13,8 @@ module sensor_counted_digital (
     output reg  [7:0] count,
     output reg        valid
 );
-  localparam WINDOW = 1024;
+  localparam integer WB = $clog2(WINDOW);
+  localparam [31:0] LAST = WINDOW - 1;
 
   // osc_en = en, combinational (spec.md "Behaviour").
   assign osc_en = en;
@@ -29,11 +36,11 @@ module sensor_counted_digital (
 
   wire osc_rise = osc_sync1 & ~osc_sync1_d;
 
-  // Gate window: 1024 clk cycles. window_cnt holds at reset (0) whenever
+  // Gate window: WINDOW clk cycles. window_cnt holds at reset (0) whenever
   // en is low - counting only ever happens while en is high.
-  reg [9:0] window_cnt;
+  reg [WB-1:0] window_cnt;
   reg [7:0] edge_cnt;
-  wire window_end = (window_cnt == WINDOW - 1);
+  wire window_end = (window_cnt == LAST[WB-1:0]);
   // this cycle's edge_cnt including any rising edge seen THIS cycle -
   // latched into count on the window-end cycle itself, so the edge that
   // completes the window is never dropped. Saturates at 255.
@@ -42,20 +49,20 @@ module sensor_counted_digital (
 
   always @(posedge clk) begin
     if (!rst_n) begin
-      window_cnt <= 10'd0;
+      window_cnt <= {WB{1'b0}};
       edge_cnt   <= 8'd0;
       count      <= 8'd0;
       valid      <= 1'b0;
     end else if (!en) begin
-      window_cnt <= 10'd0;
+      window_cnt <= {WB{1'b0}};
       edge_cnt   <= 8'd0;
     end else if (window_end) begin
-      window_cnt <= 10'd0;
+      window_cnt <= {WB{1'b0}};
       edge_cnt   <= 8'd0;
       count      <= edge_cnt_next;
       valid      <= 1'b1;
     end else begin
-      window_cnt <= window_cnt + 10'd1;
+      window_cnt <= window_cnt + 1'b1;
       edge_cnt   <= edge_cnt_next;
     end
   end

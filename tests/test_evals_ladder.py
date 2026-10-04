@@ -156,3 +156,81 @@ def test_reference_runs_are_baselines_not_skill_results(tmp_path):
     assert "| counter8 | not run |" in vde
     refs = md.split("## Reference baselines")[1]
     assert "| vde | counter8 | yes |" in refs and "uart" not in refs.split("## ")[0]
+
+
+# --- rulings: the owner's per-mutant rulings are their own field --------------
+
+RULINGS = """equivalent:
+  - id: 12
+    ruling: "owner, 2026-09-25"
+    evidence: "no output can observe it"
+"""
+
+
+def _ruled_ws(tmp_path: Path, digital: int = 1, analog: int = 1) -> Path:
+    """A /msde run with one rulings file per nested side, plus a stray copy
+    under runs/ that must not be counted."""
+    ws = tmp_path / "sensor_counted"
+    (ws / "runs" / "x" / "spec").mkdir(parents=True)
+    (ws / "runs" / "x" / "spec" / "mutant_rulings.yaml").write_text(RULINGS)
+    for side, n in (("digital", digital), ("analog", analog)):
+        (ws / side / "spec").mkdir(parents=True)
+        (ws / side / "spec" / "mutant_rulings.yaml").write_text(
+            "equivalent:\n" + "".join(
+                f"  - {{id: {i}, ruling: owner, evidence: why}}\n" for i in range(n))
+            if n else "")
+    (ws / "state.json").write_text(json.dumps({"skill": "msde", "block": "sensor_counted"}))
+    return ws
+
+
+def _score(monkeypatch, ws: Path, rulings: int, hand_edits: int = 0):
+    monkeypatch.setattr(ladder, "gates_green", lambda ws, data: [])
+    monkeypatch.setattr(ladder, "run_holdout", lambda ws, skill, rd: {"status": "n/a"})
+    return ladder.run(["--skill", "msde", "--rung", "sensor_counted", "--run", str(ws),
+                       "--hand-edits", str(hand_edits), "--rulings", str(rulings),
+                       "--results-dir", str(ws.parent / "r"),
+                       "--ladder-md", str(ws.parent / "ladder.md")])[0]
+
+
+def test_count_rulings_sums_every_nested_side_but_not_runs(tmp_path):
+    assert ladder.count_rulings(_ruled_ws(tmp_path, 2, 1)) == 3
+    assert ladder.count_rulings(_ruled_ws(tmp_path / "b", 0, 0)) == 0
+
+
+def test_declared_rulings_are_recorded_and_the_rung_still_counts(tmp_path, monkeypatch):
+    out = _score(monkeypatch, _ruled_ws(tmp_path), rulings=2)
+    assert out["status"] == "pass" and out["result"]["counts"] is True
+    assert out["result"]["rulings"] == 2 and out["result"]["rulings_undeclared"] == 0
+    assert out["result"]["hand_edits"] == 0
+    row = [ln for ln in (tmp_path / "ladder.md").read_text().splitlines()
+           if ln.startswith("| sensor_counted |")][0]
+    assert row.startswith("| sensor_counted | yes |  | n/a | 2 |")
+
+
+def test_undeclared_rulings_stop_the_rung_like_hand_edits(tmp_path, monkeypatch):
+    out = _score(monkeypatch, _ruled_ws(tmp_path), rulings=1)
+    assert out["result"]["counts"] is False
+    assert out["result"]["rulings"] == 1 and out["result"]["rulings_undeclared"] == 1
+    assert [v["kind"] for v in out["violations"]] == ["rulings_undeclared"]
+    row = [ln for ln in (tmp_path / "ladder.md").read_text().splitlines()
+           if ln.startswith("| sensor_counted |")][0]
+    assert "| no | undeclared rulings |" in row
+
+
+def test_hand_edits_still_stop_a_ruled_rung(tmp_path, monkeypatch):
+    out = _score(monkeypatch, _ruled_ws(tmp_path), rulings=2, hand_edits=1)
+    assert out["result"]["counts"] is False
+    assert [v["kind"] for v in out["violations"]] == ["hand_edits"]
+
+
+def test_declaring_more_rulings_than_the_run_holds_is_an_error(tmp_path, monkeypatch):
+    with pytest.raises(CheckError, match="hold 2 entries"):
+        _score(monkeypatch, _ruled_ws(tmp_path), rulings=3)
+
+
+def test_an_old_result_without_rulings_renders_a_dash(tmp_path):
+    res = tmp_path / "results"
+    _write(res, "2026-09-02T000000_vde_uart.json", _result("uart", True))
+    row = [ln for ln in ladder.render(res, tmp_path / "f").splitlines()
+           if ln.startswith("| uart |")][0]
+    assert row.startswith("| uart | yes |  | pass (1/1) | - | 0.74 |")
