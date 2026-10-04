@@ -307,3 +307,83 @@ def test_blackbox_stub_does_not_hide_a_missing_cell(tmp_path, capsys):
     out = json.loads(capsys.readouterr().out)
     assert code == 0, out
     assert out["std_cell"]["source"] == "tt_template"
+
+
+# ---- a hierarchical design (top + submodules): synth flattens, so the
+# design's own modules are never counted as cells (they used to come back
+# cell_not_in_liberty, one per submodule plus stat's "submodules" row),
+# while a genuinely foreign cell inside a submodule still fails.
+
+HIER_V = """\
+module top (input wire clk, input wire rst, output wire [3:0] count,
+            output wire d);
+  wire [3:0] c;
+  ctr u_ctr (.clk(clk), .rst(rst), .count(c));
+  dly u_dly (.a(c[0]), .z(d));
+  assign count = c;
+endmodule
+module ctr (input wire clk, input wire rst, output reg [3:0] count);
+  always @(posedge clk) count <= rst ? 4'd0 : count + 4'd1;
+endmodule
+module dly (input wire a, output wire z);
+  (* keep *) wire mid;
+  (* keep *) gf180mcu_fd_sc_mcu7t5v0__dlya_1 u_d0 (.I(a), .Z(mid));
+  (* keep *) gf180mcu_fd_sc_mcu7t5v0__dlya_1 u_d1 (.I(mid), .Z(z));
+endmodule
+"""
+
+# the same hierarchy, but a submodule instantiates a cell no gf180mcu
+# library has, behind a blackbox stub so yosys elaborates it.
+HIER_FOREIGN_V = HIER_V.replace(
+    "gf180mcu_fd_sc_mcu7t5v0__dlya_1 u_d1", "foreign_dly u_d1") + """\
+(* blackbox *)
+module foreign_dly (input wire I, output wire Z);
+endmodule
+"""
+
+TT_LIB = "std_cell: {library: gf180mcu_fd_sc_mcu7t5v0, corner: tt_025C_3v30}\n"
+
+
+@pytest.mark.slow
+def test_hierarchical_design_passes_and_keeps_its_cells(tmp_path, capsys):
+    ws = make_ws(tmp_path, HIER_V)
+    _spec(ws, TT_LIB + "must_keep: [u_d0, u_d1]\n")
+    code = check_synth.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0, out
+    assert out["violations"] == []
+    assert all(c.startswith("gf180mcu_fd_sc_mcu7t5v0__") for c in out["cells"])
+    assert out["cells"]["gf180mcu_fd_sc_mcu7t5v0__dlya_1"] == 2
+    # the counter's flops inside u_ctr are counted, not hidden behind it
+    assert any("dff" in c for c in out["cells"])
+    assert (ws / "synth" / "top.json").is_file()
+
+
+@pytest.mark.slow
+def test_hierarchical_design_with_a_foreign_cell_fails(tmp_path, capsys):
+    ws = make_ws(tmp_path, HIER_FOREIGN_V)
+    _spec(ws, TT_LIB)
+    code = check_synth.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 1, out
+    assert [(v["kind"], "foreign_dly" in v["msg"])
+            for v in out["violations"]] == [("cell_not_in_liberty", True)]
+
+
+@pytest.mark.slow
+def test_must_keep_name_lost_in_synth_fails(tmp_path, capsys):
+    ws = make_ws(tmp_path, HIER_V)
+    _spec(ws, TT_LIB + "must_keep: [u_d0, u_gone]\n")
+    code = check_synth.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 1, out
+    v = [v for v in out["violations"] if v["kind"] == "must_keep_removed"]
+    assert len(v) == 1 and "u_gone" in v[0]["msg"]
+    assert "u_d0" not in v[0]["msg"]
+
+
+@pytest.mark.parametrize("bad", ["u_d0", [""], [3]])
+def test_must_keep_must_be_a_list_of_names(bad):
+    with pytest.raises(check_synth.CheckError):
+        check_synth.spec_must_keep({"must_keep": bad})
+    assert check_synth.spec_must_keep({}) == []

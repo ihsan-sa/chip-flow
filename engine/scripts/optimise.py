@@ -127,6 +127,7 @@ ENGINE = SCRIPTS.parent
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(ENGINE / "lib"))
 import checklib  # noqa: E402
+from check_synth import must_keep_missing  # noqa: E402
 import corners as corners_mod  # noqa: E402
 import sim_run  # noqa: E402
 import simlib  # noqa: E402
@@ -616,6 +617,7 @@ hierarchy -check -top {top}
 synth -flatten -top {top}
 dfflibmap -liberty {liberty}
 abc -liberty {liberty}
+delete t:$scopeinfo
 opt_clean
 stat -liberty {liberty}
 write_verilog -noattr synth/{top}.v
@@ -849,22 +851,6 @@ def _run_tool(ew: Path, *cmd: str, stdout_only: bool = False) -> str:
         raise CheckError(f"eda {cmd[0]} exited {proc.returncode}: "
                          f"{output[-1500:]}")
     return proc.stdout if stdout_only else output
-
-
-def must_keep_missing(netlist_json: dict, top: str, names: list[str]) -> list[str]:
-    """section 4: "`must_keep` cells are checked after synth". A name is
-    kept when a cell (or a net, for a signal) of the flattened netlist is
-    that name, ends in `.<name>`, or sits under instance `<name>.`."""
-    mod = (netlist_json.get("modules") or {}).get(top) or {}
-    have = set((mod.get("cells") or {}).keys()) | set(
-        (mod.get("netnames") or {}).keys())
-    have = {h.lstrip("\\") for h in have}
-    missing = []
-    for n in names:
-        if not any(h == n or h.endswith("." + n) or h.startswith(n + ".")
-                   for h in have):
-            missing.append(n)
-    return missing
 
 
 def port_mismatch(netlist_json: dict, top: str, ports: dict) -> list[str]:

@@ -5,8 +5,23 @@
 
 Runs yosys (through `bin/eda`) over rtl/*.v: `read_liberty -lib` of the
 chosen standard-cell liberty (so the RTL may instantiate its cells directly),
-generic `synth -top`, then `dfflibmap`/`abc` against that same liberty,
-writing the mapped netlist to `synth/<top>.v`.
+generic `synth -flatten -top`, then `dfflibmap`/`abc` against that same
+liberty, writing the mapped netlist to `synth/<top>.v` (and its JSON to
+`synth/<top>.json`).
+
+Why flattened: on a hierarchical netlist `stat` prints one section per
+module, and the last one - the top's - lists the design's own submodules
+(and a "submodules" summary row) as if they were cells, while the cells
+inside those submodules are never seen at all. A latch or unmapped cell in
+a submodule would pass and every submodule would fail as a cell missing
+from the liberty. Flattened, the top's one section holds every leaf cell,
+and the area is the whole design's. Flattening could only cost a cell the
+design hand-instantiated, so spec.yaml's `must_keep` (instance or net
+names, the same list the optimiser keeps - docs/design.md section 4) is
+checked on the flattened netlist: a name it no longer has is a finding.
+`flatten` leaves one `$scopeinfo` cell per former instance - names only,
+no logic, no area - and they are deleted before `stat`, so they are never
+read as unmapped cells.
 
 Which liberty: spec.yaml's optional `std_cell: {library, corner}` (e.g.
 `{library: gf180mcu_fd_sc_mcu7t5v0, corner: tt_025C_3v30}`). Without it, a
@@ -17,7 +32,7 @@ with), and any other spec gets gf180mcu_fd_sc_mcu9t5v0 tt_025C_5v00.
 `--liberty` overrides all three.
 
 Pass criteria (gates.yaml `synth` row): no latches, unmapped cells or
-combinational loops; area recorded.
+combinational loops, no `must_keep` name lost; area recorded.
   combinational loop  yosys's own `synth`/`opt` passes ALREADY detect and
                        print "Warning: found logic loop in module ..." as
                        part of the normal flow (proved empirically - no
@@ -47,6 +62,10 @@ combinational loops; area recorded.
                        an inferred latch pre-synthesis; this is the same
                        check one stage later, in case something reaches
                        synth without going through lint first.
+  must_keep removed    a spec.yaml `must_keep` name that neither a cell nor
+                       a net of the flattened top carries (`<name>`, a
+                       hierarchical `....<name>` or anything under
+                       `<name>.`) - optimised or flattened away.
 `check -assert` was tried and rejected here: on this exact liberty/ABC
 recipe it reports "Wire counter8.count[N] is used but has no driver" on
 every clean, correctly-synthesized design (verified against the final
@@ -59,6 +78,7 @@ free-text warnings and `stat`'s cell histogram directly instead.
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import subprocess
 import sys
@@ -179,16 +199,19 @@ def run_yosys(ws: Path, top: str, rtl_files: list[Path], liberty: Path,
     script = ws / "log" / "synth.ys"
     script.parent.mkdir(parents=True, exist_ok=True)
     out_v.parent.mkdir(parents=True, exist_ok=True)
+    out_v.with_suffix(".json").unlink(missing_ok=True)
     script.write_text(f"""\
 read_liberty -lib {liberty}
 {chr(10).join(f'read_verilog {f}' for f in rel)}
 hierarchy -top {top}
-synth -top {top}
+synth -flatten -top {top}
 dfflibmap -liberty {liberty}
 abc -liberty {liberty}
+delete t:$scopeinfo
 clean
 stat -liberty {liberty}
 write_verilog {out_v.relative_to(ws)}
+write_json {out_v.with_suffix('.json').relative_to(ws)}
 """, encoding="utf-8")
     try:
         proc = subprocess.run(
@@ -236,6 +259,31 @@ def cell_histogram(output: str) -> dict[str, int]:
     return cells
 
 
+def must_keep_missing(netlist_json: dict, top: str, names: list[str]) -> list[str]:
+    """section 4: "`must_keep` cells are checked after synth". A name is
+    kept when a cell (or a net, for a signal) of the flattened netlist is
+    that name, ends in `.<name>`, or sits under instance `<name>.`."""
+    mod = (netlist_json.get("modules") or {}).get(top) or {}
+    have = set((mod.get("cells") or {}).keys()) | set(
+        (mod.get("netnames") or {}).keys())
+    have = {h.lstrip("\\") for h in have}
+    missing = []
+    for n in names:
+        if not any(h == n or h.endswith("." + n) or h.startswith(n + ".")
+                   for h in have):
+            missing.append(n)
+    return missing
+
+
+def spec_must_keep(spec: dict) -> list[str]:
+    keep = spec.get("must_keep") or []
+    if not isinstance(keep, list) or not all(
+            isinstance(n, str) and n.strip() for n in keep):
+        raise CheckError("spec.yaml 'must_keep' must be a list of instance "
+                         "or net names")
+    return keep
+
+
 def run(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--workspace", required=True, help="block workspace")
@@ -251,6 +299,7 @@ def run(argv=None):
     if not isinstance(top, str) or not top.strip():
         raise CheckError("spec.yaml has no non-empty 'top' - run spec_lint "
                          "first")
+    keep = spec_must_keep(spec)
     rtl_files = collect_sources(ws)
     if args.liberty:
         std_cell = {"library": None, "corner": None, "source": "--liberty"}
@@ -316,6 +365,19 @@ def run(argv=None):
             "synth", "error", None, None, "latch", [],
             f"{cells[name]} instance(s) of latch cell {name} in the "
             "synthesized netlist", "yosys"))
+
+    netlist_json = out_v.with_suffix(".json")
+    try:
+        nl = json.loads(netlist_json.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise CheckError(f"yosys wrote no readable {netlist_json.name}, so "
+                         f"must_keep could not be checked: {exc}") from exc
+    for name in must_keep_missing(nl, top, keep):
+        violations.append(checklib.violation(
+            "synth", "error", None, top, "must_keep_removed", [],
+            f"spec.yaml must_keep names {name}, but no cell or net of the "
+            "flattened netlist carries it - mark the instance and its nets "
+            "(* keep *) so synthesis cannot remove it", "yosys"))
 
     m = AREA_RE.search(output)
     area = float(m.group(2)) if m else None
