@@ -278,12 +278,13 @@ verbs:
         why: "two engines - smtbmc k-induction for a full proof, abc pdr
               as the second opinion - plus cover points, straight from
               gate.py's own recorded result"
-      - note: "A property_failed finding routes to rtl (formal is what sim
-               cannot prove - docs/design.md section 2). An
-               engine_disagreement or a cover_not_reached routes to formal
-               (fix_dispatch.DOMAINS['formal']): widen the induction depth
-               or fix the property, never loosen it to make the gate
-               pass."
+      - note: "A property_failed, engine_disagreement or cover_not_reached
+               finding routes to formal (fix_dispatch.DOMAINS['formal']):
+               the property-writer reads the counterexample against the
+               spec; a wrong property is fixed, never loosened, and a right
+               one is left with an OPEN note so the orchestrator
+               re-dispatches the finding to rtl (formal is what sim cannot
+               prove - docs/design.md section 2)."
 
   # -------------------------------------------------------------------------
   mutate:

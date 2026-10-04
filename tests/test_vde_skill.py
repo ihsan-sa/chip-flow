@@ -172,6 +172,12 @@ def test_mutate_and_holdout_kinds_never_route_to_rtl_writer_by_accident():
         assert cluster_violations.FIXER_HINTS[f"survivor_{cls}"] == "testbench"
 
 
+def test_property_failed_routes_to_formal_first():
+    """The property-writer triages the counterexample against the spec; a
+    correct property goes on to rtl via its OPEN note, never the reverse."""
+    assert cluster_violations.FIXER_HINTS["property_failed"] == "formal"
+
+
 def test_every_corpus_fault_kind_has_a_remediation_reference():
     rem_dir = SKILL / "reference" / "remediations"
     for kind in sorted(_manifest_kinds()):

@@ -130,7 +130,9 @@ FIXER_HINTS: dict[str, str] = {
     "survivor_other": "testbench",
 
     # formal (check_formal.py)
-    "property_failed": "rtl",
+    # the property-writer reads the counterexample against the spec first;
+    # a correct property goes on to rtl via its OPEN note
+    "property_failed": "formal",
     "engine_disagreement": "formal",
     "bounded_not_proven": "formal",
     "cover_not_reached": "formal",
