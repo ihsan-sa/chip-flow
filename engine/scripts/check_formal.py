@@ -133,24 +133,37 @@ formal/*.sv, and only when spec.yaml's `formal.async_reset_cuts` names the
 exact instance. Each entry is `{signal, why}` - `signal` the flop's own Q
 net, dotted the same way a hierarchical reference already is elsewhere in
 this file (`dut.up`), `why` the reason a human wrote down (async_reset_cuts,
-never inferred from the netlist). Before sby ever runs, build_cut_il preps
-and flattens the design once, then cut_async_reset_net text-edits the
-resulting RTLIL: a new one-bit `$dff` samples the flop's old ARST net on its
-own CLK, and the flop's ARST is repointed to that now-registered copy - a
-real net-level cut, computed and inspectable (`log/formal/cut.il`), not a
-synthesis directive. Every sby task then reads that .il directly instead of
-the source files. Only a plain async-reset flop (`$adff`/`$adffe`) is
-covered; a `signal` that resolves to another async cell ($dffsr, $dlatch,
-...) or to nothing at all is refused (async_reset_cut_signal), same as a
-loop nobody declared (see below). The report carries `async_reset_cuts`
-(the applied entries) and, when any were applied, `async_reset_cuts_note`:
-the proof this run reports as proven/bounded holds for the design's clock
-edges under a ONE-STEP-DELAYED version of the cut reset, not the RTL's own
-zero-delay async clear - it cannot show the glitch-width reset behaviour
-(both flops briefly both-set before the real, instant clear catches up),
-which stays sim's job, never formal's (docs/design.md says the same).
-Each applied cut is also an info finding (async_reset_cut_applied), so a
-pass resting on a cut never reads as an unqualified pass.
+never inferred from the netlist). Before sby ever runs, build_cut_il preps,
+flattens and `dffunmap`s the design once, then cut_async_reset_nets
+text-edits the resulting RTLIL (a real net-level edit, inspectable in
+`log/formal/cut.il`, never a synthesis directive). What it abstracts is
+the loop's feedback and nothing else: inside each declared flop's ARST
+cone, every declared flop's Q is replaced by that flop's PRE-RESET value -
+the value clk2fflogic gives it before this step's async reset, built from
+the previous step's Q, D and ARST (one `$ff` each) and the clock edge - and
+only the cone cells on a path from a declared Q are copied. Every other
+ARST input (an external `~rst_n`) still reaches ARST in the same step, so
+a reset requirement is scored exactly as the RTL has it, and the clear
+still lands in the very step the second flop sets, so "never both high"
+holds as it does in zero-delay sim once the clear has settled. What the
+model cannot show is the delta-cycle glitch itself (both flops briefly
+both-set before the clear catches up) and the reset pulse's width - sim's
+job, never formal's. The PRE value copies clk2fflogic's own $adff model
+(yosys 0.69), so each cut also carries a self-check assert
+(`<signal>$async_cut_matches_clk2fflogic`) that the flop's real Q is the
+cut ARST applied to PRE from step 1 on; a counterexample to it, or sby
+never reporting it, is refused (check_cut_model) - a yosys that models
+the flop differently can never pass through a stale cut. Only a plain
+async-reset flop (`$adff`, or `$adffe` once `dffunmap` has split off its
+enable) is covered; a `signal` that resolves to another async cell
+($dffsr, $dlatch, ...) or to nothing at all, an ARST cone that reads a
+part-select or concatenation, passes through a cell this gate does not
+copy, or reads no declared Q at all (the declaration cuts nothing), is
+refused (async_reset_cut_signal), same as a loop nobody declared (see
+below). The report carries `async_reset_cuts` (the applied entries) and,
+when any were applied, `async_reset_cuts_note` saying the above, and each
+applied cut is also an info finding (async_reset_cut_applied), so a pass
+resting on a cut never reads as an unqualified pass.
 
 Refuses (CheckError, never a pass) rather than reports a finding when: no
 requirement in spec.yaml has check: formal|both (an empty property set -
@@ -166,7 +179,8 @@ slang needed but unavailable or
 unable to read the design (see Frontend above); any sby task fails to reach a DONE line at all (a crashed
 launcher, a solver missing, a syntax error before the model even builds);
 formal.async_reset_cuts is malformed, names a signal that is not a plain
-async-reset flop's Q, or a task's own log shows "Found logic loop" in a
+async-reset flop's Q, has an ARST cone the cut cannot rebuild, has a
+self-check assert that fails or never ran (check_cut_model), or a task's own log shows "Found logic loop" in a
 module and no cut was declared for it (async_reset_cut_signal /
 async_reset_loop_undeclared - see Async self-reset loops above).
 """
@@ -217,10 +231,12 @@ CLOCKED_CELLS = "t:$*dff* t:$*dlatch* t:$sr t:$check t:$memrd* t:$memwr*"
 ASYNC_CELLS = {"$adff", "$adffe", "$aldff", "$aldffe", "$dffsr", "$dffsre",
                "$dlatch", "$adlatch", "$dlatchsr", "$sr"}
 CELL_RE = re.compile(r"(?m)^\s*cell (\$\S+) (\S+)$")
-# the only async-reset cell shapes cut_async_reset_net knows how to cut - a
-# plain CLK+ARST flop, nothing with a SET port, a latch, or an enable that
-# changes what ARST means (see cut_async_reset_net)
-ASYNC_CUT_CELL_TYPES = ("$adff", "$adffe")
+# the only async-reset cell shape cut_async_reset_nets knows how to cut - a
+# plain CLK+ARST flop, nothing with a SET port or a latch; build_cut_il's
+# `dffunmap` has already turned an $adffe into an $adff and a $mux
+ASYNC_CUT_CELL_TYPES = ("$adff",)
+# the id of each cut's own self-check assert (see cut_async_reset_nets)
+ASYNC_CUT_CHECK_SUFFIX = "$async_cut_matches_clk2fflogic"
 CUT_IL_NAME = "cut.il"
 LOGIC_LOOP_RE = re.compile(r"(?i)found logic loop in module (\S+?)[:!]")
 ASYNC_CUT_FIX = (" (spec.yaml formal.async_reset_cuts: [{signal, why}, ...] "
@@ -394,104 +410,343 @@ def async_reset_cuts(spec: dict) -> list[dict]:
 
 
 CELL_BLOCK_START_RE = re.compile(r"^(\s*)cell (\$\S+) (\S+)$")
+WIRE_DECL_RE = re.compile(r"^\s*wire\b(.*?)\s(\S+)$")
+CONST_SIG_RE = re.compile(r"^(-?\d+|\d+'[01xzm-]*)$")
+# combinational cells whose one output is \Y and every other port an input:
+# the only cells cut_async_reset_nets copies when it rebuilds an ARST cone
+CUT_COMB_CELLS = {
+    "$not", "$pos", "$neg", "$buf", "$and", "$or", "$xor", "$xnor",
+    "$reduce_and", "$reduce_or", "$reduce_xor", "$reduce_xnor",
+    "$reduce_bool", "$logic_not", "$logic_and", "$logic_or", "$mux",
+    "$pmux", "$eq", "$ne", "$eqx", "$nex", "$lt", "$le", "$gt", "$ge",
+    "$add", "$sub", "$shl", "$shr", "$sshl", "$sshr"}
+# cells with a \Y that is a free solver value, not a function of any net -
+# a leaf of the cone, never copied
+CUT_LEAF_Y_CELLS = {"$anyseq", "$anyconst", "$allseq", "$allconst",
+                    "$initstate"}
 
 
-def cut_async_reset_net(text: str, signal: str) -> tuple[str, str]:
-    """(edited RTLIL text, cut cell's type) after text-editing one
-    already-`prep -top`'d-and-`flatten`'d module's RTLIL (see build_cut_il)
-    so the flop whose own Q is `signal` no longer feeds its ARST port
-    combinationally: a new one-bit $dff samples the flop's old ARST net on
-    the flop's own CLK (same CLK_POLARITY), and the flop's own ARST
-    connection is repointed to that now-registered copy - a real net-level
-    edit, never a synthesis directive. Only $adff/$adffe (a plain
-    CLK+ARST reset flop) is covered (ASYNC_CUT_CELL_TYPES); `signal` naming
-    a different async cell ($dffsr, $dlatch, ...) or no cell's Q at all is a
-    CheckError, same wording either way - this route does not (yet) know
-    how to cut it, or the RTL was renamed since spec.yaml was written.
-    Pure (no I/O, no yosys) so the edit itself is testable without sby."""
+def _cut_refuse(why: str) -> CheckError:
+    return CheckError(f"formal.async_reset_cuts: {why}" + ASYNC_CUT_FIX)
+
+
+def cut_async_reset_nets(text: str, signals: list[str]) -> tuple[str, dict[str, str]]:
+    """(edited RTLIL text, {signal: cut flop's cell type}) after
+    text-editing one already-`prep -top`'d-and-`flatten`'d module's RTLIL
+    (see build_cut_il) so no declared flop's own Q - nor any other declared
+    Q - reaches a declared flop's ARST combinationally. Each declared
+    `signal` gets a PRE-RESET copy (`<signal>$async_pre`, built below from
+    `$ff`s of the previous step's Q, D and cut ARST plus the clock edge,
+    the way clk2fflogic models the flop). Each declared flop's ARST cone -
+    the combinational cells (CUT_COMB_CELLS) and module-level `connect`
+    aliases behind its ARST net - is rebuilt as a copy (`<net>$async_cut`)
+    reading that PRE copy wherever the original read a declared Q; only the
+    cells on a path from a declared Q are copied, so every other ARST input
+    (an external `~rst_n`) still reaches ARST in the same step, and the
+    original cone still drives everything else it drove. Each cut also gets
+    a `$assert` named `<signal>` + ASYNC_CUT_CHECK_SUFFIX that, from step 1
+    on, the flop's Q is the cut ARST applied to PRE (check_cut_model reads
+    it). A real net-level edit, never a synthesis directive.
+
+    Refuses (CheckError) rather than guess: a `signal` that is no cell's
+    whole Q, or a cell other than $adff (ASYNC_CUT_CELL_TYPES), or one
+    whose CLK/D/polarity/reset value it cannot read; an
+    ARST cone that reads a part-select or concatenation, passes through a
+    cell outside CUT_COMB_CELLS, or loops combinationally on its own; and
+    an ARST cone that reads no declared Q at all (the declaration cuts
+    nothing, so it is not the loop it claims to be). Pure (no I/O, no
+    yosys) so the edit is testable without sby."""
     lines = text.split("\n")
-    q_line = f"connect \\Q \\{signal}"
-    other_type: str | None = None
-    i, n = 0, len(lines)
+    n = len(lines)
+    # per module (keyed by its `module` line): every cell block, each
+    # wire's width, each module-level `connect` whose lhs is one whole
+    # wire, and the wires something drives only in part
+    cells: list[dict] = []
+    all_wires: dict[int | None, dict[str, str]] = {}
+    all_aliases: dict[int | None, dict[str, str]] = {}
+    all_partial: dict[int | None, set[str]] = {}
+    module_line = None
+    i = 0
     while i < n:
+        s = lines[i].strip()
+        if s.startswith("module "):
+            module_line = i
         m = CELL_BLOCK_START_RE.match(lines[i])
-        if not m:
-            i += 1
+        if m:
+            j = i + 1
+            conns, conn_line, params = {}, {}, {}
+            while lines[j].strip() != "end":
+                parts = lines[j].strip().split(" ", 2)
+                if parts[0] == "connect" and len(parts) == 3:
+                    conns[parts[1]] = parts[2]
+                    conn_line[parts[1]] = j
+                elif parts[0] == "parameter" and len(parts) == 3:
+                    params[parts[1]] = parts[2]
+                j += 1
+            cells.append({"type": m.group(2), "name": m.group(3),
+                          "indent": m.group(1), "start": i, "end": j,
+                          "module": module_line, "conns": conns,
+                          "conn_line": conn_line, "params": params})
+            i = j + 1
             continue
-        j = i + 1
-        while lines[j].strip() != "end":
-            j += 1
-        block = lines[i:j + 1]
-        if any(bl.strip() == q_line for bl in block):
-            ctype = m.group(2)
-            if ctype not in ASYNC_CUT_CELL_TYPES:
-                other_type = ctype
-                break
-            indent = m.group(1)
-            clk = arst = clk_pol = None
-            for bl in block:
-                bs = bl.strip()
-                if bs.startswith("connect \\CLK "):
-                    clk = bs.split(" ", 2)[2]
-                elif bs.startswith("connect \\ARST "):
-                    arst = bs.split(" ", 2)[2]
-                elif bs.startswith("parameter \\CLK_POLARITY "):
-                    clk_pol = bs.split(" ", 2)[2]
-            if clk is None or arst is None or clk_pol is None:
-                raise CheckError(
-                    f"formal.async_reset_cuts names {signal!r}: its "
-                    f"{ctype} cell has no CLK/ARST/CLK_POLARITY this gate "
-                    "can read - not a plain async-reset flop"
-                    + ASYNC_CUT_FIX)
-            cut_wire = f"\\{signal}$async_cut"
-            new_block = []
-            for ln in block:
-                if ln.strip() == f"connect \\ARST {arst}":
-                    body_indent = ln[:len(ln) - len(ln.lstrip())]
-                    new_block.append(f"{body_indent}connect \\ARST {cut_wire}")
-                else:
-                    new_block.append(ln)
-            cut_cell = [
-                f"{indent}wire {cut_wire}",
-                f"{indent}cell $dff \\{signal}$async_cut_reg",
-                f"{indent}  parameter \\WIDTH 1",
-                f"{indent}  parameter \\CLK_POLARITY {clk_pol}",
-                f"{indent}  connect \\CLK {clk}",
-                f"{indent}  connect \\D {arst}",
-                f"{indent}  connect \\Q {cut_wire}",
-                f"{indent}end",
-            ]
-            edited = lines[:i] + cut_cell + new_block + lines[j + 1:]
-            return "\n".join(edited), ctype
-        i = j + 1
-    if other_type is not None:
-        raise CheckError(
-            f"formal.async_reset_cuts names {signal!r}, but it is a "
-            f"{other_type} cell's Q, not $adff/$adffe - this route only "
-            "cuts a plain async-reset flop" + ASYNC_CUT_FIX)
-    raise CheckError(
-        f"formal.async_reset_cuts names {signal!r}, which is not any "
-        "cell's own Q in the flattened formal model - check the flop's net "
-        "name (dotted the way a hierarchical reference is elsewhere in "
-        "this gate, e.g. `dut.up`) and that it still exists"
-        + ASYNC_CUT_FIX)
+        if s.startswith("wire "):
+            wm = WIRE_DECL_RE.match(lines[i])
+            if wm:
+                toks = wm.group(1).split()
+                width = toks[toks.index("width") + 1] if "width" in toks else "1"
+                all_wires.setdefault(module_line, {})[wm.group(2)] = width
+        elif s.startswith("connect "):
+            toks = s.split()[1:]
+            if len(toks) == 2 and toks[0] != "{":
+                all_aliases.setdefault(module_line, {})[toks[0]] = toks[1]
+            else:   # lhs is the first sigspec: `{ ... }` or `\w [i:j]`
+                end = (toks.index("}") + 1 if toks[0] == "{" else
+                       2 if len(toks) > 1 and toks[1].startswith("[") else 1)
+                all_partial.setdefault(module_line, set()).update(
+                    t for t in toks[:end] if t[0] in "\\$")
+        i += 1
+
+    def is_wire(sig: str) -> bool:
+        return " " not in sig and sig[0] in "\\$" and not sig.startswith("{")
+
+    flops: dict[str, dict] = {}
+    for signal in signals:
+        q = f"\\{signal}"
+        owner = next((c for c in cells if c["conns"].get("\\Q") == q), None)
+        if owner is None:
+            raise CheckError(
+                f"formal.async_reset_cuts names {signal!r}, which is not any "
+                "cell's own Q in the flattened formal model - check the "
+                "flop's net name (dotted the way a hierarchical reference is "
+                "elsewhere in this gate, e.g. `dut.up`) and that it still "
+                "exists" + ASYNC_CUT_FIX)
+        if owner["type"] not in ASYNC_CUT_CELL_TYPES:
+            raise CheckError(
+                f"formal.async_reset_cuts names {signal!r}, but it is a "
+                f"{owner['type']} cell's Q, not a plain $adff - this route "
+                "only cuts a plain async-reset flop" + ASYNC_CUT_FIX)
+        if "\\ARST" not in owner["conns"] or "\\WIDTH" not in owner["params"]:
+            raise _cut_refuse(
+                f"{signal!r}'s {owner['type']} cell has no ARST/WIDTH this "
+                "gate can read - not a plain async-reset flop")
+        arst = owner["conns"]["\\ARST"]
+        if not is_wire(arst):
+            raise _cut_refuse(
+                f"{signal!r}'s ARST is {arst!r}, not one whole net - this "
+                "gate cannot cut a reset it cannot trace")
+        if any(f["module"] != owner["module"] for f in flops.values()):
+            raise _cut_refuse("the declared signals sit in different modules")
+        flops[signal] = owner
+
+    mod = next(iter(flops.values()))["module"]
+    wires = all_wires.get(mod, {})
+    aliases = all_aliases.get(mod, {})
+    partial = all_partial.get(mod, set())
+    drivers: dict[str, dict] = {}
+    for c in cells:
+        y = c["conns"].get("\\Y")
+        if c["module"] != mod or y is None:
+            continue
+        if is_wire(y):
+            drivers[y] = c
+        else:
+            partial.update(t for t in y.replace("{", " ").split()
+                           if t[0] in "\\$")
+
+    new_wires: list[str] = []
+    new_cells: list[str] = []
+    indent = next(iter(flops.values()))["indent"]
+
+    def add_wire(name: str, width: str) -> str:
+        if name in wires:
+            raise _cut_refuse(f"{name} already exists in the formal model")
+        wires[name] = width
+        new_wires.append(f"{indent}wire width {width} {name}")
+        return name
+
+    def add_cell(ctype: str, name: str, params: dict, conns: dict) -> None:
+        new_cells.append(f"{indent}cell {ctype} {name}")
+        new_cells.extend(f"{indent}  parameter {k} {v}" for k, v in params.items())
+        new_cells.extend(f"{indent}  connect {k} {v}" for k, v in conns.items())
+        new_cells.append(f"{indent}end")
+
+    def add_ff(name: str, d: str, width: str) -> str:
+        q = add_wire(name, width)
+        add_cell("$ff", f"{name}_ff", {"\\WIDTH": width},
+                 {"\\D": d, "\\Q": q})
+        return q
+
+    def add_mux(name: str, width: str, a: str, b: str, s: str) -> str:
+        y = add_wire(name, width)
+        add_cell("$mux", f"{name}_mux", {"\\WIDTH": width},
+                 {"\\A": a, "\\B": b, "\\S": s, "\\Y": y})
+        return y
+
+    # Each declared Q's pre-reset value, rebuilt the way clk2fflogic (sby's
+    # multiclock prep, yosys 0.69) models an $adff:
+    #   Q[k] = ARST[k] ? R : (ARST[k-1] ? R : (edge[k] ? D[k-1] : Q[k-1]))
+    # PRE is everything right of the first `?`: it reads only the previous
+    # step's Q, D and ARST (one `$ff` each) and the clock, never this step's
+    # Q, so a cone that reads PRE in place of Q has no loop and the clear
+    # still lands in the step the flop sets.
+    q_copy: dict[str, str] = {}
+    for signal, flop in flops.items():
+        q, w = f"\\{signal}", flop["params"]["\\WIDTH"]
+        clk_pol = flop["params"].get("\\CLK_POLARITY")
+        arst_pol = flop["params"].get("\\ARST_POLARITY")
+        rval = flop["params"].get("\\ARST_VALUE")
+        if clk_pol not in ("1'1", "1'0") or arst_pol not in ("1'1", "1'0") \
+                or rval is None or "\\CLK" not in flop["conns"] \
+                or "\\D" not in flop["conns"]:
+            raise _cut_refuse(
+                f"{signal!r}'s {flop['type']} cell has no CLK/D/CLK_POLARITY/"
+                "ARST_POLARITY/ARST_VALUE this gate can read")
+        clk = flop["conns"]["\\CLK"]
+        clk_p = add_ff(f"{q}$async_clk_past", clk, "1")
+        edge = add_wire(f"{q}$async_edge", "1")
+        add_cell("$eqx", f"{q}$async_edge_eqx",
+                 {"\\A_SIGNED": "0", "\\B_SIGNED": "0", "\\A_WIDTH": "2",
+                  "\\B_WIDTH": "2", "\\Y_WIDTH": "1"},
+                 {"\\A": f"{{ {clk_p} {clk} }}",
+                  "\\B": "2'01" if clk_pol == "1'1" else "2'10",
+                  "\\Y": edge})
+        d_p = add_ff(f"{q}$async_d_past", flop["conns"]["\\D"], w)
+        q_p = add_ff(f"{q}$async_q_past", q, w)
+        hold = add_mux(f"{q}$async_hold", w, q_p, d_p, edge)
+        flop["arst_past"] = add_wire(f"{q}$async_arst_past", "1")
+        flop["rval"], flop["arst_pol"], flop["hold"] = rval, arst_pol, hold
+        q_copy[q] = add_wire(f"{q}$async_pre", w)
+
+    memo: dict[str, str | None] = {}
+    visiting: set[str] = set()
+
+    def cut(net: str) -> str | None:
+        """The net to read in place of `net` inside an ARST cone: the $ff
+        copy for a declared Q, a rebuilt copy when `net` depends
+        combinationally on one, None when it depends on none."""
+        if net in q_copy:
+            return q_copy[net]
+        if net in memo:
+            return memo[net]
+        if net in visiting:
+            raise _cut_refuse(f"the ARST cone loops combinationally through "
+                              f"{net} without passing a declared Q")
+        if net in partial:
+            raise _cut_refuse(f"the ARST cone reads {net}, which is driven "
+                              "in part (a part-select or concatenation) - "
+                              "this gate only rebuilds whole nets")
+        visiting.add(net)
+        result = None
+        if net in drivers:
+            c = drivers[net]
+            if c["type"] in CUT_COMB_CELLS:
+                subst = {}
+                for port, sig in c["conns"].items():
+                    if port == "\\Y" or CONST_SIG_RE.match(sig):
+                        continue
+                    if not is_wire(sig):
+                        raise _cut_refuse(
+                            f"the ARST cone's {c['type']} cell {c['name']} "
+                            f"reads {sig!r}, not one whole net")
+                    got = cut(sig)
+                    if got is not None:
+                        subst[port] = got
+                # brief: "leave every other ARST input (~rst_n)
+                # combinational" - a cell with no input on a path from a
+                # declared Q is never copied, so the cone keeps reading it
+                if subst:
+                    result = f"{net}$async_cut"
+                    if result in wires:
+                        raise _cut_refuse(f"{result} already exists")
+                    subst["\\Y"] = result
+                    new_wires.append(f"{indent}wire width {wires.get(net, '1')} {result}")
+                    block = lines[c["start"]:c["end"] + 1]
+                    block[0] = f"{c['indent']}cell {c['type']} {c['name']}$async_cut"
+                    for port, sig in subst.items():
+                        k = c["conn_line"][port] - c["start"]
+                        pad = block[k][:len(block[k]) - len(block[k].lstrip())]
+                        block[k] = f"{pad}connect {port} {sig}"
+                    new_cells.extend(block)
+            elif c["type"] not in CUT_LEAF_Y_CELLS:
+                raise _cut_refuse(
+                    f"the ARST cone passes through a {c['type']} cell "
+                    f"({c['name']}), which this gate does not rebuild")
+        elif net in aliases:
+            src = aliases[net]
+            if not CONST_SIG_RE.match(src):
+                if not is_wire(src):
+                    raise _cut_refuse(f"the ARST cone reads {net}, an alias "
+                                      f"of {src!r}, not one whole net")
+                result = cut(src)
+        visiting.discard(net)
+        memo[net] = result
+        return result
+
+    edits: dict[int, str] = {}
+    applied = {}
+    for signal, flop in flops.items():
+        arst = flop["conns"]["\\ARST"]
+        new_arst = cut(arst)
+        if new_arst is None:
+            raise _cut_refuse(
+                f"{signal!r}'s ARST ({arst}) reads no declared signal's Q "
+                "combinationally - the declared cut would change nothing, so "
+                "it is not the self-reset loop it names")
+        k = flop["conn_line"]["\\ARST"]
+        pad = lines[k][:len(lines[k]) - len(lines[k].lstrip())]
+        edits[k] = f"{pad}connect \\ARST {new_arst}"
+        applied[signal] = flop["type"]
+        q, w = f"\\{signal}", flop["params"]["\\WIDTH"]
+        rval, hold = flop["rval"], flop["hold"]
+        on, off = (rval, hold) if flop["arst_pol"] == "1'1" else (hold, rval)
+        add_cell("$ff", f"{flop['arst_past']}_ff", {"\\WIDTH": "1"},
+                 {"\\D": new_arst, "\\Q": flop["arst_past"]})
+        add_cell("$mux", f"{q_copy[q]}_mux", {"\\WIDTH": w},
+                 {"\\A": off, "\\B": on, "\\S": flop["arst_past"],
+                  "\\Y": q_copy[q]})
+        # the self-check: from step 1 on, the flop's own Q (clk2fflogic's
+        # model) is the cut ARST applied to PRE - if a yosys change ever
+        # models the flop differently, this assert fails and run() refuses
+        pre = q_copy[q]
+        a, b = (pre, rval) if flop["arst_pol"] == "1'1" else (rval, pre)
+        expect = add_mux(f"{q}$async_expect", w, a, b, new_arst)
+        same = add_wire(f"{q}$async_same", "1")
+        add_cell("$eqx", f"{q}$async_same_eqx",
+                 {"\\A_SIGNED": "0", "\\B_SIGNED": "0", "\\A_WIDTH": w,
+                  "\\B_WIDTH": w, "\\Y_WIDTH": "1"},
+                 {"\\A": q, "\\B": expect, "\\Y": same})
+        init = add_wire(f"{q}$async_initstate", "1")
+        add_cell("$initstate", f"{init}_cell", {}, {"\\Y": init})
+        add_cell("$assert", f"{q}{ASYNC_CUT_CHECK_SUFFIX}", {},
+                 {"\\A": same, "\\EN": f"{init}_n"})
+        add_wire(f"{init}_n", "1")
+        add_cell("$not", f"{init}_not",
+                 {"\\A_SIGNED": "0", "\\A_WIDTH": "1", "\\Y_WIDTH": "1"},
+                 {"\\A": init, "\\Y": f"{init}_n"})
+    for k, ln in edits.items():
+        lines[k] = ln
+    end = next(k for k in range(mod + 1, n) if lines[k] == "end")
+    out = (lines[:mod + 1] + new_wires + lines[mod + 1:end] + new_cells
+           + lines[end:])
+    return "\n".join(out), applied
 
 
 def build_cut_il(sby_dir: Path, frontend: str, sv_files: list[Path],
                  rtl_files: list[Path], formal_top: str,
                  slang_so: Path | None, cuts: list[dict]) -> tuple[Path, list[dict]]:
     """Prep and flatten the design once (own yosys run, before sby ever
-    sees it), apply every declared cut (cut_async_reset_net) in spec.yaml
-    order, and write the result to sby_dir/CUT_IL_NAME. Returns (that path,
+    sees it), apply every declared cut at once (cut_async_reset_nets: the
+    cuts share one rebuilt ARST cone), and write the result to sby_dir/CUT_IL_NAME. Returns (that path,
     [{signal, why, cell_type}, ...] - the applied abstraction, for the gate
     JSON). `flatten` only runs on this path (never for a design with no
-    declared cuts): cut_async_reset_net needs the flop's Q as one flat net
+    declared cuts): cut_async_reset_nets needs the flop's Q as one flat net
     name, the same dotted convention a hierarchical reference already uses
     in this gate."""
     reads = yosys_reads(frontend, sv_files, rtl_files, formal_top, slang_so)
     raw_path = sby_dir / "precut.il"
     script = (reads.replace("\n", "; ")
-              + f"; prep -top {formal_top}; flatten; write_rtlil {raw_path}")
+              + f"; prep -top {formal_top}; flatten; dffunmap; "
+              f"write_rtlil {raw_path}")
     try:
         proc = subprocess.run([str(EDA_BIN), "yosys", "-p", script],
                               capture_output=True, text=True,
@@ -504,10 +759,8 @@ def build_cut_il(sby_dir: Path, frontend: str, sv_files: list[Path],
             "yosys could not prep the design to apply formal."
             f"async_reset_cuts: {(proc.stdout + proc.stderr)[-2000:]}")
     text = raw_path.read_text(encoding="utf-8")
-    applied = []
-    for cut in cuts:
-        text, ctype = cut_async_reset_net(text, cut["signal"])
-        applied.append({**cut, "cell_type": ctype})
+    text, ctypes = cut_async_reset_nets(text, [c["signal"] for c in cuts])
+    applied = [{**cut, "cell_type": ctypes[cut["signal"]]} for cut in cuts]
     cut_path = sby_dir / CUT_IL_NAME
     cut_path.write_text(text, encoding="utf-8")
     return cut_path, applied
@@ -820,6 +1073,28 @@ def task_substatus(output: str) -> dict[str, str | None]:
     return out
 
 
+def check_cut_model(signal: str, smt_cases: dict[str, dict],
+                    smt_sub: dict[str, str | None]) -> None:
+    """Refuse unless the smt task ran the cut's own self-check assert
+    (`<signal>` + ASYNC_CUT_CHECK_SUFFIX, see cut_async_reset_nets) and
+    found no counterexample to it: a failed one means clk2fflogic models
+    the flop differently from the pre-reset value the cut feeds its ARST
+    cone, so every verdict in this run would rest on a wrong model."""
+    case = smt_cases.get(signal + ASYNC_CUT_CHECK_SUFFIX)
+    if case is None:
+        raise CheckError(
+            f"formal.async_reset_cuts: the cut of {signal!r} carries a "
+            "self-check assert sby never reported - the cut model did not "
+            "run as built" + ASYNC_CUT_FIX)
+    if case["failed"] and smt_sub["basecase"] != "pass":
+        raise CheckError(
+            f"formal.async_reset_cuts: the cut of {signal!r} no longer "
+            "matches how this yosys's clk2fflogic models the flop (its "
+            "self-check assert has a counterexample) - no verdict here can "
+            "be trusted until check_formal.py's cut_async_reset_nets is "
+            "brought in line with it")
+
+
 def classify_property(label: str, rid: str, smt_case: dict,
                       smt_sub: dict[str, str | None], pdr_status: str,
                       depth: int) -> tuple[str, dict | None]:
@@ -1038,6 +1313,8 @@ def run(argv=None):
     smt_cases, pdr_status = testcases["smt"], done_status(outputs["pdr"])
     smt_status = done_status(outputs["smt"])
     smt_sub = task_substatus(outputs["smt"])
+    for cut in applied_cuts or []:
+        check_cut_model(cut["signal"], smt_cases, smt_sub)
 
     ids, ambiguous = resolve_labels(props, smt_cases)
     if ambiguous:
@@ -1129,12 +1406,14 @@ def run(argv=None):
                 depth=cover_depth))
 
     async_note = (
-        "smt/pdr's proven/bounded verdicts above hold for the design's "
-        "clock edges under a ONE-STEP-DELAYED version of each cut reset "
-        "(formal.async_reset_cuts), not the RTL's own zero-delay async "
-        "clear; the glitch-width reset behaviour (both flops briefly "
-        "both-set before the real, instant clear catches up) is not "
-        "covered here - that stays sim's job"
+        "smt/pdr's proven/bounded verdicts above hold for a model in which "
+        "each cut flop's async clear (formal.async_reset_cuts) reads the "
+        "cut flops' PRE-RESET values instead of their Q - the clear lands "
+        "in the same step the flop sets, and every other reset input "
+        "(rst_n) is unchanged - so they show the settled zero-delay "
+        "behaviour, not the delta-cycle glitch (both flops briefly "
+        "both-set before the clear catches up) or the reset pulse's "
+        "width, which stay sim's job"
     ) if applied_cuts else None
     # "a declared abstraction must never read as an unqualified pass": each
     # applied cut is also an info finding, so a pass that rests on one always
@@ -1143,11 +1422,12 @@ def run(argv=None):
         violations.append(checklib.violation(
             "formal", "info", None, None, "async_reset_cut_applied", [],
             f"formal model cuts the async reset of {cut['signal']} "
-            f"({cut['cell_type']}) with a one-step register "
-            f"(spec.yaml formal.async_reset_cuts, why: {cut['why']}): "
-            "every verdict here holds under that one-step reset delay, "
-            "not the RTL's zero-delay clear - glitch-width reset behaviour "
-            "stays with sim", "check_formal", signal=cut["signal"]))
+            f"({cut['cell_type']}): its ARST cone reads the cut flops' "
+            "pre-reset values, not their Q "
+            f"(spec.yaml formal.async_reset_cuts, why: {cut['why']}) - "
+            "every verdict here is the settled zero-delay clear; the "
+            "glitch and the reset pulse width stay with sim",
+            "check_formal", signal=cut["signal"]))
     payload = checklib.report(
         SCRIPT, ws / "rtl", violations, top=top, formal_top=formal_top,
         depth=depth, cover_depth=cover_depth, frontend=frontend, frontend_why=frontend_why,

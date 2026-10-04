@@ -93,13 +93,16 @@ registered signals (a self-resetting loop — e.g. a PFD's up/dn flops, each cle
 is correct in sim but is a real combinational loop to sby's `multiclock on` prep step (`clk2fflogic`
 has nothing else to turn the async clear into): `formal` fails with "Found logic loop", never a
 silent pass. `formal.async_reset_cuts: [{signal, why}, ...]` in a block's `spec.yaml` names, per
-instance, which net's asynchronous reset is modelled instead as sampled one clock late — the gate
-inserts a one-bit register between the net and the reset it drives, in the formal model only, built
-from a flattened RTLIL copy of the design (never the RTL, and never reachable through the sby
-`[script]`, since sby's own multiclock prep runs after any script step could touch it). Nothing in
-the RTL changes; sim and holdout keep proving the real zero-delay behaviour, including the reset's
-own glitch width, which the cut cannot and does not prove — the gate JSON records the note that the
-property proof holds under a one-step reset delay, not the RTL's zero-delay glitch behaviour, next to
+instance, which flops' self-clear loop is cut. The gate cuts only the feedback: inside each declared
+flop's reset cone it reads the declared flops' pre-reset values (what yosys's `clk2fflogic` would give
+them before this step's clear) in place of their outputs, so the clear still lands in the step a flop
+sets and every other reset input, such as an external `rst_n`, stays combinational. This happens in the
+formal model only, built from a flattened RTLIL copy of the design (never the RTL, and never reachable
+through the sby `[script]`, since sby's own multiclock prep runs after any script step could touch
+it), and each cut carries a self-check assert that the rebuilt pre-reset value still matches
+`clk2fflogic`, so a yosys that models the flop differently is refused rather than passed. Nothing in the
+RTL changes; sim and holdout keep proving the real zero-delay behaviour, including the reset's own glitch
+and pulse width, which the cut cannot and does not prove. The gate JSON records a note saying so next to
 the applied `async_reset_cuts` list, and each cut is also an info finding (`async_reset_cut_applied`),
 so a pass resting on a cut never reads as an unqualified pass. A
 "Found logic loop" that does not match a declared cut is refused (exit 2) with a remediation naming
