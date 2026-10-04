@@ -3,6 +3,8 @@ that need no gate run (docs/design.md section 3, "### M6.")."""
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -358,6 +360,8 @@ def _fake_gates(monkeypatch, calls: list, on_gate=None):
         return {"status": "pass", "wall_s": 0.0, "failing": 0, "kinds": [],
                 "facts": facts}
     monkeypatch.setattr(ladder, "run_gate", fake)
+    monkeypatch.setattr(ladder, "sandbox_preflight",
+                        lambda ws, outdir: {"bwrap": "fake"})
     monkeypatch.setattr(ladder, "_git_head", lambda: "abc123")
     monkeypatch.setattr(ladder, "_tool_image", lambda: "iic-osic-tools-test")
 
@@ -483,3 +487,153 @@ def test_corpus_counter8_scores_through_deliverables_with_real_gates(tmp_path):
         assert r["gates"][g]["status"] == "pass", (g, r["gates"][g])
     assert r["gates"]["harden"]["status"] == "not hardened"
     assert r["integrity"] == "ok" and r["counts"] is False
+
+
+# ---- the scoring sandbox ------------------------------------------------------
+
+needs_bwrap = pytest.mark.skipif(shutil.which("bwrap") is None, reason="no bwrap")
+REF_RTL = CORPUS8 / "rtl" / "counter8.v"
+
+
+def _sandbox_run(ws: Path, out: Path, script: str) -> subprocess.CompletedProcess:
+    return subprocess.run(ladder.gate_sandbox_argv(ws, out, ["/bin/sh", "-c", script]),
+                          capture_output=True, text=True, timeout=120)
+
+
+def test_the_gate_sandbox_argv_hides_the_corpus_and_shares_nothing(tmp_path):
+    (tmp_path / "tree").mkdir()
+    argv = ladder.gate_sandbox_argv(tmp_path / "ws", tmp_path / "out", ["true"],
+                                    tree=tmp_path / "tree")
+    head = argv[:argv.index("--")]
+    assert head[0] == "bwrap" and "--unshare-all" in head and "--clearenv" in head
+    assert "--die-with-parent" in head
+    assert not any(a.startswith("--share") for a in head)
+    pairs = {(head[i], head[i + 1]) for i in range(len(head) - 1)}
+    for m in ladder.SANDBOX_MASKED:
+        assert ("--tmpfs", str(ladder.REPO / m)) in pairs
+    i = head.index(str(ladder.REPO))
+    assert head[i - 1] == "--ro-bind"  # the repo is read-only
+    assert ("--bind", str(tmp_path / "ws")) in pairs
+    assert ("--ro-bind", str(tmp_path / "tree")) in pairs
+    envs = {head[i + 1]: head[i + 2] for i in range(len(head)) if head[i] == "--setenv"}
+    assert envs["HOME"] == ladder.SB_SCORE_HOME and envs["EDA_TOOLCHAIN"] == str(
+        tmp_path / "tree")
+
+
+def test_scoring_without_bwrap_refuses_with_exit_2(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(ladder.shutil, "which", lambda name: None)
+    with pytest.raises(CheckError, match="bwrap"):
+        ladder.sandbox_preflight(tmp_path, tmp_path)
+    rc = ladder.main(["--skill", "vde", "--rung", "counter8", "--deliverables",
+                      str(_arm(tmp_path / "arm")), "--hand-edits", "0",
+                      "--results-dir", str(tmp_path / "r"), "--no-regen"])
+    assert rc == 2
+    out = json.loads(capsys.readouterr().out)
+    assert out["status"] == "error" and "bwrap" in out["remediation"]
+    assert not (tmp_path / "r").exists()
+
+
+@needs_bwrap
+def test_the_gate_sandbox_blocks_the_reference_and_the_host(tmp_path):
+    """The real sandbox: the corpus reference is missing by its absolute
+    path and nothing outside the scoring workspace is writable; the
+    workspace itself and the gate's own result dir are."""
+    ws, out = tmp_path / "score" / "counter8", tmp_path / "gate-out"
+    ws.mkdir(parents=True)
+    out.mkdir()
+    (ws / "rtl").mkdir()
+    (ws / "rtl" / "mine.v").write_text("module mine; endmodule\n")
+    assert ladder.sandbox_preflight(ws, tmp_path / "score")["masked"]
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    p = _sandbox_run(ws, out, f"""
+        cat {REF_RTL} > /dev/null 2>&1 && echo REF-READ
+        cat rtl/mine.v > /dev/null && echo WS-READ
+        echo x > {outside}/escape 2>/dev/null && echo OUTSIDE-WRITTEN
+        echo x > {ladder.REPO}/engine/escape 2>/dev/null && echo REPO-WRITTEN
+        echo x > {ws}/written && echo WS-WRITTEN
+        echo x > /score-out/r && echo OUT-WRITTEN
+        find {ladder.REPO}/corpus {ladder.REPO}/tests -mindepth 1 | grep -q . && echo MASK-LEAK
+        test -d {ladder.REPO}/engine && echo ENGINE-SEEN
+        exit 0""")
+    words = set(p.stdout.split())
+    assert p.returncode == 0, p.stderr
+    assert {"WS-READ", "WS-WRITTEN", "OUT-WRITTEN", "ENGINE-SEEN"} <= words
+    assert not words & {"REF-READ", "OUTSIDE-WRITTEN", "REPO-WRITTEN", "MASK-LEAK"}
+    assert not (outside / "escape").exists()
+    assert not (ladder.REPO / "engine" / "escape").exists()
+    assert (ws / "written").is_file() and (out / "r").is_file()
+
+
+ESCAPE_TB = """
+
+import os as _os
+import cocotb as _cocotb
+
+
+@_cocotb.test()
+async def test_escape(dut):
+    tried = []
+    for target in (TARGETS):
+        try:
+            with open(target, "w") as fh:
+                fh.write("escaped")
+            tried.append("WROTE " + target)
+        except OSError as exc:
+            tried.append(f"BLOCKED {target}: {exc.strerror}")
+    with open(_os.path.join(WS, "tb-escape.log"), "w") as fh:
+        fh.write("\\n".join(tried))
+"""
+
+
+def _scoring_ws(tmp_path: Path, arm: Path) -> tuple[Path, Path]:
+    ws, outdir = tmp_path / "score" / "counter8", tmp_path / "score" / "gate-results"
+    ladder.build_scoring_ws(ws, CORPUS8, arm, "counter8")
+    outdir.mkdir()
+    ladder.sandbox_preflight(ws, outdir)
+    return ws, outdir
+
+
+@pytest.mark.slow
+@needs_bwrap
+def test_rtl_including_the_reference_by_absolute_path_sees_nothing(tmp_path):
+    """Real tools in the scoring sandbox: an arm whose rtl/ only includes the
+    corpus reference by absolute path fails lint and synth (the include is
+    missing); the reference RTL itself, copied in, passes both."""
+    cheat = tmp_path / "cheat"
+    (cheat / "rtl").mkdir(parents=True)
+    (cheat / "rtl" / "counter8.v").write_text(f'`include "{REF_RTL}"\n')
+    ws, outdir = _scoring_ws(tmp_path / "c", cheat)
+    for g in ("lint", "synth"):
+        r = ladder.run_gate(ws, g, outdir)
+        assert r["status"] in ("fail", "error"), (g, r)
+    honest = _arm(tmp_path / "honest", tb=False)
+    ws, outdir = _scoring_ws(tmp_path / "h", honest)
+    for g in ("lint", "synth"):
+        r = ladder.run_gate(ws, g, outdir)
+        assert r["status"] == "pass", (g, r)
+
+
+@pytest.mark.slow
+@needs_bwrap
+def test_an_arm_testbench_cannot_write_outside_the_scoring_ws(tmp_path):
+    """The arm's cocotb tb runs in the sim gate's sandbox: its writes to a
+    host path outside the scoring workspace and into the repo fail and land
+    nowhere; its write into the workspace works, and sim still passes."""
+    arm = _arm(tmp_path / "arm")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    targets = [str(outside / "escape"), str(ladder.REPO / "engine" / "escape"),
+               str(Path.home() / "chip-flow-escape-probe")]
+    tb = arm / "tb" / "test_counter8.py"
+    ws_path = tmp_path / "s" / "score" / "counter8"
+    tb.write_text(tb.read_text() + ESCAPE_TB.replace("TARGETS", repr(tuple(targets)))
+                  .replace("WS", repr(str(ws_path))))
+    ws, outdir = _scoring_ws(tmp_path / "s", arm)
+    assert ws == ws_path
+    r = ladder.run_gate(ws, "sim", outdir)
+    assert r["status"] == "pass", r
+    log = (ws / "tb-escape.log").read_text()
+    for t in targets:
+        assert f"BLOCKED {t}" in log, log
+        assert not Path(t).exists()

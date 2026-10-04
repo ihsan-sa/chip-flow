@@ -20,7 +20,10 @@ inside the argv `build_argv` returns. What the sandbox holds, and only that:
     and on PATH as /opt/eval/cbin/claude.
   * the EDA tree: bound read-only at its own host path, EDA_TOOLCHAIN set to
     it, and a copy of bin/eda on PATH at /opt/eval/bin/eda.
-  * /opt/eval/forward.py and /opt/eval/probe.py, read-only.
+  * /opt/eval/forward.py and /opt/eval/probe.py, read-only: COPIES that
+    `prepare_run` writes into the run dir (<run>/opt/), never binds of the
+    repo's own files, so no mount source (/proc/self/mountinfo) names the
+    repo's path. The EDA launcher is a copy in the round dir too.
   * HOME=/home/eval: a fresh per-run host directory (<run>/home), empty but
     for a minimal .claude.json (`write_claude_json`) and a .gitconfig. It is
     a host directory rather than a tmpfs so `claude --resume` across a run's
@@ -35,7 +38,15 @@ inside the argv `build_argv` returns. What the sandbox holds, and only that:
     The credentials file is NEVER copied: OAuth refresh rotates the refresh
     token, and a copy refreshed inside the sandbox would invalidate the
     host's token and log every session on the box out. Binding the real
-    directory lets claude's atomic rename land in the real file. A symlink
+    directory lets claude's atomic rename land in the real file.
+    RESIDUAL RISK of that read-write bind: a NEW top-level entry created
+    in it from inside the sandbox (CLAUDE.md, settings.local.json, agents/,
+    ...) has no mask and lands in the host's real ~/.claude, where every
+    later host session would read it. The sandbox cannot prevent that;
+    round.py detects it: it lists the real directory's top-level entries
+    before and after every claude invocation, and any new entry stops the
+    round (nothing is deleted; a person decides), as does a credentials
+    file that is no longer a regular, non-empty file owned by the user. A symlink
     or anything not a file/dir at the top of ~/.claude is refused (it cannot
     be masked safely), and so is a missing `projects` or `skills` (bwrap
     would create the mount point in the real directory).
@@ -94,6 +105,9 @@ EXPORT_INCLUDE = ("docs/design.md",)
 CREDENTIALS = ".credentials.json"
 REQUIRED_ENTRIES = ("projects", "skills")
 
+# The in-sandbox scripts, copied into each run dir and bound from there.
+OPT_FILES = ("forward.py", "probe.py")
+
 # Keys of the real ~/.claude.json copied into the sandbox's own: the OAuth
 # account claude matches the credentials against, and onboarding done.
 # Personal fields of oauthAccount are dropped.
@@ -138,6 +152,10 @@ class Layout:
         return self.run_dir / "blanks"
 
     @property
+    def opt(self) -> Path:
+        return self.run_dir / "opt"
+
+    @property
     def proxy_sock(self) -> Path:
         return self.proxy_dir / PROXY_SOCK_NAME
 
@@ -173,6 +191,18 @@ def system_args() -> list[str]:
         elif p.is_dir():
             args += ["--ro-bind", str(p), str(p)]
     return args
+
+
+def copy_opt(opt: Path) -> None:
+    """Read-only copies of the in-sandbox scripts (OPT_FILES) in the run
+    dir; the sandbox binds these, never the repo's own files."""
+    opt.mkdir(parents=True, exist_ok=True)
+    for name in OPT_FILES:
+        dst = opt / name
+        if dst.exists():
+            dst.chmod(0o644)
+        shutil.copyfile(HERE / name, dst)
+        dst.chmod(0o444)
 
 
 def write_blanks(blanks: Path) -> None:
@@ -271,9 +301,13 @@ def build_argv(layout: Layout, command: list[str]) -> list[str]:
     if layout.arm == "skill" and layout.export_dir is None:
         raise SandboxError("skill arm needs the repo export")
     for p in (layout.work, layout.home, layout.projects, layout.proxy_dir,
-              layout.blanks):
+              layout.blanks, layout.opt):
         if not p.is_dir():
             raise SandboxError(f"{p} is missing; prepare_run first")
+    for name in OPT_FILES:
+        if not (layout.opt / name).is_file():
+            raise SandboxError(f"{layout.opt / name} is missing; prepare_run "
+                               "first")
     argv = ["bwrap", "--unshare-all", "--die-with-parent", "--new-session",
             "--hostname", "eval", "--clearenv"]
     for k, v in sorted(sandbox_env(layout).items()):
@@ -285,8 +319,8 @@ def build_argv(layout: Layout, command: list[str]) -> list[str]:
     argv += ["--ro-bind", cb, cb, "--symlink", cb, f"{SB_OPT}/cbin/claude"]
     argv += ["--ro-bind", str(layout.eda_tree), str(layout.eda_tree)]
     argv += ["--ro-bind", str(layout.eda_bin_dir), f"{SB_OPT}/bin",
-             "--ro-bind", str(HERE / "forward.py"), f"{SB_OPT}/forward.py",
-             "--ro-bind", str(HERE / "probe.py"), f"{SB_OPT}/probe.py"]
+             "--ro-bind", str(layout.opt / "forward.py"), f"{SB_OPT}/forward.py",
+             "--ro-bind", str(layout.opt / "probe.py"), f"{SB_OPT}/probe.py"]
     argv += ["--bind", str(layout.home), SB_HOME]
     argv += claude_dir_masks(layout.real_claude_dir, layout.arm,
                              layout.projects, layout.export_dir,
@@ -340,7 +374,8 @@ def prepare_run(run_dir: Path, spec_text: str | None,
                 real_claude_json: Path | None = None) -> None:
     """Create a run's host dirs: work/ (git-initialised, spec.md written and
     committed), home/ (.claude.json, .gitconfig), claude-projects/, proxy/,
-    blanks/.
+    blanks/, and opt/ (read-only copies of forward.py and probe.py, bound
+    from there so no mount source names the repo).
     Refuses a run dir whose work/ already exists (runs never reuse one)."""
     run_dir = Path(run_dir)
     work = run_dir / "work"
@@ -349,6 +384,7 @@ def prepare_run(run_dir: Path, spec_text: str | None,
     for d in ("work", "home", "claude-projects", "proxy"):
         (run_dir / d).mkdir(parents=True, exist_ok=d != "work")
     write_blanks(run_dir / "blanks")
+    copy_opt(run_dir / "opt")
     home = run_dir / "home"
     write_claude_json(real_claude_json or real_home() / ".claude.json",
                       home / ".claude.json")

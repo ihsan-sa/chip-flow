@@ -57,7 +57,23 @@ keeps an exec bit, and nothing from them runs outside the gates that
 normally run it. Corpus-graded gates run before any gate that executes the
 arm's testbench, every copied tree is hashed before and after each gate,
 and a change stops scoring and the rung counting (`integrity`). Each gate's
-result is read from a file outside the scoring workspace. The result is
+result is read from a file outside the scoring workspace, in a directory
+of its own that no other gate's sandbox sees.
+
+The scoring workspace is built on the host; every gate then runs in a
+bubblewrap sandbox of its own (`gate_sandbox_argv`), because the arm's RTL
+is read by the tools (an `include of an absolute path would read whatever
+the path names) and its tb/ is code that runs: --unshare-all (no network),
+--die-with-parent, --new-session, --clearenv with an explicit env;
+/usr, /etc and /bin, /lib* read-only; the EDA tree read-only; the repo
+read-only at its own path with corpus/, evals/, tests/ and docs/ masked by
+an empty tmpfs (engine/ and bin/ stay visible); the scoring workspace
+read-write; the gate's own result directory read-write at /score-out;
+tmpfs /tmp and HOME (plus, read-only, the host's precheck python-deps
+cache when there is one: there is no network to install it). The sandbox
+is mandatory: no bwrap, or a bwrap that cannot start, is exit 2 before any
+gate runs, never an unsandboxed run. The result records it (`sandbox`). The
+result is
 `kind: "round"`, with `gates` (per-gate status: pass, fail, error, not
 hardened, no testbench, not run), `hardened`, `testbench`, `deliverables`
 and `scoring_wall_s`; it is listed in ladder.md's own "Bare against skill
@@ -463,26 +479,131 @@ def _changed(before: dict, after: dict) -> list[str]:
     return sorted(k for k in set(before) | set(after) if before.get(k) != after.get(k))
 
 
+# ---- the scoring sandbox: every gate on untrusted deliverables -----------
+
+SB_SCORE_HOME = "/home/score"
+SB_GATE_OUT = "/score-out"
+# repo trees the scoring sandbox masks with an empty tmpfs: the corpus (the
+# reference RTL among it), the evals, the repo's tests (corpus copies) and
+# docs. engine/ and bin/ stay visible: the gates are engine code.
+SANDBOX_MASKED = ("corpus", "evals", "tests", "docs")
+SANDBOX_ENV = {"PATH": "/usr/bin:/bin", "HOME": SB_SCORE_HOME, "USER": "score",
+               "LOGNAME": "score", "LANG": "C.UTF-8", "TMPDIR": "/tmp",
+               "SHELL": "/bin/sh"}
+SANDBOX_REMEDIATION = ("install bubblewrap (bwrap) with unprivileged user "
+                       "namespaces; --deliverables never runs a gate on an "
+                       "arm's code outside it")
+
+
+def eda_tree() -> Path:
+    """The EDA tree bin/eda resolves ($EDA_TOOLCHAIN or its default)."""
+    try:
+        p = subprocess.run([str(EDA_BIN), "--print-toolchain-root"],
+                           capture_output=True, text=True, timeout=60)
+        root = p.stdout.strip() if p.returncode == 0 else ""
+    except (OSError, subprocess.TimeoutExpired):
+        root = ""
+    root = root or os.environ.get("EDA_TOOLCHAIN") or ""
+    if not root or not Path(root).is_dir():
+        raise CheckError(f"no EDA tree ({root or 'unset'}); set EDA_TOOLCHAIN")
+    return Path(root)
+
+
+def _system_binds() -> list[str]:
+    args = ["--ro-bind", "/usr", "/usr", "--ro-bind", "/etc", "/etc"]
+    for name in ("bin", "sbin", "lib", "lib32", "lib64", "libx32"):
+        p = Path("/") / name
+        if p.is_symlink():
+            args += ["--symlink", os.readlink(p), str(p)]
+        elif p.is_dir():
+            args += ["--ro-bind", str(p), str(p)]
+    return args
+
+
+def gate_sandbox_argv(ws: Path, gate_out: Path, command: list[str],
+                      tree: Path | None = None) -> list[str]:
+    """The bwrap argv that runs `command` (cwd ws) on a scoring workspace:
+    no network, a clean env, the system, EDA tree and repo read-only with
+    SANDBOX_MASKED hidden, only ws and gate_out (at SB_GATE_OUT) writable."""
+    tree = tree or eda_tree()
+    env = {**SANDBOX_ENV, "EDA_TOOLCHAIN": str(tree)}
+    argv = ["bwrap", "--unshare-all", "--die-with-parent", "--new-session",
+            "--hostname", "score", "--clearenv"]
+    for k, v in sorted(env.items()):
+        argv += ["--setenv", k, v]
+    argv += _system_binds()
+    argv += ["--proc", "/proc", "--dev", "/dev",
+             "--tmpfs", "/tmp", "--tmpfs", "/var/tmp", "--tmpfs", SB_SCORE_HOME]
+    pydeps = ttlib._pydeps_cache_root()
+    if _is_link_or_missing(pydeps) is None and (pydeps / ".ok").is_file():
+        argv += ["--ro-bind", str(pydeps), f"{SB_SCORE_HOME}/.local/state/"
+                 f"chip-flow/{pydeps.name}"]
+    argv += ["--ro-bind", str(tree), str(tree), "--ro-bind", str(REPO), str(REPO)]
+    for m in SANDBOX_MASKED:
+        if (REPO / m).exists():
+            argv += ["--tmpfs", str(REPO / m)]
+    argv += ["--bind", str(ws), str(ws), "--bind", str(gate_out), SB_GATE_OUT,
+             "--chdir", str(ws), "--", *command]
+    return argv
+
+
+def sandbox_preflight(ws: Path, outdir: Path) -> dict:
+    """Refuse (CheckError, exit 2) unless the scoring sandbox starts and
+    hides the corpus: scoring never falls back to an unsandboxed run."""
+    bwrap = shutil.which("bwrap")
+    if not bwrap:
+        raise CheckError("no bwrap on PATH: " + SANDBOX_REMEDIATION)
+    probe = outdir / "preflight"
+    probe.mkdir()
+    corpus = REPO / "corpus"
+    cmd = ["/bin/sh", "-c", 'test -z "$(ls -A "$1")" && echo ok > "$2"/ok',
+           "sh", str(corpus), SB_GATE_OUT]
+    try:
+        p = subprocess.run(gate_sandbox_argv(ws, probe, cmd),
+                           stdin=subprocess.DEVNULL, capture_output=True,
+                           text=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise CheckError(f"the scoring sandbox did not start ({exc}): "
+                         + SANDBOX_REMEDIATION) from exc
+    if p.returncode != 0 or not (probe / "ok").is_file():
+        raise CheckError(f"the scoring sandbox did not start or did not hide "
+                         f"corpus/ (exit {p.returncode}: {p.stderr[-300:]}): "
+                         + SANDBOX_REMEDIATION)
+    return {"bwrap": bwrap, "masked": list(SANDBOX_MASKED), "network": "none"}
+
+
 def run_gate(ws: Path, gate: str, outdir: Path, report: Path | None = None) -> dict:
-    """One gate through gate.py, recorded in the scoring workspace. The
-    result is read from --out, a file outside the workspace, so nothing the
-    arm's code writes into the workspace can stand in for it."""
-    out = outdir / f"gate-{gate}.json"
-    cmd = [sys.executable, str(GATE_PY), "--gate", gate, "--skill", "vde",
-           "--workspace", str(ws), "--out", str(out)]
+    """One gate through gate.py in the scoring sandbox (gate_sandbox_argv),
+    recorded in the scoring workspace. The result is read from --out, a
+    file in outdir/<gate>/, a directory outside the workspace that only
+    this gate's sandbox sees, so nothing the arm's code writes into the
+    workspace, or wrote during an earlier gate, can stand in for it."""
+    gate_out = outdir / gate
+    gate_out.mkdir()
+    out = gate_out / f"gate-{gate}.json"
+    cmd = [str(EDA_BIN), "python", str(GATE_PY), "--gate", gate, "--skill", "vde",
+           "--workspace", str(ws), "--out", f"{SB_GATE_OUT}/{out.name}"]
     if report is not None:
-        cmd += ["--report", str(report)]
+        shutil.copyfile(report, gate_out / report.name)
+        cmd += ["--report", f"{SB_GATE_OUT}/{report.name}"]
     t0 = time.monotonic()
     try:
-        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True,
+        proc = subprocess.run(gate_sandbox_argv(ws, gate_out, cmd),
+                              stdin=subprocess.DEVNULL, capture_output=True,
                               text=True, encoding="utf-8", errors="replace",
                               timeout=GATE_TIMEOUT_S)
         rc = proc.returncode
     except subprocess.TimeoutExpired:
         return {"status": "error", "why": f"timed out after {GATE_TIMEOUT_S}s"}
     wall = round(time.monotonic() - t0, 1)
-    try:
-        body = json.loads(out.read_text(encoding="utf-8"))
+    try:  # a regular file only: never a link the sandbox planted
+        if not stat.S_ISREG(os.lstat(out).st_mode):
+            raise OSError("not a regular file")
+        fd = os.open(out, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as f:
+            body = json.loads(f.read(64 * 1024 * 1024).decode("utf-8"))
+        if not isinstance(body, dict):
+            raise ValueError("not an object")
     except (OSError, ValueError):
         return {"status": "error", "wall_s": wall,
                 "why": f"gate.py wrote no result (exit {rc}): {proc.stderr[-300:]}"}
@@ -579,6 +700,7 @@ def score_deliverables(args) -> tuple[dict, list[dict]]:
         copy = build_scoring_ws(ws, rung_dir, root, top)
         hardened = (ws / HARDEN_FINAL).is_dir() and any((ws / HARDEN_FINAL).iterdir())
         has_tb = bool(cocotblib.test_modules(ws / "tb"))
+        sandbox = sandbox_preflight(ws, outdir)
         base = snapshot(ws)
         gates: dict[str, dict] = {}
         tampered: list[str] = []
@@ -657,6 +779,7 @@ def score_deliverables(args) -> tuple[dict, list[dict]]:
                          "not_scored": ["the arm's own spec/, formal/, state.json "
                                         "and gate records"]},
         "integrity": "ok" if not tampered else tampered,
+        "sandbox": sandbox,
         "note": args.note,
         "kind": "round",
     }

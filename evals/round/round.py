@@ -24,7 +24,11 @@ HARD LIMITS, enforced here before and after every run:
     min(70, 500 - spent); a stand-in resume gets what is left of it (none
     under MIN_RESUME_USD). A run whose recorded cost exceeds $70 stops the
     round. A run whose cost cannot be read from claude's JSON is booked at
-    its whole budget.
+    its whole budget. Claude's stdout counts only when the WHOLE of it
+    parses as one JSON object: code the agent runs can write into claude's
+    stdout (/proc/$PPID/fd/1), so a trailing line, or any second object, is
+    "cost unknown", never a cost. Unknown cost also means no stand-in
+    resume and no overrun check against a number the agent could set.
   * usage limit: before each run `cc-limit status`; a limit in force
     (exit 0) stops the round, it is never waited out. An answer that is
     neither "limit" (0) nor "clear" (1), or a cc-limit that does not run,
@@ -38,8 +42,13 @@ HARD LIMITS, enforced here before and after every run:
   * wall caps: INVOCATION_WALL_S (6 h) per claude invocation, PROBE_WALL_S
     (1 h) per probe, SCORE_WALL_S (4 h) per scoring; past it the process
     group is killed.
-  * the host credentials file must still be a regular file owned by this
-    user after every run, or the round stops.
+  * the real ~/.claude (bound read-write, see sandbox.py): its top-level
+    entries are listed before and after EVERY claude invocation. Any entry
+    new after one stops the round (state "stopped", the reason names the
+    entries, nothing is deleted - a person decides), and the run's result
+    records them (host_claude_dir_new). The credentials file must still be
+    a regular, non-empty file owned by this user (stat only, never read)
+    after every invocation, or the round stops the same way.
   * a run that raises (sandbox, export, git, I/O) stops the round.
 
 Each run: a fresh run dir <round>/runs/<cell>/<stamp>/ (outside the repo)
@@ -77,9 +86,12 @@ WHAT THE SANDBOX DOES NOT CLOSE (the probe cannot see these):
     whose cost is not in total_cost_usd, or account endpoints beyond the
     Messages API. The proxy filters by host, not by path.
   * entries created in the real ~/.claude after a run's argv is built are
-    visible unmasked in that run, and entries claude creates there that
-    the host lacks land in the real directory (listed in the result as
-    host_claude_dir_new).
+    visible unmasked in that run, and a new top-level entry created there
+    from inside the sandbox lands in the host's real directory. The round
+    detects it after the invocation and stops (see above) but does not
+    prevent it, and an entry a host process adds during the same
+    invocation is indistinguishable from one the agent added (it stops the
+    round too).
   * the probe does not walk the EDA tree (bound read-only; too big) and
     does not read files over probe.MAX_BYTES (listed in its verdict).
 
@@ -91,9 +103,11 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import math
 import os
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import time
@@ -130,6 +144,8 @@ INVOCATION_WALL_S = 6 * 3600
 PROBE_WALL_S = 3600
 SCORE_WALL_S = 4 * 3600
 TRUSTED_ROOTS = ("/usr", "/etc")
+MAX_STATE_BYTES = 4 * 1024 * 1024   # a checkpoint state.json read cap
+MAX_BLOCKS = 256                    # blocks/* entries looked at
 
 RUNG_DIR = REPO / "corpus" / SKILL / RUNG
 FOOTER = REPO / "evals" / "arms" / "footer.md"
@@ -274,15 +290,65 @@ def real_loadavg() -> float:
 
 
 # ------------------------------------------------------------ checkpoints
+def _real_dir(p: Path) -> bool:
+    try:
+        return stat.S_ISDIR(os.lstat(p).st_mode)
+    except OSError:
+        return False
+
+
+def read_regular(p: Path, cap: int = MAX_STATE_BYTES) -> str | None:
+    """p's text when p is a regular file (lstat: never a link, FIFO, device
+    or socket) of at most `cap` bytes, else None. Opened O_NOFOLLOW and
+    O_NONBLOCK, re-checked with fstat, read at most cap+1 bytes."""
+    try:
+        if not stat.S_ISREG(os.lstat(p).st_mode):
+            return None
+        fd = os.open(p, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        return None
+    with os.fdopen(fd, "rb") as f:
+        st = os.fstat(f.fileno())
+        if not stat.S_ISREG(st.st_mode) or st.st_size > cap:
+            return None
+        data = f.read(cap + 1)
+    if len(data) > cap:
+        return None
+    return data.decode("utf-8", "replace")
+
+
+def state_files(work: Path) -> list[Path]:
+    """work/state.json and work/blocks/*/state.json, reached through real
+    directories only (a linked blocks/ or blocks/<b> is skipped), at most
+    MAX_BLOCKS blocks."""
+    out = [work / "state.json"]
+    blocks = work / "blocks"
+    if _real_dir(work) and _real_dir(blocks):
+        try:
+            names = sorted(os.listdir(blocks))[:MAX_BLOCKS]
+        except OSError:
+            names = []
+        out += [blocks / n / "state.json" for n in names
+                if _real_dir(blocks / n)]
+    return out
+
+
 def open_checkpoints(work: Path) -> list[dict]:
     """Human checkpoints presented and not answered, from every
-    blocks/*/state.json (and a state.json at the root) under work."""
+    blocks/*/state.json (and a state.json at the root) under work. Each is
+    read only if it is a regular file under the size cap (read_regular);
+    anything else - a link, a FIFO, a huge file, bad JSON - is skipped."""
     out = []
-    for sj in sorted(list(work.glob("blocks/*/state.json")) +
-                     list(work.glob("state.json"))):
+    for sj in sorted(state_files(work)):
+        text = read_regular(sj)
+        if text is None:
+            continue
         try:
-            st = json.loads(sj.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+            st = json.loads(text)
+        except (json.JSONDecodeError, RecursionError):
+            continue
+        if not isinstance(st, dict) or not isinstance(st.get("human") or {},
+                                                      dict):
             continue
         for cp, rec in sorted((st.get("human") or {}).items()):
             if isinstance(rec, dict) and rec.get("status") == "presented" \
@@ -328,18 +394,27 @@ def run_group(argv: list[str], stdin_text: str | None, stdout_path: Path,
 
 
 def parse_claude_json(path: Path) -> dict | None:
+    """The WHOLE of `path` (whitespace-trimmed) parsed as one JSON object,
+    else None. Never a last line or a trailing object: code inside the
+    sandbox can append to claude's stdout, so anything but exactly one
+    object is unreadable, and the caller books the run's whole budget."""
     try:
         text = path.read_text(encoding="utf-8").strip()
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return None
-    for chunk in (text, text.splitlines()[-1] if text else ""):
-        try:
-            d = json.loads(chunk)
-            if isinstance(d, dict):
-                return d
-        except json.JSONDecodeError:
-            continue
-    return None
+    try:
+        d = json.loads(text)
+    except (json.JSONDecodeError, RecursionError):
+        return None
+    return d if isinstance(d, dict) else None
+
+
+def known_cost(c) -> float | None:
+    """A cost claude reported, if it is a finite number >= 0; else None."""
+    if isinstance(c, bool) or not isinstance(c, (int, float)):
+        return None
+    c = float(c)
+    return c if math.isfinite(c) and c >= 0 else None
 
 
 def claude_dir_entries() -> set[str]:
@@ -347,15 +422,32 @@ def claude_dir_entries() -> set[str]:
 
 
 def credentials_state() -> dict:
+    """The host credentials file by lstat only (never read): ok when it is
+    a regular, non-empty file owned by this user."""
     p = sb.real_home() / ".claude" / sb.CREDENTIALS
     try:
         st = os.lstat(p)
     except OSError as exc:
         return {"ok": False, "detail": str(exc)}
-    import stat as _s
-    return {"ok": _s.S_ISREG(st.st_mode) and st.st_uid == os.getuid(),
-            "regular": _s.S_ISREG(st.st_mode), "uid": st.st_uid,
+    reg = stat.S_ISREG(st.st_mode)
+    return {"ok": reg and st.st_uid == os.getuid() and st.st_size > 0,
+            "regular": reg, "uid": st.st_uid, "nonempty": st.st_size > 0,
             "mode": oct(st.st_mode & 0o777)}
+
+
+def host_claude_dir_stop(before: set[str], after: set[str],
+                         cred: dict) -> str | None:
+    """Why the round must stop after an invocation, or None: a top-level
+    entry of the real ~/.claude that is new since before the invocation,
+    or a credentials file that is no longer sound."""
+    new = sorted(after - before)
+    if new:
+        return ("new entries in the host's real ~/.claude after a claude "
+                f"invocation: {', '.join(new)} (left in place; a person "
+                "decides)")
+    if not cred.get("ok"):
+        return f"host credentials file changed: {cred}"
+    return None
 
 
 def repo_state() -> dict:
@@ -513,6 +605,22 @@ class Round:
                 rec[k] = j.get(k)
         return rec
 
+    def invoke_checked(self, layout: sb.Layout, cmd: list[str], n: int) -> dict:
+        """invoke(), with the real ~/.claude's top-level entries listed
+        before and after and the credentials file stat-ed after. A new entry
+        or an unsound credentials file sets rec["stop"]; nothing is
+        deleted."""
+        before = claude_dir_entries()
+        rec = self.invoke(layout, cmd, n)
+        after = claude_dir_entries()
+        cred = credentials_state()
+        rec["host_claude_dir_new"] = sorted(after - before)
+        rec["credentials_ok"] = bool(cred.get("ok"))
+        why = host_claude_dir_stop(before, after, cred)
+        if why:
+            rec["stop"] = why
+        return rec
+
     def run_cell(self, arm: str, detail: str, repeat: int, budget: float,
                  export: Path | None) -> dict:
         cid = cell_id(arm, detail, repeat)
@@ -549,15 +657,17 @@ class Round:
         invocations, approvals = [], []
         cost = 0.0
         cost_known = True
-        rec = self.invoke(layout, claude_cmd(PROMPTS[arm], budget), 0)
+        stop = None
+        rec = self.invoke_checked(layout, claude_cmd(PROMPTS[arm], budget), 0)
         invocations.append(rec)
         while True:
-            c = rec.get("total_cost_usd")
-            if isinstance(c, (int, float)):
-                cost += float(c)
+            c = known_cost(rec.get("total_cost_usd"))
+            if c is not None:
+                cost += c
             else:
                 cost_known = False
-            if arm != "skill" or len(approvals) >= MAX_RESUMES:
+            stop = rec.get("stop")
+            if stop or arm != "skill" or len(approvals) >= MAX_RESUMES:
                 break
             cps = open_checkpoints(layout.work)
             sid = rec.get("session_id") or next(
@@ -575,8 +685,8 @@ class Round:
             reply = APPROVAL.format(challenge=cp["challenge"])
             approvals.append({**cp, "reply": reply, "at": now(),
                               "by": "round.py stand-in reviewer"})
-            rec = self.invoke(layout, claude_cmd(reply, left, resume=sid),
-                              len(invocations))
+            rec = self.invoke_checked(
+                layout, claude_cmd(reply, left, resume=sid), len(invocations))
             invocations.append(rec)
         wall = round(time.monotonic() - t0, 1)
         if not cost_known:
@@ -590,6 +700,11 @@ class Round:
                       proxy=proxymod.summarize_log(rd / "proxy.log"),
                       host_claude_dir_new=sorted(after - before),
                       credentials=credentials_state(), ended=now())
+        if stop:
+            result["stop"] = stop
+            result["score"] = {"scored": False,
+                               "why": "not scored: the round stopped"}
+            return result
         result["score"] = self.score(arm, detail, repeat, layout.work, cost,
                                      wall, rd)
         return result
@@ -686,6 +801,9 @@ class Round:
             self.results_dir.mkdir(parents=True, exist_ok=True)
             (self.results_dir / f"{cid}.json").write_text(
                 json.dumps(result, indent=1), encoding="utf-8")
+            if result.get("stop"):
+                state, reason = "stopped", f"{cid}: {result['stop']}"
+                break
             o = overrun_decision(result["cost_usd"])
             if not o["ok"]:
                 state, reason = "stopped", o["reason"]

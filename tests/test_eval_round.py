@@ -507,3 +507,147 @@ def test_proxy_on_a_deep_path_allows_only_the_allowlist(tmp_path):
     assert s["denied"] == {"CONNECT github.com:443": 1,
                            "CONNECT api.anthropic.com:80": 1}
     assert s["allowed"] == {"CONNECT api.anthropic.com:443": 1}
+
+
+# ------------------------------------------- cost, checkpoints, ~/.claude
+def test_cost_counts_only_when_the_whole_stdout_is_one_object(tmp_path):
+    real = {"type": "result", "total_cost_usd": 12.5, "session_id": "s"}
+    p = tmp_path / "out.json"
+    p.write_text(json.dumps(real, indent=1) + "\n")
+    assert rnd.parse_claude_json(p) == real
+    # an agent writing a cheaper object into claude's stdout, after or
+    # before the real one, or alone after noise, makes the cost unknown
+    spoof = '{"total_cost_usd": 0.01}'
+    for text in (json.dumps(real) + "\n" + spoof, spoof + "\n" + json.dumps(real),
+                 "noise\n" + spoof, "\0" * 8 + spoof, "[1, 2]", ""):
+        p.write_text(text)
+        assert rnd.parse_claude_json(p) is None, text
+    for bad in (True, -1.0, float("nan"), float("inf"), "0.01", None):
+        assert rnd.known_cost(bad) is None
+    assert rnd.known_cost(0) == 0.0 and rnd.known_cost(3.5) == 3.5
+
+
+def test_a_spoofed_or_negative_cost_books_the_whole_budget(cell_env):
+    cell_env.invoke = lambda layout, cmd, n: {"n": n, "session_id": "s",
+                                              "total_cost_usd": -50.0}
+    res = cell_env.run_cell("bare", "terse", 1, 70.0, None)
+    assert res["cost_usd"] == 70.0 and res["cost_known"] is False
+    entry = cell_env.ledger.data["entries"][-1]
+    assert entry["state"] == "spent" and entry["usd"] == 70.0
+
+
+def test_unknown_cost_never_resumes_a_checkpoint(cell_env):
+    cmds = []
+
+    def invoke(layout, cmd, n):
+        cmds.append(cmd)
+        _state(layout.work, "presented")
+        return {"n": n, "session_id": "s"}
+    cell_env.invoke = invoke
+    res = cell_env.run_cell("skill", "terse", 1, 70.0, Path("/x"))
+    assert len(cmds) == 1 and "cost unknown" in res["resume_skipped"]
+    assert res["cost_usd"] == 70.0
+
+
+def test_open_checkpoints_reads_only_regular_files(tmp_path):
+    work = tmp_path / "work"
+    _state(work, "presented", "H1-good")
+    found = rnd.open_checkpoints(work)
+    assert [c["challenge"] for c in found] == ["H1-good"]
+    # a link to a presented checkpoint elsewhere, a linked block dir, a FIFO
+    # (would block a plain read) and an oversized file are all skipped
+    elsewhere = tmp_path / "elsewhere"
+    _state(elsewhere, "presented", "H1-link")
+    src = elsewhere / "blocks" / "counter8" / "state.json"
+    (work / "blocks" / "a").mkdir()
+    (work / "blocks" / "a" / "state.json").symlink_to(src)
+    (work / "blocks" / "b").symlink_to(src.parent)
+    (work / "blocks" / "c").mkdir()
+    os.mkfifo(work / "blocks" / "c" / "state.json")
+    (work / "blocks" / "d").mkdir()
+    big = {"human": {"H1": {"status": "presented", "challenge": "H1-big"}},
+           "pad": "x" * (rnd.MAX_STATE_BYTES + 10)}
+    (work / "blocks" / "d" / "state.json").write_text(json.dumps(big))
+    (work / "state.json").symlink_to(src)
+    found = rnd.open_checkpoints(work)
+    assert [c["challenge"] for c in found] == ["H1-good"]
+    # a linked blocks/ is not followed at all
+    work2 = tmp_path / "work2"
+    work2.mkdir()
+    (work2 / "blocks").symlink_to(elsewhere / "blocks")
+    assert rnd.open_checkpoints(work2) == []
+
+
+def test_a_new_host_claude_entry_stops_the_round_and_is_kept(cell_env):
+    home = sb.real_home()
+
+    def invoke(layout, cmd, n):
+        _state(layout.work, "presented")
+        (home / ".claude" / "settings.local.json").write_text('{"x": 1}')
+        return {"n": n, "session_id": "s", "total_cost_usd": 1.0}
+    cell_env.invoke = invoke
+    scored = []
+    cell_env.score = lambda *a: scored.append(a) or {"scored": True}
+    res = cell_env.run_cell("skill", "terse", 1, 70.0, Path("/x"))
+    assert "settings.local.json" in res["stop"]
+    assert res["host_claude_dir_new"] == ["settings.local.json"]
+    assert res["invocations"][0]["host_claude_dir_new"] == ["settings.local.json"]
+    assert len(res["invocations"]) == 1 and res["stand_in_approvals"] == []
+    assert not scored and res["score"]["scored"] is False
+    assert (home / ".claude" / "settings.local.json").is_file()  # not deleted
+
+
+def test_no_new_host_claude_entry_lets_the_run_finish(cell_env):
+    cell_env.invoke = lambda layout, cmd, n: {"n": n, "total_cost_usd": 1.0}
+    res = cell_env.run_cell("bare", "terse", 1, 70.0, None)
+    assert "stop" not in res and res["host_claude_dir_new"] == []
+    assert res["invocations"][0]["credentials_ok"] is True
+    assert res["score"] == {"scored": True}
+
+
+@pytest.mark.parametrize("damage", ["empty", "symlink", "gone"])
+def test_a_damaged_credentials_file_stops_the_run(cell_env, damage):
+    cred = sb.real_home() / ".claude" / sb.CREDENTIALS
+
+    def invoke(layout, cmd, n):
+        if damage == "empty":
+            cred.write_text("")
+        else:
+            cred.unlink()
+            if damage == "symlink":
+                cred.symlink_to("/etc/hostname")
+        return {"n": n, "total_cost_usd": 1.0}
+    cell_env.invoke = invoke
+    res = cell_env.run_cell("bare", "terse", 1, 70.0, None)
+    assert "credentials" in res["stop"]
+
+
+def test_the_round_stops_on_a_run_that_set_stop(cell_env):
+    home = sb.real_home()
+
+    def invoke(layout, cmd, n):
+        (home / ".claude" / "agents2").mkdir()
+        return {"n": n, "total_cost_usd": 1.0}
+    cell_env.invoke = invoke
+    cell_env.scorecard = lambda: {"ran": False}
+    out = cell_env.run("bare/terse/1")
+    assert out["status"] == "violations" and "agents2" in out["state"]
+    assert out["state"].startswith("stopped")
+    saved = json.loads((cell_env.results_dir / "bare-terse-r1.json").read_text())
+    assert saved["host_claude_dir_new"] == ["agents2"]
+
+
+def test_in_sandbox_scripts_are_bound_from_the_run_dir_not_the_repo(tmp_path):
+    lay = _layout(tmp_path, "bare")
+    m = _mounts(sb.build_argv(lay, ["true"]))
+    for name in sb.OPT_FILES:
+        op, src = m[f"{sb.SB_OPT}/{name}"]
+        assert op == "--ro-bind" and Path(src) == lay.opt / name
+        assert Path(src).read_bytes() == (REPO / "evals" / "round" / name).read_bytes()
+    srcs = [src for op, src in m.values() if op in ("--bind", "--ro-bind")]
+    assert not [s for s in srcs if Path(s).resolve().is_relative_to(REPO.resolve())]
+    # a run dir without the copies is refused, never bound from the repo
+    (lay.opt / "forward.py").chmod(0o644)
+    (lay.opt / "forward.py").unlink()
+    with pytest.raises(sb.SandboxError, match="forward.py"):
+        sb.build_argv(lay, ["true"])
