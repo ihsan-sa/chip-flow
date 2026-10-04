@@ -1,0 +1,672 @@
+{
+ "script": "scorecard",
+ "status": "pass",
+ "generated_at": "2026-10-04T13:52:48+00:00",
+ "suite": {
+  "vde": {
+   "rungs": 4,
+   "scored": 3,
+   "composite": 1.0,
+   "composite_ci95": [
+    1.0,
+    1.0
+   ],
+   "counted": 3,
+   "counted_ci95": [
+    0.4385,
+    1.0
+   ]
+  },
+  "ade": {
+   "rungs": 4,
+   "scored": 2,
+   "composite": 0.8889,
+   "composite_ci95": [
+    0.8889,
+    0.8889
+   ],
+   "counted": 0,
+   "counted_ci95": [
+    0.0,
+    0.6576
+   ]
+  },
+  "msde": {
+   "rungs": 4,
+   "scored": 2,
+   "composite": 0.5715,
+   "composite_ci95": [
+    0.1429,
+    1.0
+   ],
+   "counted": 0,
+   "counted_ci95": [
+    0.0,
+    0.6576
+   ]
+  },
+  "all": {
+   "scored": 7,
+   "composite": 0.8458,
+   "composite_ci95": [
+    0.6009,
+    0.9841
+   ],
+   "counted": 3,
+   "counted_ci95": [
+    0.1582,
+    0.7495
+   ]
+  }
+ },
+ "designs": [
+  {
+   "skill": "ade",
+   "rung": "mirror",
+   "kind": "skill",
+   "scored_at": "2026-09-27T18:40:23+00:00",
+   "phase": "P5",
+   "counts": false,
+   "composite": 0.8889,
+   "areas": {
+    "signoff": 0.8889,
+    "function": null,
+    "verification": null,
+    "implementation": null
+   },
+   "process": {
+    "hand_edits": 0,
+    "rulings": null,
+    "fix_attempts": 7,
+    "cost_usd": null,
+    "tokens": null,
+    "wall_s": 114496
+   },
+   "findings": [
+    {
+     "gate": "release",
+     "severity": "error",
+     "what": "release: no recorded pass",
+     "fix": "fix what release reports, then re-run it (/ade release)",
+     "route_to": "fixer"
+    }
+   ]
+  },
+  {
+   "skill": "ade",
+   "rung": "r2r_dac",
+   "kind": "skill",
+   "scored_at": "2026-09-27T18:40:24+00:00",
+   "phase": "P5",
+   "counts": false,
+   "composite": 0.8889,
+   "areas": {
+    "signoff": 0.8889,
+    "function": null,
+    "verification": null,
+    "implementation": null
+   },
+   "process": {
+    "hand_edits": 0,
+    "rulings": null,
+    "fix_attempts": 31,
+    "cost_usd": null,
+    "tokens": null,
+    "wall_s": 115470
+   },
+   "findings": [
+    {
+     "gate": "release",
+     "severity": "error",
+     "what": "release: no recorded pass",
+     "fix": "fix what release reports, then re-run it (/ade release)",
+     "route_to": "fixer"
+    }
+   ]
+  },
+  {
+   "skill": "msde",
+   "rung": "ring_osc_div",
+   "kind": "skill",
+   "scored_at": "2026-09-29T17:24:24+00:00",
+   "phase": "P2",
+   "counts": false,
+   "composite": 0.1429,
+   "areas": {
+    "signoff": 0.1429,
+    "function": null,
+    "verification": null,
+    "implementation": null
+   },
+   "process": {
+    "hand_edits": 0,
+    "rulings": null,
+    "fix_attempts": 0,
+    "cost_usd": null,
+    "tokens": null,
+    "wall_s": 287354
+   },
+   "findings": [
+    {
+     "gate": "cosim",
+     "severity": "error",
+     "what": "cosim: no recorded result",
+     "fix": "run the cosim gate (/msde cosim); a gate that never ran is a refusal",
+     "route_to": "fixer"
+    },
+    {
+     "gate": "precheck",
+     "severity": "error",
+     "what": "precheck: no recorded result",
+     "fix": "run the precheck gate (/msde precheck); a gate that never ran is a refusal",
+     "route_to": "fixer"
+    },
+    {
+     "gate": "top_drc",
+     "severity": "error",
+     "what": "top_drc: no recorded result",
+     "fix": "run the top_drc gate (/msde top_drc); a gate that never ran is a refusal",
+     "route_to": "fixer"
+    },
+    {
+     "gate": "top_harden",
+     "severity": "error",
+     "what": "top_harden: no recorded result",
+     "fix": "run the top_harden gate (/msde top_harden); a gate that never ran is a refusal",
+     "route_to": "fixer"
+    },
+    {
+     "gate": "top_lvs",
+     "severity": "error",
+     "what": "top_lvs: no recorded result",
+     "fix": "run the top_lvs gate (/msde top_lvs); a gate that never ran is a refusal",
+     "route_to": "fixer"
+    },
+    {
+     "gate": "release",
+     "severity": "error",
+     "what": "release: no recorded pass",
+     "fix": "fix what release reports, then re-run it (/msde release)",
+     "route_to": "fixer"
+    }
+   ]
+  },
+  {
+   "skill": "msde",
+   "rung": "sensor_counted",
+   "kind": "skill",
+   "scored_at": "2026-09-25T15:27:43+00:00",
+   "phase": "P4",
+   "counts": false,
+   "composite": 1.0,
+   "areas": {
+    "signoff": 1.0,
+    "function": null,
+    "verification": null,
+    "implementation": null
+   },
+   "process": {
+    "hand_edits": 2,
+    "rulings": null,
+    "fix_attempts": 4,
+    "cost_usd": 69.5,
+    "tokens": null,
+    "wall_s": 28795
+   },
+   "findings": [
+    {
+     "gate": null,
+     "severity": "info",
+     "what": "2 hand edit(s)",
+     "fix": "none for the agent: a hand edit stops the rung counting; record what the flow could not do",
+     "route_to": "fixer"
+    }
+   ]
+  },
+  {
+   "skill": "vde",
+   "rung": "counter8",
+   "kind": "skill",
+   "scored_at": "2026-09-25T07:23:16+00:00",
+   "phase": "P8",
+   "counts": true,
+   "composite": 1.0,
+   "areas": {
+    "signoff": 1.0,
+    "function": 1.0,
+    "verification": 1.0,
+    "implementation": 1.0
+   },
+   "process": {
+    "hand_edits": 0,
+    "rulings": null,
+    "fix_attempts": 19,
+    "cost_usd": null,
+    "tokens": null,
+    "wall_s": 14718
+   },
+   "findings": []
+  },
+  {
+   "skill": "vde",
+   "rung": "spi_fifo",
+   "kind": "skill",
+   "scored_at": "2026-10-02T06:19:10+00:00",
+   "phase": "P8",
+   "counts": true,
+   "composite": 1.0,
+   "areas": {
+    "signoff": 1.0,
+    "function": 1.0,
+    "verification": 1.0,
+    "implementation": 1.0
+   },
+   "process": {
+    "hand_edits": 0,
+    "rulings": null,
+    "fix_attempts": 16,
+    "cost_usd": null,
+    "tokens": null,
+    "wall_s": 2040
+   },
+   "findings": []
+  },
+  {
+   "skill": "vde",
+   "rung": "uart",
+   "kind": "skill",
+   "scored_at": "2026-09-27T18:39:59+00:00",
+   "phase": "P8",
+   "counts": true,
+   "composite": 1.0,
+   "areas": {
+    "signoff": 1.0,
+    "function": 1.0,
+    "verification": 1.0,
+    "implementation": 1.0
+   },
+   "process": {
+    "hand_edits": 0,
+    "rulings": null,
+    "fix_attempts": 53,
+    "cost_usd": null,
+    "tokens": null,
+    "wall_s": 226452
+   },
+   "findings": []
+  },
+  {
+   "skill": "vde",
+   "rung": "counter8",
+   "kind": "reference",
+   "scored_at": "2026-09-25T02:03:37+00:00",
+   "phase": "P0",
+   "counts": true,
+   "composite": 0.9946,
+   "areas": {
+    "signoff": 1.0,
+    "function": 1.0,
+    "verification": 0.9783,
+    "implementation": 1.0
+   },
+   "process": {
+    "hand_edits": 0,
+    "rulings": null,
+    "fix_attempts": 0,
+    "cost_usd": null,
+    "tokens": null,
+    "wall_s": 4450
+   },
+   "findings": [
+    {
+     "gate": "mutate",
+     "severity": "warning",
+     "what": "kill rate 0.96",
+     "fix": "add tests that kill the surviving mutant classes (/vde mutate lists them)",
+     "route_to": "tb-writer"
+    }
+   ]
+  },
+  {
+   "skill": "vde",
+   "rung": "riscv",
+   "kind": "reference",
+   "scored_at": "2026-09-25T01:21:56+00:00",
+   "phase": "P0",
+   "counts": false,
+   "composite": 0.475,
+   "areas": {
+    "signoff": 0.4,
+    "function": 1.0,
+    "verification": 0.5,
+    "implementation": 0.0
+   },
+   "process": {
+    "hand_edits": 0,
+    "rulings": null,
+    "fix_attempts": 0,
+    "cost_usd": null,
+    "tokens": null,
+    "wall_s": 1044
+   },
+   "findings": [
+    {
+     "gate": "drc",
+     "severity": "error",
+     "what": "drc: no recorded result",
+     "fix": "run the drc gate (/vde drc); a gate that never ran is a refusal",
+     "route_to": "fixer"
+    },
+    {
+     "gate": "glsim",
+     "severity": "error",
+     "what": "glsim: no recorded result",
+     "fix": "run the glsim gate (/vde glsim); a gate that never ran is a refusal",
+     "route_to": "fixer"
+    },
+    {
+     "gate": "harden",
+     "severity": "error",
+     "what": "harden: no recorded result",
+     "fix": "run the harden gate (/vde harden); a gate that never ran is a refusal",
+     "route_to": "fixer"
+    },
+    {
+     "gate": "lvs",
+     "severity": "error",
+     "what": "lvs: no recorded result",
+     "fix": "run the lvs gate (/vde lvs); a gate that never ran is a refusal",
+     "route_to": "fixer"
+    },
+    {
+     "gate": "mutate",
+     "severity": "error",
+     "what": "mutate: no recorded result",
+     "fix": "run the mutate gate (/vde mutate); a gate that never ran is a refusal",
+     "route_to": "tb-writer"
+    },
+    {
+     "gate": "precheck",
+     "severity": "error",
+     "what": "precheck: no recorded result",
+     "fix": "run the precheck gate (/vde precheck); a gate that never ran is a refusal",
+     "route_to": "fixer"
+    },
+    {
+     "gate": "synth",
+     "severity": "error",
+     "what": "synth: no recorded result",
+     "fix": "run the synth gate (/vde synth); a gate that never ran is a refusal",
+     "route_to": "fixer"
+    },
+    {
+     "gate": "timing",
+     "severity": "error",
+     "what": "timing: no recorded result",
+     "fix": "run the timing gate (/vde timing); a gate that never ran is a refusal",
+     "route_to": "fixer"
+    },
+    {
+     "gate": "release",
+     "severity": "error",
+     "what": "release: no recorded pass",
+     "fix": "fix what release reports, then re-run it (/vde release)",
+     "route_to": "fixer"
+    }
+   ]
+  },
+  {
+   "skill": "vde",
+   "rung": "spi_fifo",
+   "kind": "reference",
+   "scored_at": "2026-09-25T01:03:45+00:00",
+   "phase": "P0",
+   "counts": false,
+   "composite": 0.6703,
+   "areas": {
+    "signoff": 0.3333,
+    "function": 1.0,
+    "verification": 0.8478,
+    "implementation": 0.5
+   },
+   "process": {
+    "hand_edits": 0,
+    "rulings": null,
+    "fix_attempts": 0,
+    "cost_usd": null,
+    "tokens": null,
+    "wall_s": 378
+   },
+   "findings": [
+    {
+     "gate": "cover",
+     "severity": "error",
+     "what": "cover: last recorded result is FAIL",
+     "fix": "fix what cover reports, then re-run it (/vde cover)",
+     "route_to": "tb-writer"
+    },
+    {
+     "gate": "drc",
+     "severity": "error",
+     "what": "drc: no recorded result",
+     "fix": "run the drc gate (/vde drc); a gate that never ran is a refusal",
+     "route_to": "fixer"
+    },
+    {
+     "gate": "formal",
+     "severity": "error",
+     "what": "formal: no recorded result",
+     "fix": "run the formal gate (/vde formal); a gate that never ran is a refusal",
+     "route_to": "property-writer"
+    },
+    {
+     "gate": "glsim",
+     "severity": "error",
+     "what": "glsim: no recorded result",
+     "fix": "run the glsim gate (/vde glsim); a gate that never ran is a refusal",
+     "route_to": "fixer"
+    },
+    {
+     "gate": "harden",
+     "severity": "error",
+     "what": "harden: no recorded result",
+     "fix": "run the harden gate (/vde harden); a gate that never ran is a refusal",
+     "route_to": "fixer"
+    },
+    {
+     "gate": "lvs",
+     "severity": "error",
+     "what": "lvs: no recorded result",
+     "fix": "run the lvs gate (/vde lvs); a gate that never ran is a refusal",
+     "route_to": "fixer"
+    },
+    {
+     "gate": "mutate",
+     "severity": "error",
+     "what": "mutate: last recorded result is FAIL",
+     "fix": "fix what mutate reports, then re-run it (/vde mutate)",
+     "route_to": "tb-writer"
+    },
+    {
+     "gate": "precheck",
+     "severity": "error",
+     "what": "precheck: no recorded result",
+     "fix": "run the precheck gate (/vde precheck); a gate that never ran is a refusal",
+     "route_to": "fixer"
+    },
+    {
+     "gate": "timing",
+     "severity": "error",
+     "what": "timing: no recorded result",
+     "fix": "run the timing gate (/vde timing); a gate that never ran is a refusal",
+     "route_to": "fixer"
+    },
+    {
+     "gate": "release",
+     "severity": "error",
+     "what": "release: no recorded pass",
+     "fix": "fix what release reports, then re-run it (/vde release)",
+     "route_to": "fixer"
+    },
+    {
+     "gate": "mutate",
+     "severity": "warning",
+     "what": "kill rate 0.70",
+     "fix": "add tests that kill the surviving mutant classes (/vde mutate lists them)",
+     "route_to": "tb-writer"
+    }
+   ]
+  },
+  {
+   "skill": "vde",
+   "rung": "uart",
+   "kind": "reference",
+   "scored_at": "2026-09-25T00:11:51+00:00",
+   "phase": "P0",
+   "counts": false,
+   "composite": 0.7091,
+   "areas": {
+    "signoff": 0.4667,
+    "function": 1.0,
+    "verification": 0.8696,
+    "implementation": 0.5
+   },
+   "process": {
+    "hand_edits": 0,
+    "rulings": null,
+    "fix_attempts": 0,
+    "cost_usd": null,
+    "tokens": null,
+    "wall_s": 507
+   },
+   "findings": [
+    {
+     "gate": "drc",
+     "severity": "error",
+     "what": "drc: no recorded result",
+     "fix": "run the drc gate (/vde drc); a gate that never ran is a refusal",
+     "route_to": "fixer"
+    },
+    {
+     "gate": "glsim",
+     "severity": "error",
+     "what": "glsim: no recorded result",
+     "fix": "run the glsim gate (/vde glsim); a gate that never ran is a refusal",
+     "route_to": "fixer"
+    },
+    {
+     "gate": "harden",
+     "severity": "error",
+     "what": "harden: no recorded result",
+     "fix": "run the harden gate (/vde harden); a gate that never ran is a refusal",
+     "route_to": "fixer"
+    },
+    {
+     "gate": "lvs",
+     "severity": "error",
+     "what": "lvs: no recorded result",
+     "fix": "run the lvs gate (/vde lvs); a gate that never ran is a refusal",
+     "route_to": "fixer"
+    },
+    {
+     "gate": "mutate",
+     "severity": "error",
+     "what": "mutate: last recorded result is FAIL",
+     "fix": "fix what mutate reports, then re-run it (/vde mutate)",
+     "route_to": "tb-writer"
+    },
+    {
+     "gate": "precheck",
+     "severity": "error",
+     "what": "precheck: no recorded result",
+     "fix": "run the precheck gate (/vde precheck); a gate that never ran is a refusal",
+     "route_to": "fixer"
+    },
+    {
+     "gate": "timing",
+     "severity": "error",
+     "what": "timing: no recorded result",
+     "fix": "run the timing gate (/vde timing); a gate that never ran is a refusal",
+     "route_to": "fixer"
+    },
+    {
+     "gate": "release",
+     "severity": "error",
+     "what": "release: no recorded pass",
+     "fix": "fix what release reports, then re-run it (/vde release)",
+     "route_to": "fixer"
+    },
+    {
+     "gate": "mutate",
+     "severity": "warning",
+     "what": "kill rate 0.74",
+     "fix": "add tests that kill the surviving mutant classes (/vde mutate lists them)",
+     "route_to": "tb-writer"
+    }
+   ]
+  }
+ ],
+ "benches": [
+  {
+   "stage": "P3",
+   "fixture": "counter8_tb",
+   "file": "2026-09-25T040953_P3_counter8_tb_baseline.json",
+   "composite": 1.0,
+   "gates": {
+    "sim": "pass",
+    "mutate": "pass",
+    "cover": "pass"
+   }
+  },
+  {
+   "stage": "P4",
+   "fixture": "counter8_rtl",
+   "file": "2026-09-25T040804_P4_counter8_rtl_baseline.json",
+   "composite": 1.0,
+   "gates": {
+    "lint": "pass",
+    "sim": "pass",
+    "holdout": "pass",
+    "mutate": "pass",
+    "formal": "pass",
+    "cover": "pass"
+   }
+  },
+  {
+   "stage": "P4",
+   "fixture": "uart_rtl",
+   "file": "2026-09-25T041506_P4_uart_rtl_compare.json",
+   "composite": 0.8127,
+   "gates": {
+    "lint": "pass",
+    "sim": "pass",
+    "holdout": "pass",
+    "mutate": "fail",
+    "formal": "fail",
+    "cover": "pass"
+   }
+  }
+ ],
+ "cost_estimate": {
+  "rungs": 12,
+  "detail_levels": 3,
+  "arms": 2,
+  "seeds": 3,
+  "runs": 216,
+  "skill_runs_recorded": 17,
+  "runs_with_cost": 3,
+  "per_run_usd": {
+   "min": 39.0,
+   "median": 67.0,
+   "max": 69.5
+  },
+  "suite_usd": {
+   "min": 8424,
+   "median": 14472,
+   "max": 15012
+  },
+  "one_rung_per_skill_runs": 54,
+  "one_rung_per_skill_usd": 3618,
+  "median_wall_h": 7.6
+ }
+}

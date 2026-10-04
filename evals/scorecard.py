@@ -37,7 +37,8 @@ not enter the suite score.
 
 The cost estimate multiplies the recorded per-run cost by the full suite's
 size: every rung of every skill x 3 brief detail levels x 2 arms (bare
-Claude Code and the skill) x --seeds (default 3). Only runs whose ladder
+Claude Code and the skill) x --seeds (default 3), and the same with one
+rung a skill as the smaller first step. Only runs whose ladder
 result carries cost_usd are used, and the estimate says how many those are.
 
 `--record` writes the scorecard as a dated JSON under
@@ -243,6 +244,7 @@ def cost_estimate(results: Path, rungs: dict, seeds: int) -> dict:
     walls = [r["wall_s"] for r in runs if r.get("wall_s")]
     n_rungs = sum(len(v) for v in rungs.values())
     n_runs = n_rungs * len(DETAIL_LEVELS) * len(ARMS) * seeds
+    n_pilot = len(rungs) * len(DETAIL_LEVELS) * len(ARMS) * seeds  # one rung a skill
     per = {"min": min(costed), "median": statistics.median(costed),
            "max": max(costed)} if costed else None
     return {
@@ -251,6 +253,8 @@ def cost_estimate(results: Path, rungs: dict, seeds: int) -> dict:
         "skill_runs_recorded": len(runs), "runs_with_cost": len(costed),
         "per_run_usd": per,
         "suite_usd": ({k: round(v * n_runs) for k, v in per.items()} if per else None),
+        "one_rung_per_skill_runs": n_pilot,
+        "one_rung_per_skill_usd": (round(per["median"] * n_pilot) if per else None),
         "median_wall_h": round(statistics.median(walls) / 3600, 1) if walls else None,
     }
 
@@ -280,7 +284,7 @@ def render_scorecard(card: dict) -> str:
         a = c["areas"]
         top = c["findings"][0]["what"] if c["findings"] else "-"
         L.append(f"| {c['skill']}/{c['rung']} | {c['kind']} | {c['phase']} "
-                 f"| {'yes' if c['counts'] else 'no'} | {_f(c['composite'])} "
+                 f"| {'yes' if c['counts'] else 'no'} | {_f(c['composite'])} | "
                  + " | ".join(_f(a[x]) for x in AREAS) + f" | {top} |")
     if card["benches"]:
         L += ["", "| stage bench | composite | gates not passing |", "|---|---|---|"]
@@ -301,7 +305,9 @@ def render_cost(e: dict) -> str:
                  f"carry a cost: ${per['min']:.0f} to ${per['max']:.0f} a run, median "
                  f"${per['median']:.0f}. At those figures the suite costs "
                  f"${e['suite_usd']['min']:,} to ${e['suite_usd']['max']:,}, median "
-                 f"${e['suite_usd']['median']:,}.")
+                 f"${e['suite_usd']['median']:,}. One rung per skill instead of every "
+                 f"rung is {e['one_rung_per_skill_runs']} runs, about "
+                 f"${e['one_rung_per_skill_usd']:,} at the median.")
     else:
         L.append("No skill run on record carries a cost, so the suite cannot be costed.")
     if e["median_wall_h"] is not None:

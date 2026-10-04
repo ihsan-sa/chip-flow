@@ -127,6 +127,7 @@ def test_cost_estimate_counts_every_costed_skill_run(tmp_path):
     assert e["runs"] == 12 * 3 * 2 * 2
     assert e["runs_with_cost"] == 2 and e["per_run_usd"]["max"] == 60.0
     assert e["suite_usd"]["median"] == 50 * e["runs"]
+    assert e["one_rung_per_skill_runs"] == 3 * 3 * 2 * 2
     empty = scorecard.build(tmp_path / "none", 3)["cost_estimate"]
     assert empty["per_run_usd"] is None and empty["suite_usd"] is None
     assert "cannot be costed" in scorecard.render_cost(empty)
@@ -143,6 +144,8 @@ def test_doc_blocks_are_rewritten_between_markers_only(tmp_path):
     t = doc.read_text(encoding="utf-8")
     assert t.startswith("intro\n") and "\nmid\n" in t and t.endswith("tail\n")
     assert "old" not in t and "| vde/uart | skill |" in t and "design runs" in t
+    row = [ln for ln in t.splitlines() if ln.startswith("| vde/uart |")][0]
+    assert row.count("|") == 11  # ten cells, one per header column
     scorecard.rewrite_doc(doc, card)  # idempotent
     assert doc.read_text(encoding="utf-8") == t
     bare = tmp_path / "bare.md"
