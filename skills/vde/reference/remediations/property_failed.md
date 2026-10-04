@@ -1,25 +1,26 @@
 # property_failed (formal)
 
-SymbiYosys's k-induction (smtbmc) found a real counterexample for a
-labeled property. Routes to `rtl` - formal is the answer to tests that
-pass too easily (`docs/design.md` section 2); a property written fresh
-from the spec, by an agent that never saw the RTL, finding a
-counterexample is almost always a real design defect sim's own finite
-test set missed.
+SymbiYosys's k-induction (smtbmc) found a counterexample for a labeled
+property. Routes to `formal`, the property-writer, first. It reads the
+counterexample against the spec, never the RTL, so it can tell a property
+that misstates the spec from a design that breaks it. Sending this to
+`rtl` first is worse: the rtl fixer cannot edit `formal/` and would be
+pushed to bend correct RTL toward a wrong property.
 
-**False positive class:** a property that is stricter than the spec
-actually requires (the property-writer over-constrained it). Real, but
-check the RTL against the spec's own text first - if the RTL genuinely
-violates the requirement as written, fix the RTL; only report the
-property as wrong in OPEN if you are confident the SPEC, not the design,
-is what the property misread.
+**Triage against the spec first.** Read sby's own counterexample trace
+(the task's log, not just pass/fail) for the exact cycle and signal values
+that violate the assertion, then check the property's claim against the
+spec's own text.
 
-**Cheapest fix first:** sby's own counterexample trace (read the task's
-log, not just the pass/fail) shows the exact cycle and signal values that
-violate the assertion - reproduce it by hand against the RTL before
-changing anything.
+- The property misstates the spec (over-constrained, wrong cycle, a
+  harness off-by-one): fix `formal/*.sv` so it says what the spec says.
+- The property states the spec correctly: leave it alone and say so in
+  OPEN. The orchestrator then re-dispatches the finding to `rtl`, where a
+  counterexample from a property written fresh from the spec, by an agent
+  that never saw the RTL, is a real design defect sim's finite test set
+  missed (`docs/design.md` section 2).
 
 **Trap:** "fixing" this by loosening the property (widening what counts as
-compliant) instead of the RTL defeats the entire gate - never do this to
-make the gate pass; if the property is genuinely wrong, that is a decision
-for a human, not a fixer's unilateral edit.
+compliant) to make the gate pass defeats the entire gate. Fix a property
+only to match the spec; if the spec itself is what looks wrong, that is a
+decision for a human.

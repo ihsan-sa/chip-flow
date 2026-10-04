@@ -195,7 +195,9 @@ On gate fail (exit 1, result JSON has `failing` with a `kind`/`file`/
    every assert, bound and expected value alone; a
    `formal` order (`property_failed`, `cover_not_reached`, a bounded
    property, a formal depth to set) goes to the property-writer in
-   WORK-ORDER MODE (`skills/vde/agents/property-writer.md`); every other
+   WORK-ORDER MODE (`skills/vde/agents/property-writer.md`). When it
+   reports a `property_failed` property correct (left as is, said so in
+   OPEN), re-dispatch that finding to the `rtl` fixer as a new order; every other
    domain (rtl/synth/harden/review) goes to the `fixer` role
    (`skills/vde/agents/fixer.md`). Each order's own `role_prompt` names
    the same file. Orders inside one `parallel_groups`

@@ -22,12 +22,15 @@ one of three things, never a plain pass/fail:
 
 ## Where a failure routes
 
-`property_failed` -> `rtl` (formal caught what sim could not - this is
-almost always a real design defect, per `docs/design.md` section 2's whole
-argument for formal existing). `engine_disagreement` and
-`cover_not_reached` -> `formal` (the property itself, per
-`fix_dispatch.DOMAINS["formal"]`'s own guidance: widen the depth or fix
-the property, never loosen it to pass).
+`property_failed`, `engine_disagreement` and `cover_not_reached` ->
+`formal`, the property-writer (`fix_dispatch.DOMAINS["formal"]`). It reads
+the counterexample against the spec, never the RTL. If the property
+misstates the spec it fixes `formal/*.sv` (never weakening); if the
+property is right it leaves it and says so in OPEN, and the orchestrator
+re-dispatches the finding to `rtl` (formal caught what sim could not -
+`docs/design.md` section 2's argument for formal existing). Routing to
+`rtl` first would push the rtl fixer, which cannot edit `formal/`, to bend
+correct RTL toward a wrong property.
 
 ## Cost
 
