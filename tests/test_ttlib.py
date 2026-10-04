@@ -218,11 +218,138 @@ def test_clock_port_maps_a_spare_input_bit():
     assert ttlib.clock_port(spec) == "ui_in[0]"
 
 
-def test_clock_port_raises_on_more_than_one_domain():
+PLL_SPEC = {
+    "top": "pll",
+    "ports": {"clk": {"dir": "input", "width": 1},
+              "vco_out": {"dir": "input", "width": 1},
+              "lock": {"dir": "output", "width": 1}},
+    "tt_pins": {"clk": "clk", "vco_out": "ui_in[3]", "lock": "uo_out[2]"},
+    "clock": {"period_ns": 80, "domains": ["clk", "vco_out"],
+              "primary": "clk"},
+}
+PLL_SDC = """\
+# vco_out is the second domain
+create_clock -name vco_out -period 3.0 [get_ports {ui_in[3]}]
+create_generated_clock -name clk_pre -source [get_ports {ui_in[3]}] \\
+    -divide_by 8 [get_pins u_pre/q2/Q]
+set_clock_groups -asynchronous -group [get_clocks clk] \\
+    -group [get_clocks {vco_out clk_pre}]
+"""
+
+
+def _pll(**clock):
+    return {**PLL_SPEC, "clock": {**PLL_SPEC["clock"], **clock}}
+
+
+def test_primary_domain_is_the_one_domain_or_the_named_one():
+    one = {**COUNTER8_SPEC, "clock": {"period_ns": 20, "domains": ["clk"]}}
+    assert ttlib.primary_domain(one) == "clk"
+    assert ttlib.primary_domain(COUNTER8_SPEC) is None
+    assert ttlib.primary_domain(PLL_SPEC) == "clk"
+    assert ttlib.clock_port(PLL_SPEC) == "clk"
+    # the explicit key beats list order: vco_out is second in the list
+    assert ttlib.clock_port(_pll(primary="vco_out")) == "ui_in[3]"
+
+
+def test_primary_domain_refuses_to_guess_between_several():
     spec = {**COUNTER8_SPEC,
             "clock": {"period_ns": 20, "domains": ["clk", "rst"]}}
-    with pytest.raises(ttlib.TTError, match="more than one clock"):
+    with pytest.raises(ttlib.TTError, match="clock.primary is not set"):
         ttlib.clock_port(spec)
+
+
+def test_primary_domain_must_be_one_of_the_domains():
+    with pytest.raises(ttlib.TTError, match="not one of"):
+        ttlib.clock_port(_pll(primary="clk_pre"))
+    one = {**COUNTER8_SPEC,
+           "clock": {"period_ns": 20, "domains": ["clk"], "primary": "rst"}}
+    with pytest.raises(ttlib.TTError, match="not one of"):
+        ttlib.clock_port(one)
+
+
+def test_design_sdc_problems_pass_a_good_sdc():
+    assert ttlib.design_sdc_problems(PLL_SPEC, PLL_SDC) == []
+    # a domain may be clocked by its port alone, under any name
+    by_port = "create_clock -name vco -period 3 [get_ports ui_in\\[3\\]]\n"
+    assert ttlib.design_sdc_problems(PLL_SPEC, by_port) == []
+
+
+def test_design_sdc_problems_refuse_redefining_the_primary():
+    for line in ("create_clock -name clk -period 800 [get_ports clk]",
+                 "create_clock -name slow -period 800 [get_ports {clk}]",
+                 "create_generated_clock -name clk -source "
+                 "[get_ports {ui_in[3]}] -divide_by 2 [get_pins a/Q]"):
+        problems = ttlib.design_sdc_problems(PLL_SPEC, PLL_SDC + line + "\n")
+        assert len(problems) == 1 and "primary clock" in problems[0], line
+    # a generated clock whose -source is the primary port is not a redefinition
+    ok = PLL_SDC + ("create_generated_clock -name half -source "
+                    "[get_ports clk] -divide_by 2 [get_pins d/Q]\n")
+    assert ttlib.design_sdc_problems(PLL_SPEC, ok) == []
+
+
+def test_design_sdc_problems_refuse_a_domain_left_unclocked():
+    sdc = "# the vco clock is commented out\n# create_clock -name vco_out\n"
+    problems = ttlib.design_sdc_problems(PLL_SPEC, sdc)
+    assert len(problems) == 1
+    assert "'vco_out'" in problems[0] and "ui_in[3]" in problems[0]
+
+
+def test_prepare_harden_sdc_refuses_several_domains_without_one(tmp_path):
+    with pytest.raises(ttlib.TTError, match="does not exist"):
+        ttlib.prepare_harden_sdc(PLL_SPEC, tmp_path)
+    assert not (tmp_path / ttlib.FLOW_SDC_NAME).exists()
+
+
+def test_prepare_harden_sdc_refuses_a_bad_design_sdc(tmp_path):
+    (tmp_path / ttlib.HARDEN_SDC_NAME).write_text(
+        "create_clock -name clk -period 800 [get_ports clk]\n",
+        encoding="utf-8")
+    with pytest.raises(ttlib.TTError, match="primary clock") as exc:
+        ttlib.prepare_harden_sdc(PLL_SPEC, tmp_path)
+    assert "'vco_out'" in str(exc.value)
+    assert not (tmp_path / ttlib.FLOW_SDC_NAME).exists()
+
+
+def test_prepare_harden_sdc_writes_the_flow_sdc(tmp_path):
+    design = tmp_path / ttlib.HARDEN_SDC_NAME
+    design.write_text(PLL_SDC, encoding="utf-8")
+    flow = ttlib.prepare_harden_sdc(PLL_SPEC, tmp_path)
+    assert flow == tmp_path / ttlib.FLOW_SDC_NAME
+    lines = flow.read_text(encoding="utf-8").splitlines()
+    base = lines.index("source $::env(SCRIPTS_DIR)/base.sdc")
+    assert lines.index(f"source {{{design.resolve()}}}") > base
+    assert "set_propagated_clock [all_clocks]" in flow.read_text()
+
+
+def test_prepare_harden_sdc_one_clock_without_a_design_sdc_is_unchanged(tmp_path):
+    spec = {**COUNTER8_SPEC, "clock": {"period_ns": 20, "domains": ["clk"]}}
+    (tmp_path / ttlib.FLOW_SDC_NAME).write_text("stale\n", encoding="utf-8")
+    assert ttlib.prepare_harden_sdc(spec, tmp_path) is None
+    assert not (tmp_path / ttlib.FLOW_SDC_NAME).exists()
+    config = ttlib.harden_config(spec, [tmp_path / "counter8.v"],
+                                 tmp_path / "tt_um_counter8.v", tmp_path)
+    assert "PNR_SDC_FILE" not in config and "SIGNOFF_SDC_FILE" not in config
+
+
+def test_harden_config_points_both_sdc_keys_at_the_flow_sdc(tmp_path):
+    flow = tmp_path / "flow.sdc"
+    config = ttlib.harden_config(PLL_SPEC, [tmp_path / "pll.v"],
+                                 tmp_path / "tt_um_pll.v", tmp_path,
+                                 flow_sdc=flow)
+    assert config["CLOCK_PORT"] == "clk"
+    assert config["CLOCK_PERIOD"] == 80.0
+    assert config["PNR_SDC_FILE"] == config["SIGNOFF_SDC_FILE"] == str(flow)
+    with pytest.raises(ttlib.TTError, match="no design SDC"):
+        ttlib.harden_config(PLL_SPEC, [tmp_path / "pll.v"],
+                            tmp_path / "tt_um_pll.v", tmp_path)
+
+
+def test_override_may_not_set_the_sdc_keys(tmp_path):
+    for key in ("PNR_SDC_FILE", "SIGNOFF_SDC_FILE"):
+        path = tmp_path / "config.override.json"
+        path.write_text(f'{{"{key}": "x.sdc"}}', encoding="utf-8")
+        with pytest.raises(ttlib.TTError, match="constraints.sdc"):
+            ttlib.load_harden_override(path)
 
 
 def test_clock_port_raises_on_a_multi_bit_or_output_mapping():

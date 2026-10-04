@@ -10,6 +10,7 @@ without needing the toolchain image at all.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -422,3 +423,118 @@ def test_harden_job_killed_halfway_reports_dead_then_restart_finishes_and_signof
     code = check_release.main(["--workspace", str(ws), "--out", str(release_out)])
     release = _json.loads(release_out.read_text(encoding="utf-8"))
     assert code == 0 and release["status"] == "pass", release
+
+
+def _multi_clock_ws(tmp_path):
+    ws = make_ws(tmp_path)
+    spec = ws / "spec" / "spec.yaml"
+    spec.write_text(spec.read_text(encoding="utf-8").replace(
+        "clock: {period_ns: 20, domains: [clk]}\n",
+        "clock: {period_ns: 20, domains: [clk, vco], primary: clk}\n").replace(
+        "  rst: {dir: input, width: 1}\n",
+        "  rst: {dir: input, width: 1}\n  vco: {dir: input, width: 1}\n").replace(
+        "  rst: ~rst_n\n", "  rst: ~rst_n\n  vco: ui_in[3]\n"),
+        encoding="utf-8")
+    return ws
+
+
+def test_multi_clock_without_a_design_sdc_is_refused_before_librelane(
+        tmp_path, monkeypatch, capsys):
+    ws = _multi_clock_ws(tmp_path)
+
+    def behavior(cwd):
+        raise AssertionError("librelane must not run")
+
+    monkeypatch.setattr(check_harden.subprocess, "run",
+                        _fake_run_factory(behavior))
+    code = check_harden.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 2, out
+    assert "constraints.sdc does not exist" in out["error"]
+    assert not (ws / "harden" / "config.json").exists()
+
+
+def test_multi_clock_with_a_design_sdc_reaches_librelane_on_flow_sdc(
+        tmp_path, monkeypatch, capsys):
+    ws = _multi_clock_ws(tmp_path)
+    (ws / "harden").mkdir()
+    (ws / "harden" / "constraints.sdc").write_text(
+        "create_clock -name vco -period 3 [get_ports {ui_in[3]}]\n",
+        encoding="utf-8")
+    monkeypatch.setattr(check_harden.subprocess, "run",
+                        _fake_run_factory(_failing_flow))
+    check_harden.main(["--workspace", str(ws)])
+    capsys.readouterr()
+    config = json.loads((ws / "harden" / "config.json").read_text())
+    flow = str(ws / "harden" / "flow.sdc")
+    assert config["PNR_SDC_FILE"] == config["SIGNOFF_SDC_FILE"] == flow
+    assert config["CLOCK_PORT"] == "clk"
+
+
+def test_design_sdc_edit_stales_harden(tmp_path):
+    import statelib
+    ws = make_ws(tmp_path)
+    (ws / "harden").mkdir()
+    imap = statelib.load_map()
+    assert "harden_sdc" in imap["edit_classes"]["vde"][
+        "harden_config_edit"]["mutates"]
+    before = statelib.gate_input_hashes(ws, "vde", "harden", imap)
+    assert before["harden_sdc"] is None
+    entry = {"last": {"inputs": before}}
+    (ws / "harden" / "constraints.sdc").write_text("# x\n", encoding="utf-8")
+    after = statelib.gate_input_hashes(ws, "vde", "harden", imap)
+    verdict = statelib.gate_freshness(entry, after)
+    assert "harden_sdc" in verdict["changed_inputs"]
+    assert verdict["fresh"] is False
+
+
+TWO_CLOCK_RTL = """\
+module twoclk(input wire clk, input wire aux, input wire rst,
+              output reg [3:0] count, output reg [3:0] aux_count);
+  always @(posedge clk) count <= rst ? 4'd0 : count + 4'd1;
+  always @(posedge aux) aux_count <= rst ? 4'd0 : aux_count + 4'd1;
+endmodule
+"""
+TWO_CLOCK_SPEC = """\
+top: twoclk
+requirements: []
+ports:
+  clk: {dir: input, width: 1}
+  aux: {dir: input, width: 1}
+  rst: {dir: input, width: 1}
+  count: {dir: output, width: 4}
+  aux_count: {dir: output, width: 4}
+clock: {period_ns: 20, domains: [clk, aux], primary: clk}
+tt_pins:
+  clk: clk
+  aux: ui_in[3]
+  rst: ~rst_n
+  count: uo_out[3:0]
+  aux_count: uo_out[7:4]
+"""
+
+
+@pytest.mark.slow
+def test_two_clock_harden_and_timing_run_on_the_design_sdc(tmp_path):
+    """A real LibreLane run of a block with two clock domains: harden runs
+    on flow.sdc (base SDC + harden/constraints.sdc), and the final/sdc the
+    timing gate reads carries the design's second clock, so harden and
+    timing check the same constraints and both pass."""
+    import check_timing
+    ws = tmp_path / "ws"
+    for sub in ("rtl", "spec", "harden"):
+        (ws / sub).mkdir(parents=True)
+    (ws / "rtl" / "twoclk.v").write_text(TWO_CLOCK_RTL, encoding="utf-8")
+    (ws / "spec" / "spec.yaml").write_text(TWO_CLOCK_SPEC, encoding="utf-8")
+    (ws / "harden" / "constraints.sdc").write_text(
+        "create_clock -name aux -period 25 [get_ports {ui_in[3]}]\n"
+        "set_clock_groups -asynchronous -group [get_clocks clk] "
+        "-group [get_clocks aux]\n", encoding="utf-8")
+    payload, _ = check_harden.run(["--workspace", str(ws)])
+    assert payload["status"] == "pass", payload
+    final_sdc = (ws / "harden" / "runs" / "run" / "final" / "sdc"
+                 / "tt_um_twoclk.sdc").read_text(encoding="utf-8")
+    assert re.search(r"create_clock -name aux -period 25", final_sdc)
+    assert re.search(r"create_clock -name clk -period 20", final_sdc)
+    timing, _ = check_timing.run(["--workspace", str(ws)])
+    assert timing["status"] == "pass", timing

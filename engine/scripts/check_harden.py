@@ -21,6 +21,17 @@ the template's DO-NOT-CHANGE block, CLOCK_PERIOD - the clock is spec.yaml's):
 such a key is a CheckError, exit 2. The file is its own `harden_override`
 input in engine/reference/invalidation.yaml, so editing it stales harden.
 
+Clocks: CLOCK_PORT is spec.yaml's primary clock domain (`clock.primary`, or
+the one entry of `clock.domains`) mapped through tt_pins, at
+clock.period_ns. Anything else - the other domains, generated clocks, false
+paths - goes in `harden/constraints.sdc`, written against the TT wrapper's
+ports. When it exists, `harden/flow.sdc` is regenerated each run (LibreLane's
+base SDC, then that file) and becomes PNR_SDC_FILE and SIGNOFF_SDC_FILE.
+CheckError, exit 2, when several domains are named without `clock.primary`
+or without that file, or when the file redefines the primary clock or
+leaves a domain without a clock (ttlib.prepare_harden_sdc). The file is the
+`harden_sdc` input, so editing it stales harden onward (harden_config_edit).
+
 Restart: the run tag is fixed ("run") and every invocation passes
 `--overwrite`. LibreLane's own implicit resume (omit `--overwrite`, let it
 load `runs/<tag>`'s latest `state_out.json`) was tried here first and is not
@@ -130,9 +141,16 @@ def run(argv=None):
             harden_dir / ttlib.HARDEN_OVERRIDE_NAME)
     except ttlib.TTError as exc:
         raise CheckError(str(exc)) from exc
-    pdk_root = _pdk_root()
-    config = ttlib.harden_config(spec, rtl_files, wrapper_path, pdk_root,
-                                 override=override)
+    # The clocks are refused here too, before the toolchain: a spec with
+    # several clock domains and no design SDC is never hardened against its
+    # primary clock alone.
+    try:
+        flow_sdc = ttlib.prepare_harden_sdc(spec, harden_dir)
+        pdk_root = _pdk_root()
+        config = ttlib.harden_config(spec, rtl_files, wrapper_path, pdk_root,
+                                     override=override, flow_sdc=flow_sdc)
+    except ttlib.TTError as exc:
+        raise CheckError(str(exc)) from exc
     config_path = harden_dir / "config.json"
     config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
     ttlib.write_info_yaml(spec, harden_dir / "info.yaml")

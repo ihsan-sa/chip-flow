@@ -21,7 +21,9 @@ exists, is the only artifact early enough):
         bounds: {...}            required when check == measure
     ports: {name: {dir, width}} optional, loose
     tt_pins: {name: pin}         optional (M4+); a non-empty mapping when present
-    clock: {period_ns, domains}  optional, loose
+    clock: {period_ns, domains, primary?}  optional, loose; primary must
+                                 name a domain, and is required by harden
+                                 when there is more than one
     must_keep: [str]             optional
 
 Pass criteria (gates.yaml `spec_lint` row): "Every requirement has an id, a
@@ -448,5 +450,11 @@ def lint_spec(spec: dict, rel_path: str = "spec/spec.yaml") -> list[dict]:
             if not isinstance(domains, list) or not domains:
                 bad("clock_no_domains",
                    "'clock.domains' must be a non-empty list")
+            primary = clock.get("primary")
+            if primary is not None and (not isinstance(domains, list)
+                                        or primary not in domains):
+                bad("clock_bad_primary",
+                   "'clock.primary' must name one of 'clock.domains' (the "
+                   "domain harden's CLOCK_PORT carries)")
 
     return out
