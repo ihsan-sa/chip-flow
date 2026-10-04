@@ -968,93 +968,216 @@ def test_logic_loop_re_matches_sbys_own_wording():
     assert m and m.group(1) == "pll_pfd"
 
 
-# A tiny, hand-built RTLIL fixture standing in for a real yosys `prep -top
-# X; flatten` of a two-flop async-clear PFD (built and inspected once
-# against a real toolchain run - see progress.md - and frozen here so the
-# text-edit itself is testable without sby/yosys).
-CUT_FIXTURE_IL = """\
+# A hand-built RTLIL fixture shaped like a real yosys `prep -top X; flatten;
+# dffunmap` of a two-flop async-clear PFD (ece298a's pll_pfd: clr =
+# ~rst_n | (up & dn)), so the text edit itself is testable without
+# sby/yosys. `arst_up` and `extra` let a case build its own variant.
+def pfd_il(arst_up: str = "\\dut.clr", extra: str = "") -> str:
+    return f"""\
 module \\pfd_formal
-  wire \\dut.clk
+  wire \\dut.ref_clk
+  wire \\dut.fb_clk
+  wire \\dut.rst_n
   wire \\dut.up
   wire \\dut.dn
-  wire \\dut.rst_comb
-  cell $and $and$rst_comb
-    connect \\Y \\dut.rst_comb
+  wire \\dut.both
+  wire \\dut.clr
+  wire $not$rst_n_Y
+  wire width 2 \\dut.bus
+  wire \\dut.lat
+  cell $not $not$rst_n
+    parameter \\Y_WIDTH 1
+    connect \\Y $not$rst_n_Y
+    connect \\A \\dut.rst_n
+  end
+  cell $and $and$both
+    parameter \\Y_WIDTH 1
+    connect \\Y \\dut.both
     connect \\A \\dut.up
     connect \\B \\dut.dn
   end
-  cell $adff \\dut.$procdff$up
+  cell $or $or$clr
+    parameter \\Y_WIDTH 1
+    connect \\Y \\dut.clr
+    connect \\A $not$rst_n_Y
+    connect \\B \\dut.both
+  end
+  cell $adff $procdff$up
     parameter \\WIDTH 1
     parameter \\CLK_POLARITY 1'1
     parameter \\ARST_VALUE 1'0
     parameter \\ARST_POLARITY 1'1
     connect \\Q \\dut.up
-    connect \\D \\dut.up_next
-    connect \\CLK \\dut.clk
-    connect \\ARST \\dut.rst_comb
+    connect \\D 1'1
+    connect \\CLK \\dut.ref_clk
+    connect \\ARST {arst_up}
   end
-  cell $dlatch \\dut.$latch$weird
+  cell $adff $procdff$dn
+    parameter \\WIDTH 1
+    parameter \\CLK_POLARITY 1'1
+    parameter \\ARST_VALUE 1'0
+    parameter \\ARST_POLARITY 1'1
     connect \\Q \\dut.dn
-    connect \\EN \\dut.clk
-    connect \\D \\dut.rst_comb
+    connect \\D 1'1
+    connect \\CLK \\dut.fb_clk
+    connect \\ARST \\dut.clr
   end
-end
+  cell $dlatch $latch$weird
+    connect \\Q \\dut.lat
+    connect \\EN \\dut.ref_clk
+    connect \\D \\dut.clr
+  end
+{extra}end
 """
 
 
-def test_cut_async_reset_net_repoints_arst_through_a_new_registered_wire():
-    edited, ctype = check_formal.cut_async_reset_net(CUT_FIXTURE_IL, "dut.up")
-    assert ctype == "$adff"
-    assert "connect \\ARST \\dut.up$async_cut" in edited
-    assert "cell $dff \\dut.up$async_cut_reg" in edited
-    assert "connect \\D \\dut.rst_comb" in edited  # the new dff samples the old net
-    # the original combinational net is untouched elsewhere (still drives
-    # whatever else read it before the cut, just no longer ARST directly)
-    assert "connect \\Y \\dut.rst_comb" in edited
+def _il_cell(text: str, name: str) -> list[str]:
+    lines = text.split("\n")
+    start = next(i for i, ln in enumerate(lines)
+                 if ln.strip().startswith("cell ") and ln.split()[2] == name)
+    end = next(i for i in range(start, len(lines)) if lines[i].strip() == "end")
+    return [ln.strip() for ln in lines[start:end + 1]]
 
 
-def test_cut_async_reset_net_refuses_an_unknown_signal():
+PFD_CUTS = ["dut.up", "dut.dn"]
+
+
+def test_cut_feeds_the_arst_cone_pre_reset_values_and_keeps_rst_n():
+    edited, ctypes = check_formal.cut_async_reset_nets(pfd_il(), PFD_CUTS)
+    assert ctypes == {"dut.up": "$adff", "dut.dn": "$adff"}
+    # both flops' ARST now read one shared rebuilt cone
+    for flop in ("$procdff$up", "$procdff$dn"):
+        assert "connect \\ARST \\dut.clr$async_cut" in _il_cell(edited, flop)
+    # the copied AND reads the pre-reset values, never Q itself
+    both = _il_cell(edited, "$and$both$async_cut")
+    assert "connect \\A \\dut.up$async_pre" in both
+    assert "connect \\B \\dut.dn$async_pre" in both
+    assert "connect \\Y \\dut.both$async_cut" in both
+    # the copied OR still reads the ORIGINAL ~rst_n: the external reset
+    # stays combinational, and its $not is never copied
+    clr = _il_cell(edited, "$or$clr$async_cut")
+    assert "connect \\A $not$rst_n_Y" in clr
+    assert "connect \\B \\dut.both$async_cut" in clr
+    assert "$not$rst_n$async_cut" not in edited
+    # the original cone is untouched and still drives what it drove
+    assert _il_cell(edited, "$or$clr") == _il_cell(pfd_il(), "$or$clr")
+    assert "connect \\D \\dut.clr" in _il_cell(edited, "$latch$weird")
+    # PRE = past ARST ? reset value : (edge ? past D : past Q)
+    pre = _il_cell(edited, "\\dut.up$async_pre_mux")
+    assert pre[1:] == ["parameter \\WIDTH 1",
+                       "connect \\A \\dut.up$async_hold",
+                       "connect \\B 1'0",
+                       "connect \\S \\dut.up$async_arst_past",
+                       "connect \\Y \\dut.up$async_pre", "end"]
+    assert "connect \\D \\dut.clr$async_cut" in _il_cell(
+        edited, "\\dut.up$async_arst_past_ff")
+    assert "connect \\D \\dut.up" in _il_cell(edited, "\\dut.up$async_q_past_ff")
+    assert "connect \\A { \\dut.up$async_clk_past \\dut.ref_clk }" in _il_cell(
+        edited, "\\dut.up$async_edge_eqx")
+    # each cut carries its self-check assert
+    for sig in PFD_CUTS:
+        assert f"cell $assert \\{sig}$async_cut_matches_clk2fflogic" in edited
+
+
+def test_cut_builds_no_wire_it_does_not_declare():
+    edited, _ = check_formal.cut_async_reset_nets(pfd_il(), PFD_CUTS)
+    declared = {ln.split()[-1] for ln in edited.split("\n")
+                if ln.strip().startswith("wire ")}
+    used = {tok for ln in edited.split("\n") if ln.strip().startswith("connect ")
+            for tok in ln.split()[2:] if tok[0] in "\\$" and tok != "\\"}
+    assert used <= declared, used - declared
+
+
+def test_cut_refuses_an_unknown_signal():
     with pytest.raises(check_formal.CheckError, match="not any cell's own Q"):
-        check_formal.cut_async_reset_net(CUT_FIXTURE_IL, "dut.nope")
+        check_formal.cut_async_reset_nets(pfd_il(), ["dut.up", "dut.nope"])
 
 
-def test_cut_async_reset_net_refuses_a_non_adff_cell():
-    # dut.dn is a $dlatch's own Q here - not this route's job (ASYNC_CELLS
-    # already covers latches/dffsr for the multiclock probe; this route
-    # only ever cuts a plain CLK+ARST flop)
-    with pytest.raises(check_formal.CheckError, match=r"\$dlatch.*not \$adff"):
-        check_formal.cut_async_reset_net(CUT_FIXTURE_IL, "dut.dn")
+def test_cut_refuses_a_non_adff_cell():
+    # dut.lat is a $dlatch's own Q - this route only cuts a plain CLK+ARST flop
+    with pytest.raises(check_formal.CheckError, match=r"\$dlatch.*not a plain \$adff"):
+        check_formal.cut_async_reset_nets(pfd_il(), ["dut.lat"])
 
 
-# --- real toolchain: a small PFD that reproduces ece298a's own bug ---
+def test_cut_refuses_a_flop_whose_arst_reads_no_declared_q():
+    # up's ARST is ~rst_n alone: declaring it cuts nothing, so it is refused;
+    # dn (same fixture, ARST through both Qs) is accepted on its own
+    il = pfd_il(arst_up="$not$rst_n_Y")
+    with pytest.raises(check_formal.CheckError, match="reads no declared"):
+        check_formal.cut_async_reset_nets(il, ["dut.up"])
+    _, ctypes = check_formal.cut_async_reset_nets(il, ["dut.dn"])
+    assert ctypes == {"dut.dn": "$adff"}
+
+
+def test_cut_refuses_a_part_select_in_the_cone():
+    extra = ("  cell $and $and$part\n    parameter \\Y_WIDTH 1\n"
+             "    connect \\Y \\dut.partclr\n    connect \\A \\dut.up\n"
+             "    connect \\B \\dut.bus [0]\n  end\n")
+    il = pfd_il(arst_up="\\dut.partclr", extra="  wire \\dut.partclr\n" + extra)
+    with pytest.raises(check_formal.CheckError, match="not one whole net"):
+        check_formal.cut_async_reset_nets(il, PFD_CUTS)
+
+
+def test_cut_refuses_a_cell_it_does_not_copy():
+    extra = ("  wire \\dut.memclr\n  cell $memrd $rd\n"
+             "    connect \\DATA \\dut.memclr\n    connect \\ADDR \\dut.up\n  end\n"
+             "  cell $alu $alu$clr\n    connect \\Y \\dut.aluclr\n"
+             "    connect \\A \\dut.up\n    connect \\B \\dut.dn\n  end\n"
+             "  wire \\dut.aluclr\n")
+    il = pfd_il(arst_up="\\dut.aluclr", extra=extra)
+    with pytest.raises(check_formal.CheckError, match=r"\$alu cell"):
+        check_formal.cut_async_reset_nets(il, PFD_CUTS)
+
+
+@pytest.mark.parametrize("case, sub, refused", [
+    (None, {"basecase": "pass", "induction": "pass"}, "never reported"),
+    ({"failed": True}, {"basecase": "FAIL", "induction": None}, "no longer matches"),
+    # an induction-only trace starts from an arbitrary state: not a refusal
+    ({"failed": True}, {"basecase": "pass", "induction": "FAIL"}, None),
+    ({"failed": False}, {"basecase": "pass", "induction": "pass"}, None),
+])
+def test_check_cut_model(case, sub, refused):
+    cases = {} if case is None else {
+        "dut.up" + check_formal.ASYNC_CUT_CHECK_SUFFIX: {"type": "ASSERT", **case}}
+    if refused:
+        with pytest.raises(check_formal.CheckError, match=refused):
+            check_formal.check_cut_model("dut.up", cases, sub)
+    else:
+        check_formal.check_cut_model("dut.up", cases, sub)
+
+
+# --- real toolchain: a PFD shaped like ece298a's pll_pfd, two clocks and an
+# external reset, clr = ~rst_n | (up & dn) ---
 
 PFD_RTL = """\
-module pfd(input wire clk, input wire ref_i, input wire fb_i,
-          output reg up, output reg dn);
-  wire rst_comb = up & dn;
-  always @(posedge clk or posedge rst_comb)
-    if (rst_comb) up <= 1'b0;
-    else if (ref_i) up <= 1'b1;
-  always @(posedge clk or posedge rst_comb)
-    if (rst_comb) dn <= 1'b0;
-    else if (fb_i) dn <= 1'b1;
+module pfd(input wire ref_clk, input wire fb_clk, input wire rst_n,
+           output reg up, output reg dn);
+  wire clr = ~rst_n | (up & dn);
+  always @(posedge ref_clk or posedge clr)
+    if (clr) up <= 1'b0;
+    else     up <= 1'b1;
+  always @(posedge fb_clk or posedge clr)
+    if (clr) dn <= 1'b0;
+    else     dn <= 1'b1;
 endmodule
 """
 
-# a property that holds under a one-step-delayed reset (once up and dn are
-# both set, the cut clears them the very next cycle - see progress.md for
-# why this shape, not a same-cycle "never both" one) but says nothing about
-# the RTL's own zero-delay glitch width, which is sim's job, never formal's
+# checked at every solver step, as ece298a's harness does: the external
+# reset must act with no clock edge, and up/dn are never both high - even
+# when both clocks edge in the same step
 PFD_FORMAL_SV = """\
-module pfd_formal (input wire clk, input wire ref_i, input wire fb_i);
+module pfd_formal (input wire ref_clk, input wire fb_clk, input wire rst_n);
   wire up, dn;
-  pfd dut (.clk(clk), .ref_i(ref_i), .fb_i(fb_i), .up(up), .dn(dn));
+  pfd dut (.ref_clk(ref_clk), .fb_clk(fb_clk), .rst_n(rst_n), .up(up), .dn(dn));
 `ifdef FORMAL
-  reg past_valid = 0;
-  always @(posedge clk) past_valid <= 1;
-  always @(posedge clk)
-    if (past_valid)
-      CLEARS_NEXT_CYCLE: assert (!($past(up) && $past(dn)) || (!up && !dn));
+  reg past_valid = 1'b0;
+  always @($global_clock) past_valid <= 1'b1;
+  always @($global_clock)
+    if (past_valid) begin
+      if (!rst_n)
+        RESET_ASYNC: assert (!up && !dn);
+      NEVER_BOTH: assert (!(up && dn));
+    end
 `endif
 endmodule
 """
@@ -1062,10 +1185,14 @@ endmodule
 PFD_SPEC_TMPL = """\
 top: pfd
 requirements:
-  - id: REQ-PFD-RESET
-    text: once up and dn are both set, the cut clears them the next cycle
+  - id: REQ-RST-ASYNC
+    text: rst_n low clears up and dn in the same step, with no clock edge
     check: formal
-    property: CLEARS_NEXT_CYCLE
+    property: RESET_ASYNC
+  - id: REQ-PFD-NO-OVERLAP
+    text: up and dn are never both high
+    check: formal
+    property: NEVER_BOTH
 formal:
   depth: 12
   multiclock: true
@@ -1083,8 +1210,7 @@ def make_pfd_ws(tmp_path: Path, declare_cut: bool) -> Path:
     cuts = (
         "  async_reset_cuts:\n"
         "    - signal: dut.up\n"
-        "      why: \"tri-state PFD AND(up,dn) self-clear - ece298a "
-        "track/pll pll_pfd, see docs/design.md\"\n"
+        "      why: \"tri-state PFD self-clear - ece298a track/pll pll_pfd\"\n"
         "    - signal: dut.dn\n"
         "      why: \"same self-clear, the dn flop\"\n"
     ) if declare_cut else ""
@@ -1104,30 +1230,39 @@ def test_pfd_loop_fails_without_the_declared_cut(tmp_path, capsys):
 
 
 @pytest.mark.slow
-def test_pfd_loop_proves_with_the_declared_cut(tmp_path, capsys):
+def test_pfd_cut_proves_external_reset_and_never_both_high(tmp_path, capsys):
     ws = make_pfd_ws(tmp_path, declare_cut=True)
     code = check_formal.main(["--workspace", str(ws)])
     out = json.loads(capsys.readouterr().out)
-    # the loop is gone (no DONE (ERROR), no CheckError) and abc pdr - a
-    # second, non-k-induction algorithm - proves the property outright;
-    # smtbmc's own k-induction here only reaches "bounded" (this toy
-    # fixture's $past-gated property isn't k-inductive at any small k, a
-    # known k-induction limitation, not a defect in the cut itself - see
-    # progress.md), which this gate already documents as its own passing
-    # outcome, never a failure (bounded_not_proven is severity "info").
-    assert code == 1, out  # findings (the info-severity bounded_not_proven), not an error
-    assert out["failed"] == [] and out["vacuous"] == []
-    assert out["bounded"] == ["REQ-PFD-RESET"] or out["proven"] == ["REQ-PFD-RESET"]
-    assert out["pdr_status"] == "PASS"
-    assert len(out["async_reset_cuts"]) == 2
+    # both properties proven by smtbmc's k-induction AND abc pdr
+    assert code == 1, out  # only the info-severity async_reset_cut_applied
+    assert out["proven"] == ["REQ-PFD-NO-OVERLAP", "REQ-RST-ASYNC"], out
+    assert out["failed"] == [] and out["vacuous"] == [] and out["bounded"] == []
+    assert out["smt_status"] == "PASS" and out["pdr_status"] == "PASS"
     assert {c["signal"] for c in out["async_reset_cuts"]} == {"dut.up", "dut.dn"}
     assert all(c["cell_type"] == "$adff" for c in out["async_reset_cuts"])
-    assert "one-step-delayed" in out["async_reset_cuts_note"].lower()
+    assert "pre-reset" in out["async_reset_cuts_note"].lower()
     # the abstraction shows as a finding per cut, never an unqualified pass
-    applied = [v for v in out["violations"]
-               if v["kind"] == "async_reset_cut_applied"]
-    assert {v["signal"] for v in applied} == {"dut.up", "dut.dn"}
-    assert all(v["severity"] == "info" and "one-step" in v["msg"]
-               for v in applied)
+    assert [v["kind"] for v in out["violations"]] == ["async_reset_cut_applied"] * 2
+    assert all(v["severity"] == "info" for v in out["violations"])
     gate_result = gate.evaluate("formal", _formal_gate_row(), out)
     assert gate_result["status"] == "pass", gate_result
+
+
+@pytest.mark.slow
+def test_pfd_cut_refuses_when_its_model_disagrees_with_clk2fflogic(
+        tmp_path, capsys, monkeypatch):
+    # a cut whose PRE value watches the wrong clock edge is a stale model of
+    # the flop: its self-check assert must refuse the run, never let the
+    # properties' verdicts through
+    real = check_formal.cut_async_reset_nets
+
+    def wrong_edge(text, signals):
+        edited, ctypes = real(text, signals)
+        return edited.replace("connect \\B 2'01", "connect \\B 2'10"), ctypes
+    monkeypatch.setattr(check_formal, "cut_async_reset_nets", wrong_edge)
+    ws = make_pfd_ws(tmp_path, declare_cut=True)
+    code = check_formal.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 2, out
+    assert "no longer matches" in out["error"]
