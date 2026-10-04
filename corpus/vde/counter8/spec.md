@@ -1,8 +1,6 @@
 # counter8
 
-An 8-bit free-running binary counter. Smallest rung on the `/vde` corpus
-ladder (docs/design.md section 3) - it exists so every gate this milestone
-builds has something real to run on.
+An 8-bit free-running binary counter.
 
 ## Behaviour
 
@@ -13,6 +11,7 @@ builds has something real to run on.
 - A reset asserted for exactly one clock while the counter is mid-run must
   clear `count` to 0 on the very next edge, the same as a reset held at
   start-up.
+- The target clock period is 20 ns (50 MHz).
 
 ## Interface
 
@@ -21,6 +20,3 @@ builds has something real to run on.
 | clk   | in  | 1 | free-running clock |
 | rst   | in  | 1 | synchronous, active-high reset |
 | count | out | 8 | the running count |
-
-See `spec.yaml` for the machine-readable requirements this spec.md prose
-maps to.
