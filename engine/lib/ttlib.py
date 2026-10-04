@@ -614,11 +614,14 @@ _TEMPLATE_LOCK_MARKER = "DO NOT CHANGE ANYTHING BELOW THIS POINT"
 # Keys the engine sets itself in harden_config(). CLOCK_PERIOD is the
 # spec's (clock.period_ns) - relaxing it here would pass timing by moving
 # the goalposts; CLOCK_PORT is the spec's too (clock_port(): clock.domains
-# through tt_pins), so an override cannot point STA at the wrong pin.
+# through tt_pins), so an override cannot point STA at the wrong pin; and
+# PNR_SDC_FILE/SIGNOFF_SDC_FILE are prepare_harden_sdc()'s, so an override
+# cannot swap in an SDC that redefines that clock or that timing never sees.
 _ENGINE_OWNED_KEYS = frozenset({
     "DESIGN_NAME", "VERILOG_FILES", "DIE_AREA", "FP_DEF_TEMPLATE", "VDD_PIN",
     "GND_PIN", "RT_MAX_LAYER", "PDK_ROOT", "TIMING_VIOLATION_CORNERS",
     "CLOCK_PERIOD", "CLOCK_PORT", "PDK", "STD_CELL_LIBRARY",
+    "PNR_SDC_FILE", "SIGNOFF_SDC_FILE",
     # macro_config()'s keys: spec.yaml `macros` owns the hard macros.
     "MACROS", "PDN_MACRO_CONNECTIONS", "PDN_CFG", "MAGIC_EXT_USE_GDS",
     "EXTRA_SPICE_MODELS",
@@ -676,10 +679,13 @@ def load_harden_override(path: Path) -> dict:
             "(tile/PDK keys, the design's own file list, the template's "
             "DO-NOT-CHANGE block, and CLOCK_PERIOD - the clock target is "
             "spec.yaml's clock.period_ns and is not relaxed through the "
-            "harden config - and CLOCK_PORT, which is spec.yaml's "
-            "clock.domains mapped through tt_pins). Remove those keys; a "
+            "harden config - CLOCK_PORT, which is spec.yaml's "
+            "clock.domains mapped through tt_pins, and PNR_SDC_FILE/"
+            "SIGNOFF_SDC_FILE, which the engine builds from harden/"
+            f"{HARDEN_SDC_NAME}). Remove those keys; a "
             "timing fix goes through resizer/placement keys or the RTL, a "
-            "period or clock-pin change through spec_edit.")
+            "period or clock-pin change through spec_edit, other clocks "
+            f"and false paths through harden/{HARDEN_SDC_NAME}.")
     return data
 
 
@@ -705,40 +711,199 @@ SIGNOFF_REPAIR_CONFIG = {
 _CLOCK_IN_BASES = {"clk", "ui_in", "uio_in"}
 
 
+def primary_domain(spec: dict) -> str | None:
+    """The clock domain harden's CLOCK_PORT carries: spec.yaml's
+    `clock.primary` when set, else the one entry of `clock.domains`. None
+    when the spec names no domain. TTError, never a guess, when several
+    domains are named and `clock.primary` is not (list order is not a
+    choice anyone made), or when `clock.primary` is not one of them."""
+    clock = spec.get("clock") or {}
+    domains = clock.get("domains") or []
+    if not isinstance(domains, list) or not domains:
+        return None
+    primary = clock.get("primary")
+    if primary is None:
+        if len(domains) > 1:
+            raise TTError(
+                f"clock.domains {domains} names more than one clock and "
+                "clock.primary is not set - harden will not guess which one "
+                "CLOCK_PORT carries. Set clock.primary to the domain the "
+                "spec's clock.period_ns constrains, and put the other clocks "
+                f"in harden/{HARDEN_SDC_NAME}")
+        primary = domains[0]
+    if primary not in domains:
+        raise TTError(f"clock.primary {primary!r} is not one of "
+                      f"clock.domains {domains}")
+    return primary
+
+
 def clock_port(spec: dict) -> str | None:
-    """The wrapper's top-level port that carries the spec's clock, for
-    LibreLane's CLOCK_PORT: spec.yaml's single `clock.domains` entry mapped
+    """The wrapper's top-level port that carries the spec's primary clock
+    (primary_domain()), for LibreLane's CLOCK_PORT: that domain mapped
     through `tt_pins` - `clk` for a block clocked by the tile's clk pin,
     `ui_in[0]` for one clocked by a spare input bit (an msde divider fed by
     a ring oscillator). An inverting `~` map still enters on that pin.
     None when the spec names no domain, or its domain has no tt_pins entry
     (a clock a hard macro drives): the template's `clk` then stands, and a
     design it leaves unclocked shows up as the timing gate's
-    clock_unconstrained finding. TTError on more than one domain (LibreLane's
-    base SDC constrains one clock) or on a mapping that is not one input
-    bit."""
-    domains = (spec.get("clock") or {}).get("domains") or []
-    if not isinstance(domains, list) or not domains:
+    clock_unconstrained finding. TTError when primary_domain() refuses or
+    on a mapping that is not one input bit. The other domains are not
+    constrained here: they go in the design SDC (design_sdc_problems())."""
+    primary = primary_domain(spec)
+    if primary is None:
         return None
-    if len(domains) > 1:
-        raise TTError(f"clock.domains {domains} names more than one clock; "
-                      "harden constrains exactly one clock port - keep the "
-                      "one the block's flops run on")
-    expr = (spec.get("tt_pins") or {}).get(domains[0])
+    return _domain_port(spec, primary)
+
+
+def _domain_port(spec: dict, domain: str) -> str | None:
+    expr = (spec.get("tt_pins") or {}).get(domain)
     if expr is None:
         return None
     pin = parse_pin_expr(expr)
     if pin["base"] not in _CLOCK_IN_BASES or pin["hi"] != pin["lo"]:
-        raise TTError(f"clock domain {domains[0]!r} maps to tt_pins {expr!r}; "
+        raise TTError(f"clock domain {domain!r} maps to tt_pins {expr!r}; "
                       "a clock must map to clk or one ui_in/uio_in bit")
     if pin["hi"] is None:
         return pin["base"]
     return f"{pin['base']}[{pin['hi']}]"
 
 
+# The design SDC (docs/design.md 1.5's harden row): a hand-written file at
+# harden/<HARDEN_SDC_NAME>, against the wrapper's ports, that adds what the
+# spec's one clock cannot say - the other clock.domains, generated clocks,
+# false paths. check_harden.py never hands it to LibreLane alone: it writes
+# harden/<FLOW_SDC_NAME> (flow_sdc_text()) on every run, which sources
+# LibreLane's own base SDC first - the primary clock on CLOCK_PORT at the
+# spec's CLOCK_PERIOD, I/O delays, drive and load, exactly what a
+# single-clock harden gets - then this file, and points PNR_SDC_FILE and
+# SIGNOFF_SDC_FILE at it. The timing gate reads final/sdc, which LibreLane's
+# signoff STA writes back out of that same file, so the two cannot disagree.
+HARDEN_SDC_NAME = "constraints.sdc"
+FLOW_SDC_NAME = "flow.sdc"
+_SDC_CLOCK_CMDS = ("create_clock", "create_generated_clock")
+
+
+def _sdc_commands(text: str) -> list[str]:
+    """`text`'s commands, one string each: comments dropped and
+    backslash-continued lines joined."""
+    joined = re.sub(r"\\\n", " ", text.replace("\r\n", "\n"))
+    return [line.strip() for line in joined.split("\n")
+            if line.strip() and not line.strip().startswith("#")]
+
+
+def _sdc_names(cmd: str) -> tuple[str | None, set[str]]:
+    """A create_clock/create_generated_clock command's -name and the ports
+    it puts the clock on (a generated clock's -source ports are not)."""
+    name = re.search(r"-name\s+(\{[^}]*\}|\S+)", cmd)
+    name = name.group(1).strip("{}\"") if name else None
+    body = re.sub(r"-source\s+\[[^\]]*\]", " ", cmd)
+    ports = set()
+    for arg in re.findall(r"\[\s*get_ports\s+(.*?)\]\s*(?:$|\s|-)", body):
+        for tok in arg.replace("{", " ").replace("}", " ").split():
+            ports.add(tok.replace("\\", "").strip("\""))
+    return name, ports
+
+
+def design_sdc_problems(spec: dict, text: str) -> list[str]:
+    """What is wrong with a design SDC's text for this spec; [] when it may
+    be used. The file may not define a clock on the primary's port or under
+    its name - base.sdc already does, at the spec's period, and a second
+    definition would move that goalpost - and every other clock.domains
+    entry must get a clock in it (by -name, or on the port tt_pins maps it
+    to), so no domain is hardened unconstrained."""
+    primary = primary_domain(spec)
+    port = clock_port(spec)
+    # base.sdc names the primary clock after CLOCK_PORT; the template's
+    # `clk` stands when the spec maps no port.
+    primary_name = port or "clk"
+    names, clocked_ports, problems = set(), set(), []
+    for cmd in _sdc_commands(text):
+        verb = cmd.split()[0]
+        if verb not in _SDC_CLOCK_CMDS:
+            continue
+        name, ports = _sdc_names(cmd)
+        if name is not None:
+            names.add(name)
+        if verb == "create_clock":
+            clocked_ports |= ports
+        if name == primary_name or primary_name in ports:
+            problems.append(
+                f"{verb} on the primary clock ({primary_name!r}, domain "
+                f"{primary!r}): that clock is spec.yaml's clock.period_ns, "
+                "which LibreLane's base SDC already defines - remove it "
+                "here, and change the period through spec_edit")
+    for domain in (spec.get("clock") or {}).get("domains") or []:
+        if domain == primary:
+            continue
+        dport = _domain_port(spec, domain)
+        if domain not in names and (dport is None
+                                    or dport not in clocked_ports):
+            where = f" or on its port {dport}" if dport else ""
+            problems.append(
+                f"clock domain {domain!r} has no clock in harden/"
+                f"{HARDEN_SDC_NAME} - add a create_clock (or "
+                f"create_generated_clock) named {domain!r}{where}, or it "
+                "is hardened unconstrained")
+    return problems
+
+
+def flow_sdc_text(design_sdc: Path) -> str:
+    """harden/<FLOW_SDC_NAME>: LibreLane's base SDC, then the design's,
+    then the clock uncertainty, transition and propagation base.sdc gave
+    the primary clock, over every clock so the design's get the same."""
+    return f"""\
+# Generated by check_harden.py on every run - edit {HARDEN_SDC_NAME}, not this.
+# LibreLane's base SDC: the primary clock (CLOCK_PORT at CLOCK_PERIOD, both
+# spec.yaml's), I/O delays, drive and load - what a one-clock harden gets.
+source $::env(SCRIPTS_DIR)/base.sdc
+# The design's other clocks, generated clocks and exceptions.
+source {{{Path(design_sdc).resolve()}}}
+set_clock_uncertainty $::env(CLOCK_UNCERTAINTY_CONSTRAINT) [all_clocks]
+set_clock_transition $::env(CLOCK_TRANSITION_CONSTRAINT) [all_clocks]
+if {{ [info exists ::env(OPENLANE_SDC_IDEAL_CLOCKS)] && $::env(OPENLANE_SDC_IDEAL_CLOCKS) }} {{
+    unset_propagated_clock [all_clocks]
+}} else {{
+    set_propagated_clock [all_clocks]
+}}
+"""
+
+
+def prepare_harden_sdc(spec: dict, harden_dir: Path) -> Path | None:
+    """The SDC harden runs on: harden/<FLOW_SDC_NAME>, (re)written from
+    harden/<HARDEN_SDC_NAME> when the design has one, else None (and a
+    stale flow.sdc removed) so LibreLane's base SDC stands alone, as it
+    always has for one clock. TTError when the design SDC has
+    design_sdc_problems(), or when the spec names more than one clock
+    domain and there is no design SDC: that design is refused, never
+    hardened against its primary clock alone."""
+    harden_dir = Path(harden_dir)
+    design_sdc = harden_dir / HARDEN_SDC_NAME
+    flow_sdc = harden_dir / FLOW_SDC_NAME
+    domains = (spec.get("clock") or {}).get("domains") or []
+    primary_domain(spec)
+    if not design_sdc.is_file():
+        if isinstance(domains, list) and len(domains) > 1:
+            raise TTError(
+                f"clock.domains {domains} names more than one clock but "
+                f"harden/{HARDEN_SDC_NAME} does not exist - harden "
+                "constrains only the primary clock itself, so write that "
+                "file with the other clocks, generated clocks and false "
+                "paths (against the TT wrapper's ports) rather than harden "
+                "them unconstrained")
+        flow_sdc.unlink(missing_ok=True)
+        return None
+    problems = design_sdc_problems(
+        spec, design_sdc.read_text(encoding="utf-8", errors="replace"))
+    if problems:
+        raise TTError(f"harden/{HARDEN_SDC_NAME}: " + "; ".join(problems))
+    flow_sdc.write_text(flow_sdc_text(design_sdc), encoding="utf-8")
+    return flow_sdc
+
+
 def harden_config(spec: dict, rtl_files: list[Path], wrapper_path: Path,
                   pdk_root: Path, tiles: str | None = None,
-                  override: dict | None = None) -> dict:
+                  override: dict | None = None,
+                  flow_sdc: Path | None = None) -> dict:
     """The merged LibreLane config.json: the vendored template's own
     defaults, overlaid with this design's DESIGN_NAME/VERILOG_FILES/
     DIE_AREA/FP_DEF_TEMPLATE/clock (period and clock_port()'s CLOCK_PORT,
@@ -747,7 +912,10 @@ def harden_config(spec: dict, rtl_files: list[Path], wrapper_path: Path,
     ...) - the same three layers project.py's own create_user_config()/
     golden_harden() apply, read from the files this module vendors rather
     than retyped - then `override` (load_harden_override()'s result, the
-    per-design harden/config.override.json) last. A forbidden key in
+    per-design harden/config.override.json) last. `flow_sdc`
+    (prepare_harden_sdc()'s result) becomes PNR_SDC_FILE and
+    SIGNOFF_SDC_FILE; without one LibreLane's base SDC stands, and a spec
+    naming more than one clock domain raises TTError. A forbidden key in
     `override` raises TTError even when it did not come through
     load_harden_override()."""
     override = dict(override or {})
@@ -792,6 +960,13 @@ def harden_config(spec: dict, rtl_files: list[Path], wrapper_path: Path,
     port = clock_port(spec)
     if port is not None:
         config["CLOCK_PORT"] = port
+    if flow_sdc is not None:
+        config["PNR_SDC_FILE"] = str(flow_sdc)
+        config["SIGNOFF_SDC_FILE"] = str(flow_sdc)
+    elif isinstance(clock.get("domains"), list) and len(clock["domains"]) > 1:
+        raise TTError(f"clock.domains {clock['domains']} names more than "
+                      "one clock and no design SDC was given - harden "
+                      "refuses rather than constrain the primary alone")
     config.update(tech.librelane_config)
     config.update(SIGNOFF_REPAIR_CONFIG)
     macros = spec.get("macros") or []

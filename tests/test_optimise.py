@@ -678,3 +678,21 @@ def test_eval_workspace_caps_both_formal_depths(tmp_path):
     import yaml
     spec = yaml.safe_load((ew / "spec" / "spec.yaml").read_text())
     assert spec["formal"] == {"depth": 10}
+
+
+def test_rtl_sdc_is_refused_where_harden_runs_a_design_sdc(tmp_path):
+    """harden and timing run on harden/constraints.sdc for a block with
+    several clock domains or a design SDC; the evaluator's spec-only SDC
+    would score slack against other constraints, so it refuses."""
+    one = {"clock": {"period_ns": 20, "domains": ["clk"]},
+           "ports": {"clk": {"dir": "input"}, "q": {"dir": "output"}}}
+    assert "create_clock -name clk -period 20" in optimise.sdc_text(one,
+                                                                    tmp_path)
+    two = {**one, "clock": {"period_ns": 20, "domains": ["clk", "vco"],
+                            "primary": "clk"}}
+    with pytest.raises(CheckError, match="constraints.sdc absent"):
+        optimise.sdc_text(two, tmp_path)
+    (tmp_path / "harden").mkdir()
+    (tmp_path / "harden" / "constraints.sdc").write_text("# x\n")
+    with pytest.raises(CheckError, match="constraints.sdc present"):
+        optimise.sdc_text(one, tmp_path)

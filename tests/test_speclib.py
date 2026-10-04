@@ -141,6 +141,16 @@ def test_bad_clock_flagged():
     assert "clock_no_domains" in kinds
 
 
+def test_clock_primary_must_name_a_domain():
+    good = {**GOOD_SPEC, "clock": {"period_ns": 10, "domains": ["a", "b"],
+                                   "primary": "b"}}
+    assert speclib.lint_spec(good) == []
+    bad = {**GOOD_SPEC, "clock": {"period_ns": 10, "domains": ["a", "b"],
+                                  "primary": "c"}}
+    kinds = {v["kind"] for v in speclib.lint_spec(bad)}
+    assert kinds == {"clock_bad_primary"}
+
+
 def test_load_spec_missing_file_raises_check_error(tmp_path):
     with pytest.raises(CheckError):
         speclib.load_spec(tmp_path / "nope.yaml")

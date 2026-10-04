@@ -581,16 +581,29 @@ def _append_row(ws: Path, row: dict) -> None:
                        extrasaction="ignore").writerow(row)
 
 
-def sdc_text(spec: dict) -> str:
-    """The locked clock: the spec's own period on every declared domain,
-    zero I/O delay. The clock period is locked, so a design cannot get
-    faster by moving the goalposts (section 4)."""
+def sdc_text(spec: dict, ws: Path) -> str:
+    """The locked clock: the spec's own period on its one domain, zero I/O
+    delay. The clock period is locked, so a design cannot get faster by
+    moving the goalposts (section 4). Refused for a spec with more than one
+    clock domain or a design SDC (harden/constraints.sdc): harden and timing
+    run on that file, written against the TT wrapper's ports, and an SDC
+    built here from the spec alone would score slack against constraints
+    they never use."""
     clock = spec.get("clock") or {}
     period = clock.get("period_ns")
     domains = clock.get("domains") or []
     if not period or not domains:
         raise CheckError("spec.yaml needs clock: {period_ns, domains} - the "
                          "optimise loop locks the period it scores slack at")
+    design_sdc = ws / "harden" / "constraints.sdc"
+    if len(domains) > 1 or design_sdc.is_file():
+        raise CheckError(
+            f"clock.domains {domains} with harden/constraints.sdc "
+            f"{'present' if design_sdc.is_file() else 'absent'}: the RTL "
+            "loop's evaluator can only constrain one clock from spec.yaml, "
+            "so its slack would disagree with the design SDC harden and "
+            "timing run on - optimise this block by hand against the "
+            "timing gate instead")
     ports = spec.get("ports") or {}
     lines = []
     for d in domains:
@@ -675,6 +688,7 @@ def run_rtl_start(argv=None):
     if not spec.get("ports"):
         raise CheckError("spec.yaml has no 'ports' - the loop locks the port "
                          "list, so it needs one")
+    sdc = sdc_text(spec, ws)
     rtl_rels = sorted(p.relative_to(ws).as_posix()
                       for p in (ws / "rtl").iterdir()
                       if p.is_file() and p.suffix in RTL_SUFFIXES)
@@ -701,7 +715,7 @@ def run_rtl_start(argv=None):
         shutil.copy2(allow, ev / "lint_allow.yaml")
     (ev / "synth.ys").write_text(synth_script(top, rtl_rels, liberty),
                                  encoding="utf-8")
-    (ev / "design.sdc").write_text(sdc_text(spec), encoding="utf-8")
+    (ev / "design.sdc").write_text(sdc, encoding="utf-8")
     (ev / "liberty.json").write_text(json.dumps(
         {"path": str(liberty),
          "sha256": hashlib.sha256(liberty.read_bytes()).hexdigest()},

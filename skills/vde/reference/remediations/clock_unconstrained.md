@@ -19,5 +19,7 @@ via `spec_edit`, then re-run `harden` and `timing`.
 **Trap:** `CLOCK_PORT` is engine-owned - `harden/config.override.json` may
 not set it (harden refuses the override with exit 2), so do not look for a
 harden-config fix here; the spec is the only place this is fixed. Do not
-"fix" this by adding a `create_clock` for a different, unused port in the
-SDC either - the SDC is generated from the same spec/tt_pins mapping.
+"fix" this by adding a `create_clock` for the primary clock to
+`harden/constraints.sdc` either - harden refuses a design SDC that
+redefines it, because that clock is the spec's. The design SDC carries only
+the spec's other clock domains, generated clocks and false paths.

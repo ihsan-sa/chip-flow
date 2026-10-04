@@ -80,6 +80,9 @@ artifact_kinds:
   # config.json it regenerates each run - config.json alone only changes
   # AFTER a re-harden, so without this an override-only edit reads fresh.
   harden_override: {path: "harden/config.override.json", norm: json_canonical}
+  # the design SDC (ttlib.prepare_harden_sdc): the clocks and exceptions
+  # past the spec's primary clock, sourced into the flow.sdc harden runs on.
+  harden_sdc:    {path: "harden/constraints.sdc", norm: text_eol}
   harden:        {path: "harden", norm: dir_text}
   layout:        {path: "layout", norm: dir_text}
   # ade (M9): the post-layout bench pex_sim runs (layout_ref/<block>_pex_tb
@@ -136,7 +139,7 @@ gate_inputs:
     # glsim and precheck all read `top` (and glsim tt_pins) from it too. A
     # period-only edit touches nothing under rtl/ or harden/, so without it
     # a recorded pass on the old period would still read fresh.
-    harden:    [rtl, harden_config, harden_override, harden_info,
+    harden:    [rtl, harden_config, harden_override, harden_sdc, harden_info,
                 spec_yaml_sans_formal]
     timing:    [harden, spec_yaml_sans_formal]
     drc:       [harden, spec_yaml_sans_formal]
@@ -238,7 +241,7 @@ edit_classes:
       gates: [holdout]
       human_hold: 1
     harden_config_edit:
-      mutates: [harden_config, harden_override, harden_info]
+      mutates: [harden_config, harden_override, harden_sdc, harden_info]
       stale_artifacts: []
       gates: [harden, timing, drc, lvs, glsim, precheck, release]
       human_hold: 2
