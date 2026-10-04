@@ -150,6 +150,7 @@ FIXER_HINTS: dict[str, str] = {
     "no_driver": "rtl",
     "unmapped_cell": "rtl",
     "cell_not_in_liberty": "rtl",
+    "must_keep_removed": "rtl",
     "latch": "rtl",
 
     # release (check_release.py, via attest.py build())
