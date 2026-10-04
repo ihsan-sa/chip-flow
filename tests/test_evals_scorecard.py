@@ -161,3 +161,96 @@ def test_cli_records_a_dated_result(tmp_path, capsys):
     out = json.loads(capsys.readouterr().out)
     assert (res / "scorecard" / out["result_file"]).is_file()
     assert scorecard.main(["--results-dir", str(res), "--seeds", "0"]) == 2
+
+
+# ---- --round: bare against skill, paired ------------------------------------
+
+def _arm(arm, detail="typical", repeat=1, rung="counter8", **kw):
+    return _vde(rung, kind="round", arm=arm, detail=detail, repeat=repeat,
+                cost_usd=2.0 if arm == "skill" else 1.0,
+                wall_s=600 if arm == "skill" else 300, **kw)
+
+
+def _bad(arm, **kw):
+    return _arm(arm, counts=False, kill_rate=0.0, gate_problems=["mutate: fail"], **kw)
+
+
+def test_load_round_keeps_the_newest_armed_result_per_cell(tmp_path):
+    _write(tmp_path, "2026-10-01T000000_a.json", _bad("bare"))
+    _write(tmp_path, "2026-10-02T000000_a.json", _arm("bare"))
+    _write(tmp_path, "2026-10-02T000000_noarm.json", _vde())  # no arm: not a round result
+    (tmp_path / "notes.json").write_text("not json")
+    got = scorecard.load_round(tmp_path)
+    assert len(got) == 1 and got[0]["counts"] is True
+
+
+def test_pairs_skill_minus_bare_and_lists_the_unpaired():
+    rs = [_arm("skill", repeat=1), _bad("bare", repeat=1),
+          _arm("skill", repeat=2), _arm("bare", repeat=2),
+          _arm("skill", repeat=3)]  # no bare partner
+    rep = scorecard.round_report(rs, {})
+    v = rep["skills"]["vde"]
+    assert v["pairs"] == 2
+    pooled = v["skill_minus_bare"]["pooled"]
+    assert pooled["counts"]["mean"] == 0.5 and pooled["counts"]["n"] == 2
+    assert set(v["skill_minus_bare"]["by_detail"]) == {"typical"}
+    assert rep["unpaired"] == [{"skill": "vde", "rung": "counter8", "detail": "typical",
+                                "repeat": 3, "has": "skill"}]
+    assert v["arms"]["skill"]["runs"] == 3 and v["arms"]["bare"]["runs"] == 2
+    assert v["arms"]["skill"]["cost_usd"] == {"n": 3, "mean": 2.0, "total": 6.0}
+    assert v["arms"]["bare"]["wall_s"]["total"] == 600
+    assert v["arms"]["bare"]["counted"] == 1
+
+
+def test_cluster_bootstrap_is_seeded_and_resamples_rungs_then_pairs():
+    two = {"counter8": [1.0, 0.0, 1.0], "uart": [0.0, 0.0]}
+    a, b = scorecard.cluster_bootstrap(two), scorecard.cluster_bootstrap(two)
+    assert a == b and 0.0 <= a[0] <= a[1] <= 1.0
+    # rungs are resampled first: two rungs that disagree completely give the
+    # full range, where resampling the six pooled pairs would not reach 0 or 1
+    assert scorecard.cluster_bootstrap({"a": [1.0] * 3, "b": [0.0] * 3}) == [0.0, 1.0]
+    assert scorecard.cluster_bootstrap({"counter8": [0.5, 0.5]}) == [0.5, 0.5]
+    assert scorecard.cluster_bootstrap({}) is None
+    assert scorecard.cluster_bootstrap({"x": []}) is None
+
+
+def test_detail_steps_pair_levels_within_an_arm():
+    rs = [_bad("skill", detail="terse"), _arm("skill", detail="typical"),
+          _arm("skill", detail="full"), _arm("bare", detail="typical")]
+    steps = scorecard.round_report(rs, {})["skills"]["vde"]["detail_steps"]
+    assert steps["skill"]["typical-terse"]["counts"]["mean"] == 1.0
+    assert steps["skill"]["full-typical"]["counts"]["mean"] == 0.0
+    assert "bare" not in steps  # one level only: no step to take
+
+
+def test_not_hardened_scores_zero_on_implementation_with_a_fix_line():
+    hardened = scorecard.design_card(_arm("bare", hardened=True), {"area": 1200.0})
+    assert hardened["areas"]["implementation"] == 1.0
+    bare = _arm("bare", hardened=False, worst_slack_ns=None,
+                gate_problems=["harden: not hardened", "sim: no testbench"])
+    c = scorecard.design_card(bare, {"area": 1200.0})
+    assert c["areas"]["implementation"] == 0.0
+    fixes = " ".join(f["fix"] for f in c["findings"])
+    assert "harden/runs/run/final/" in fixes and "tb/test_*.py" in fixes
+
+
+def test_cli_round_writes_json_and_markdown(tmp_path, capsys):
+    rd = tmp_path / "round"
+    for i, r in enumerate([_arm("skill"), _bad("bare"), _arm("skill", detail="terse")]):
+        _write(rd, f"2026-10-02T00000{i}_x.json", r)
+    assert scorecard.main(["--round", str(rd), "--results-dir", str(tmp_path / "res")]) == 0
+    rep = json.loads((rd / "round-scorecard.json").read_text())
+    assert rep["skills"]["vde"]["pairs"] == 1 and len(rep["runs"]) == 3
+    md = (rd / "round-scorecard.md").read_text()
+    assert "## vde: skill minus bare" in md and "| pooled | 1 |" in md
+    assert "Unpaired" in md and "terse r1 (skill only)" in md
+    # same results, same report
+    assert scorecard.main(["--round", str(rd), "--results-dir", str(tmp_path / "res"),
+                           "--out", str(tmp_path / "again.json"),
+                           "--md", str(tmp_path / "again.md")]) == 0
+    assert (tmp_path / "again.md").read_text() == md
+    again = json.loads((tmp_path / "again.json").read_text())
+    assert again["skills"] == rep["skills"]
+    # an empty round is an error, not an empty pass
+    (tmp_path / "empty").mkdir()
+    assert scorecard.main(["--round", str(tmp_path / "empty")]) == 2

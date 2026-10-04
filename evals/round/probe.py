@@ -21,15 +21,20 @@ which is itself visible inside the sandbox) and arrive on stdin:
   * the reference RTL's distinctive lines (rtl/*.v lines of 16+ characters
     after whitespace normalisation, not a bare port or keyword line),
     matched whitespace-normalised;
-  * the literal string "corpus/vde".
-The walk covers every file visible in the sandbox except /proc, /sys, /dev,
+  * the corpus path prefix of the rung's family, CORPUS_PREFIX (spelled in
+    two halves here so this file, visible in the sandbox, does not hold it).
+The walk reads every file visible in the sandbox except /proc, /sys, /dev,
 the EDA tree (an unpacked tool image; too big to walk per run) and the OAuth
 credentials file (a secret, never read). It does not follow symlinks, skips
 files over MAX_BYTES (listed), and lists what it could not read. A finding
 is any hash, name, distinctive line or string hit, with one exception: the
-string "corpus/vde" inside the skill arm's own export (the skill's docs cite
+corpus path prefix inside the skill arm's own export (the skill's docs cite
 corpus paths that do not exist in the sandbox) is reported as a mention and
 does not fail. Hashes, names and RTL lines fail everywhere.
+A full walk of /usr and /etc takes minutes, so round.py passes a baseline:
+after the round's first full walk passes, later probes skip (and count)
+files under /usr and /etc whose ctime predates that walk's start, and read
+every other file in full.
 
 Network: a direct TCP connect to public IPs must fail; a CONNECT through the
 sandbox's proxy to each denied target (github.com:443,
@@ -66,6 +71,7 @@ DENY_TARGETS = ("github.com:443", "raw.githubusercontent.com:443")
 ALLOW_TARGET = "api.anthropic.com:443"
 PUBLIC_IPS = (("1.1.1.1", 443), ("8.8.8.8", 53), ("140.82.112.3", 443))
 SKIP_ALWAYS = ("/proc", "/sys", "/dev")
+CORPUS_PREFIX = "corpus" + "/vde"
 _WS = re.compile(rb"\s+")
 _GENERIC_RTL = re.compile(
     r"^(module\b.*|endmodule|end|begin|else|\)\s*;|(input|output|inout)\b.*"
@@ -117,7 +123,7 @@ def corpus_fingerprints(rung: Path) -> dict:
         raise ValueError(f"no held-out test or property names under {rung}")
     return {"raw_sha256": raw, "norm_sha256": normed,
             "names": sorted(names), "rtl_lines": sorted(lines),
-            "strings": ["corpus/vde"]}
+            "strings": [CORPUS_PREFIX]}
 
 
 # ----------------------------------------------------------- sandbox side
@@ -126,7 +132,14 @@ def _classify(data: bytes) -> bool:
 
 
 def walk(needles: dict, skip_roots: list[str], mention_ok: list[str],
-         skip_files: list[str], root: str = "/") -> dict:
+         skip_files: list[str], root: str = "/",
+         trusted_roots: list[str] = (), trusted_before: float | None = None
+         ) -> dict:
+    """Read every visible regular file and match it against the needles.
+    Under `trusted_roots`, a file whose ctime is older than `trusted_before`
+    (the start of a full walk that passed in this round) is not read again:
+    the kernel moves a file's ctime on every write, rename or link, so an
+    older ctime means the content the full walk read clean."""
     t0 = time.monotonic()
     raw = needles.get("raw_sha256", {})
     normed = needles.get("norm_sha256", {})
@@ -142,7 +155,8 @@ def walk(needles: dict, skip_roots: list[str], mention_ok: list[str],
     skip_files = set(skip_files)
     findings, mentions = [], []
     large, unreadable = [], []
-    n_files = n_bytes = 0
+    n_files = n_bytes = n_trusted = 0
+    trusted = [t.rstrip("/") for t in trusted_roots] if trusted_before else []
 
     def skipped(path: str) -> bool:
         return any(path == s or path.startswith(s + "/") for s in skip)
@@ -168,6 +182,10 @@ def walk(needles: dict, skip_roots: list[str], mention_ok: list[str],
                 stack.append(path)
                 continue
             if not stat.S_ISREG(st.st_mode) or path in skip_files:
+                continue
+            if trusted and st.st_ctime < trusted_before and any(
+                    path.startswith(t + "/") for t in trusted):
+                n_trusted += 1
                 continue
             if st.st_size > MAX_BYTES:
                 large.append(path)
@@ -207,6 +225,8 @@ def walk(needles: dict, skip_roots: list[str], mention_ok: list[str],
                         findings.append(rec)
     return {"findings": findings, "mentions": mentions,
             "files": n_files, "bytes": n_bytes,
+            "trusted_unchanged": n_trusted, "trusted_roots": trusted,
+            "trusted_before": trusted_before,
             "skipped_large": large, "unreadable": unreadable,
             "skipped_roots": skip, "skipped_files": sorted(skip_files),
             "seconds": round(time.monotonic() - t0, 2)}
@@ -356,7 +376,8 @@ def run_probe(cfg: dict) -> dict:
     home = Path(cfg.get("home", os.environ.get("HOME", "/home/eval")))
     w = walk(cfg["needles"], cfg.get("skip_roots", []),
              cfg.get("mention_ok", []), cfg.get("skip_files", []),
-             cfg.get("root", "/"))
+             cfg.get("root", "/"), cfg.get("trusted_roots", []),
+             cfg.get("trusted_before"))
     n = net_checks(cfg.get("proxy", "127.0.0.1:18080"),
                    cfg.get("deny", list(DENY_TARGETS)),
                    cfg.get("allow", ALLOW_TARGET))

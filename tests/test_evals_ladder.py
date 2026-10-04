@@ -234,3 +234,252 @@ def test_an_old_result_without_rulings_renders_a_dash(tmp_path):
     row = [ln for ln in ladder.render(res, tmp_path / "f").splitlines()
            if ln.startswith("| uart |")][0]
     assert row.startswith("| uart | yes |  | pass (1/1) | - | 0.74 |")
+
+
+# ---- --deliverables: a bare-against-skill round arm --------------------------
+
+CORPUS8 = REPO / "corpus" / "vde" / "counter8"
+
+
+def _arm(root: Path, *, tb: bool = True, final: bool = False) -> Path:
+    """An arm's deliverables: the corpus counter8 RTL (and tb), optionally a
+    stand-in final/ holding every view check_harden expects."""
+    (root / "rtl").mkdir(parents=True)
+    (root / "rtl" / "counter8.v").write_text((CORPUS8 / "rtl" / "counter8.v").read_text())
+    if tb:
+        (root / "tb").mkdir()
+        (root / "tb" / "test_counter8.py").write_text(
+            (CORPUS8 / "tb" / "test_counter8.py").read_text())
+    if final:
+        f = root / ladder.HARDEN_FINAL
+        for v in ("gds", "lef", "nl", "sdf", "spef"):
+            (f / v).mkdir(parents=True)
+            (f / v / f"tt_um_counter8.{v}").write_text("x")
+        (f / "metrics.json").write_text(json.dumps({"design__instance__count": 9}))
+    return root
+
+
+def test_copy_regular_keeps_files_and_skips_every_link(tmp_path):
+    src, dst = tmp_path / "src", tmp_path / "dst"
+    (src / "sub").mkdir(parents=True)
+    (src / "a.v").write_text("module a; endmodule\n")
+    (src / "a.v").chmod(0o755)
+    (src / "sub" / "b.v").write_text("b")
+    (src / "__pycache__").mkdir()
+    (src / "__pycache__" / "x.pyc").write_text("noise")
+    secret = tmp_path / "secret"
+    (secret / "holdout").mkdir(parents=True)
+    (secret / "holdout" / "test_x.py").write_text("held out")
+    (src / "file_link.py").symlink_to(secret / "holdout" / "test_x.py")
+    (src / "dir_link").symlink_to(secret / "holdout", target_is_directory=True)
+    (src / "dangling").symlink_to(tmp_path / "nowhere")
+    skipped: list[dict] = []
+    n = ladder.copy_regular(src, dst, "tb", skipped)
+    assert n == 2
+    assert (dst / "a.v").read_text() == "module a; endmodule\n"
+    assert (dst / "a.v").stat().st_mode & 0o111 == 0  # exec bit dropped
+    assert (dst / "sub" / "b.v").is_file()
+    assert not (dst / "__pycache__").exists()
+    assert not (dst / "file_link.py").exists() and not (dst / "dir_link").exists()
+    assert {s["path"]: s["why"] for s in skipped} == {
+        "tb/file_link.py": "symlink", "tb/dir_link": "symlink", "tb/dangling": "symlink"}
+
+
+def test_find_deliverables_root_prefers_root_then_named_block(tmp_path):
+    root = tmp_path / "root"
+    (root / "rtl").mkdir(parents=True)
+    (root / "blocks" / "counter8" / "rtl").mkdir(parents=True)
+    assert ladder.find_deliverables_root(root, ["counter8"]) == (root, ".")
+
+    blk = tmp_path / "blk"
+    (blk / "blocks" / "other" / "rtl").mkdir(parents=True)
+    (blk / "blocks" / "counter8" / "rtl").mkdir(parents=True)
+    assert ladder.find_deliverables_root(blk, ["counter8"]) == (
+        blk / "blocks" / "counter8", "blocks/counter8")
+
+    only = tmp_path / "only"
+    (only / "blocks" / "mine" / "rtl").mkdir(parents=True)
+    assert ladder.find_deliverables_root(only, ["counter8"])[1] == "blocks/mine"
+
+    two = tmp_path / "two"
+    for b in ("x", "y"):
+        (two / "blocks" / b / "rtl").mkdir(parents=True)
+    assert ladder.find_deliverables_root(two, ["counter8"]) == (two, ".")
+
+
+def test_find_deliverables_root_never_follows_a_link(tmp_path):
+    real = tmp_path / "real"
+    (real / "rtl").mkdir(parents=True)
+    ws = tmp_path / "ws"
+    (ws / "blocks" / "counter8").mkdir(parents=True)
+    (ws / "rtl").symlink_to(real / "rtl", target_is_directory=True)
+    (ws / "blocks" / "counter8" / "rtl").symlink_to(real / "rtl", target_is_directory=True)
+    assert ladder.find_deliverables_root(ws, ["counter8"]) == (ws, ".")
+    link_ws = tmp_path / "link_ws"
+    link_ws.symlink_to(real, target_is_directory=True)
+    with pytest.raises(CheckError, match="not a real directory"):
+        ladder.find_deliverables_root(link_ws, ["counter8"])
+
+
+def test_build_scoring_ws_skips_a_linked_harden_tree_and_never_copies_arm_spec(tmp_path):
+    arm = _arm(tmp_path / "arm")
+    (arm / "spec").mkdir()
+    (arm / "spec" / "mutant_rulings.yaml").write_text("equivalent: []\n")
+    elsewhere = _arm(tmp_path / "elsewhere", final=True)
+    (arm / "harden").symlink_to(elsewhere / "harden", target_is_directory=True)
+    ws = tmp_path / "score" / "counter8"
+    info = ladder.build_scoring_ws(ws, CORPUS8, arm, "counter8")
+    assert info["copied"] == {"rtl": 1, "tb": 1, str(ladder.HARDEN_FINAL): 0}
+    assert info["skipped"] == [{"path": "harden", "why": "symlink"}]
+    assert not (ws / ladder.HARDEN_FINAL).exists()
+    assert not (ws / "spec" / "mutant_rulings.yaml").exists()
+    assert (ws / "spec" / "spec.yaml").read_text() == (CORPUS8 / "spec.yaml").read_text()
+    assert (ws / "holdout" / "test_counter8_holdout.py").is_file()
+
+    # the same tree as real directories is copied
+    arm2 = _arm(tmp_path / "arm2", final=True)
+    info2 = ladder.build_scoring_ws(tmp_path / "score2" / "counter8", CORPUS8, arm2, "counter8")
+    assert info2["copied"][str(ladder.HARDEN_FINAL)] == 6 and info2["skipped"] == []
+
+
+def _fake_gates(monkeypatch, calls: list, on_gate=None):
+    def fake(ws, gate, outdir, report=None):
+        calls.append(gate)
+        if on_gate:
+            on_gate(ws, gate)
+        if report is not None:
+            body = json.loads(report.read_text())
+            return {"status": "pass" if not body.get("violations") else "fail",
+                    "facts": {}}
+        facts = {"mutate": {"kill_rate": 0.9}, "cover": {"line_pct": 95.0},
+                 "synth": {"area": 100.0},
+                 "holdout": {"tests_passed": 3, "tests_run": ["a", "b", "c"]},
+                 "timing": {"corners": {"ss": {"setup_ws": 0.5}}}}.get(gate, {})
+        return {"status": "pass", "wall_s": 0.0, "failing": 0, "kinds": [],
+                "facts": facts}
+    monkeypatch.setattr(ladder, "run_gate", fake)
+    monkeypatch.setattr(ladder, "_git_head", lambda: "abc123")
+    monkeypatch.setattr(ladder, "_tool_image", lambda: "iic-osic-tools-test")
+
+
+def _deliv(tmp_path, ws, *extra):
+    return ladder.run(["--skill", "vde", "--rung", "counter8", "--deliverables", str(ws),
+                       "--hand-edits", "0", "--results-dir", str(tmp_path / "r"),
+                       "--ladder-md", str(tmp_path / "ladder.md"), *extra])[0]
+
+
+def test_a_hardened_arm_with_every_gate_green_counts(tmp_path, monkeypatch):
+    calls: list = []
+    _fake_gates(monkeypatch, calls)
+    arm = _arm(tmp_path / "arm", final=True)
+    out = _deliv(tmp_path, arm, "--arm", "bare", "--detail", "terse", "--repeat", "3",
+                 "--model", "m-1")
+    r = out["result"]
+    assert out["status"] == "pass" and r["counts"] is True and r["integrity"] == "ok"
+    assert r["kind"] == "round" and r["scoring"] == "deliverables"
+    assert (r["arm"], r["detail"], r["repeat"], r["model"]) == ("bare", "terse", 3, "m-1")
+    assert r["chip_flow_commit"] == "abc123" and r["tool_image"] == "iic-osic-tools-test"
+    assert r["hardened"] is True and r["testbench"] is True
+    assert r["held_out"] == {"status": "pass", "tests_passed": 3, "tests_run": 3,
+                             "kinds": []}
+    assert (r["kill_rate"], r["line_pct"], r["area"], r["worst_slack_ns"]) == (
+        0.9, 95.0, 100.0, 0.5)
+    # corpus-graded gates before any gate that runs the arm's testbench; release last
+    assert calls[-1] == "release"
+    assert max(calls.index(g) for g in ("holdout", "formal", "harden")) < min(
+        calls.index(g) for g in ("sim", "mutate", "cover", "glsim"))
+    assert out["result_file"].endswith("_vde_counter8_bare_terse_r3.json")
+    assert (tmp_path / "r" / "ladder" / out["result_file"]).is_file()
+    assert "## Bare against skill rounds" in (tmp_path / "ladder.md").read_text()
+
+
+def test_an_arm_with_no_gds_and_no_testbench_does_not_count(tmp_path, monkeypatch):
+    calls: list = []
+    _fake_gates(monkeypatch, calls)
+    out = _deliv(tmp_path, _arm(tmp_path / "arm", tb=False), "--no-regen")
+    r = out["result"]
+    assert r["counts"] is False and r["hardened"] is False and r["testbench"] is False
+    for g in ("harden", "timing", "drc", "lvs", "precheck"):
+        assert r["gates"][g]["status"] == "not hardened" and g not in calls
+    for g in ("sim", "mutate", "cover"):
+        assert r["gates"][g]["status"] == "no testbench" and g not in calls
+    assert r["gates"]["glsim"]["status"] == "not hardened"
+    assert "harden: not hardened" in r["gate_problems"]
+    assert "sim: no testbench" in r["gate_problems"]
+    assert "holdout" in calls and "lint" in calls
+    assert not (tmp_path / "ladder.md").exists()  # --no-regen
+
+
+def test_a_deliverable_changed_mid_scoring_stops_the_rest(tmp_path, monkeypatch):
+    def tamper(ws, gate):
+        if gate == "lint":
+            (ws / "holdout" / "test_counter8_holdout.py").write_text("passes\n")
+    calls: list = []
+    _fake_gates(monkeypatch, calls, tamper)
+    r = _deliv(tmp_path, _arm(tmp_path / "arm", final=True), "--no-regen")["result"]
+    assert r["integrity"] == ["holdout/test_counter8_holdout.py"]
+    assert r["counts"] is False and calls[-1] == "lint"
+    assert r["gates"]["holdout"]["status"] == "not run"
+    assert any(p.startswith("integrity:") for p in r["gate_problems"])
+
+
+def test_cache_noise_a_gate_writes_is_not_tampering(tmp_path, monkeypatch):
+    def noise(ws, gate):
+        (ws / "tb" / "__pycache__").mkdir(exist_ok=True)
+        (ws / "tb" / "__pycache__" / f"{gate}.pyc").write_text("x")
+    _fake_gates(monkeypatch, [], noise)
+    r = _deliv(tmp_path, _arm(tmp_path / "arm", final=True), "--no-regen")["result"]
+    assert r["integrity"] == "ok" and r["counts"] is True
+
+
+def test_deliverables_refuses_run_reference_rulings_and_analog(tmp_path, monkeypatch):
+    _fake_gates(monkeypatch, [])
+    arm = _arm(tmp_path / "arm")
+    with pytest.raises(CheckError, match="not both"):
+        _deliv(tmp_path, arm, "--run", str(arm))
+    with pytest.raises(CheckError, match="--reference"):
+        _deliv(tmp_path, arm, "--reference")
+    with pytest.raises(CheckError, match="--rulings must be 0"):
+        _deliv(tmp_path, arm, "--rulings", "1")
+    with pytest.raises(CheckError, match="vde rungs only"):
+        ladder.run(["--skill", "ade", "--rung", "counter8", "--deliverables", str(arm),
+                    "--hand-edits", "0", "--results-dir", str(tmp_path / "r")])
+
+
+def test_round_results_get_their_own_section_never_a_skill_column(tmp_path):
+    res = tmp_path / "results"
+    _write(res, "2026-09-02T000000_vde_counter8_bare_typical_r1.json",
+           _result("counter8", True, kind="round", arm="bare", detail="typical",
+                   repeat=1, model="m-1", hardened=False, testbench=True))
+    _write(res, "2026-09-02T000000_vde_uart.json", _result("uart", True))
+    md = ladder.render(res, tmp_path / "f")
+    assert "## Bare against skill rounds" in md
+    row = [ln for ln in md.splitlines() if ln.startswith("| vde/counter8 | bare |")][0]
+    assert "| typical | 1 | m-1 | yes |" in row and "| not hardened |" in row
+    assert not [ln for ln in md.splitlines() if ln.startswith("| counter8 | yes")]
+    # with no round result the section is left out
+    assert "## Bare against skill rounds" not in ladder.render(
+        tmp_path / "empty", tmp_path / "f")
+
+
+def test_result_name_adds_arm_detail_repeat_only_when_needed():
+    import argparse
+    a = argparse.Namespace(skill="vde", rung="uart", deliverables=None, repeat=None,
+                           arm="skill", detail="typical")
+    assert ladder.result_name(a, "S") == "S_vde_uart.json"
+    a.repeat = 2
+    assert ladder.result_name(a, "S") == "S_vde_uart_skill_typical_r2.json"
+    a.repeat, a.deliverables = None, "ws"
+    assert ladder.result_name(a, "S") == "S_vde_uart_skill_typical_r0.json"
+
+
+@pytest.mark.slow
+def test_corpus_counter8_scores_through_deliverables_with_real_gates(tmp_path):
+    """Real tools: the corpus RTL and tb, no GDS. Everything up to the
+    hardened gates passes; the hardened ones read "not hardened"."""
+    out = _deliv(tmp_path, _arm(tmp_path / "arm"), "--no-regen")
+    r = out["result"]
+    for g in ("spec_lint", "lint", "holdout", "formal", "synth", "sim", "mutate", "cover"):
+        assert r["gates"][g]["status"] == "pass", (g, r["gates"][g])
+    assert r["gates"]["harden"]["status"] == "not hardened"
+    assert r["integrity"] == "ok" and r["counts"] is False
