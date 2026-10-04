@@ -193,6 +193,8 @@ Per-stage benches on frozen inputs port `bench.py`. A fixture under `evals/fixtu
 
 CVDP gives the public number. `evals/cvdp/run.py` fetches the NVIDIA CVDP v1.1 dataset at a pinned commit, selects the problems whose harness needs only Icarus, cocotb and yosys, runs each problem's test commands natively under `eda` instead of in its container, and scores pass rate overall and by category. The result records the subset size and that this is not the official harness, and the ladder page shows the number beside the leaderboard figures the proposal quotes. A leaderboard submission needs the docker harness and is out of scope.
 
+`evals/scorecard.py` reads what those three wrote and scores it: a per-design scorecard with findings a skill can act on, a suite score per skill with confidence intervals, and the cost of the full eval suite. `docs/design-evals.md` is its design, with the research behind it and the bare Claude Code against skill experiment.
+
 ## 4. The optimise loop
 
 The loop is Karpathy's autoresearch shape: an agent edits one file, a fixed-budget evaluator it cannot edit scores the result, the change stays only if the metric improved, otherwise git reverts it, every trial goes to a TSV, and it loops.
