@@ -4,10 +4,20 @@ evals/ladder.md (docs/design.md section 3, "### M6.").
 
     ladder.py --skill vde --rung uart --run WS --hand-edits N [--rulings R]
               [--session-tokens T] [--session-cost-usd C] [--wall-s S]
-              [--note TEXT] [--reference]
+              [--note TEXT] [--reference] [PROVENANCE]
+    ladder.py --skill vde --rung counter8 --deliverables WS --hand-edits N
+              [--session-tokens T] [--session-cost-usd C] [--wall-s S]
+              [--note TEXT] [--keep-scoring-ws DIR] [PROVENANCE]
     ladder.py --regen
 
-It scores a run a session already made; it never drives an agent. From the
+    PROVENANCE: [--arm bare|skill] [--detail terse|typical|full]
+                [--repeat N] [--model ID]
+    Either scoring mode also takes [--no-regen] [--results-dir DIR]
+    [--ladder-md FILE] [--out FILE].
+
+It scores a run a session already made; it never drives an agent.
+
+`--run WS` scores a skill run from its own record. From the
 run's workspace it records whether every gate went green (attest.py's own
 check: every gate the skill owes has a fresh pass or a bound waiver, no
 open issue, plus a fresh `release` pass), then runs the corpus's own
@@ -16,6 +26,47 @@ strong form of docs/design.md section 2. Beside those it records the kill
 rate, area and worst slack from the gates' recorded facts, the fix attempts
 (gate attempts past the first), the tokens and cost from the spawn ledger
 plus the orchestrating session's own, and the wall time.
+
+`--deliverables WS` scores one arm of a bare-against-skill round
+(docs/design-evals.md section 3) from what the arm left, never from its
+state.json or its recorded gate passes, so the bare arm (which has neither)
+and the skill arm go through the same code path. The deliverables are the
+ones evals/arms/footer.md asks for: rtl/, tb/ and, for a hardened block, the
+LibreLane run's harden/runs/run/final/, at WS's root or under
+blocks/<name>/ (the root when it has rtl/, else blocks/<spec top or rung>,
+else the only blocks/* with rtl/). A scoring workspace is built in a temp
+dir: state.py init, the corpus rung's spec.yaml, spec.md, formal/ and
+holdout/, then the arm's rtl/, tb/ and final/. The arm's own spec/,
+formal/ and records are never copied, so its rulings are never read
+(--rulings must be 0). Every vde gate then runs there through gate.py:
+  function        holdout (corpus held-out tests) and formal (corpus
+                  properties) on the arm's RTL, with spec_lint, lint, synth;
+  verification    sim, mutate and cover on the arm's OWN tb/; with no
+                  tb/test_*.py they are not run and read "no testbench";
+  implementation  the arm's own hardened run, never re-hardened (that would
+                  hand the bare arm credit it did not earn): harden is
+                  check_harden.py's completeness rule on the copied final/,
+                  recorded through gate.py --report; timing, drc, lvs,
+                  glsim and precheck run on it. With no final/ they are not
+                  run and read "not hardened";
+  release         last, as in a skill run.
+Deliverables are untrusted: only regular files are copied, every symlink
+(file or directory, at any depth, the roots included), device and fifo is
+skipped and listed in the result's deliverables.skipped, nothing copied
+keeps an exec bit, and nothing from them runs outside the gates that
+normally run it. Corpus-graded gates run before any gate that executes the
+arm's testbench, every copied tree is hashed before and after each gate,
+and a change stops scoring and the rung counting (`integrity`). Each gate's
+result is read from a file outside the scoring workspace. The result is
+`kind: "round"`, with `gates` (per-gate status: pass, fail, error, not
+hardened, no testbench, not run), `hardened`, `testbench`, `deliverables`
+and `scoring_wall_s`; it is listed in ladder.md's own "Bare against skill
+rounds" section and never on a skill column or as a reference. vde only.
+
+Every result records `arm` (default skill), `detail` (default typical),
+`repeat`, `model`, `chip_flow_commit` (git HEAD), `tool_image` (the
+EDA_TOOLCHAIN tree's name) and `scoring` ("state" for --run,
+"deliverables").
 
 Hand edits cannot be read off a workspace, so the caller declares them with
 `--hand-edits`; it is required. A rung COUNTS when every gate is green, the
@@ -37,22 +88,30 @@ RTL with its gates run by gate.py, say). Its result is kept, but ladder.md
 lists it under "Reference baselines" and never on the skill's column, which
 shows only skill runs.
 
-Every scored run is a dated JSON under evals/results/ladder/. ladder.md is
-rebuilt from the newest result per rung, the bench baselines under
-evals/fixtures/, and the newest full-subset CVDP result under evals/results/cvdp/
-(the pinned non-agentic file, no --category, no --limit, every subset problem
-selected; the newest other run, labelled as such, when there is none), so the
-ade and msde columns fill in as their results land. Exit 0 the rung counts,
-1 it does not (the findings say why), 2 error; `--regen` exits 0.
+Every scored run is a dated JSON under <results-dir>/ladder/, named
+<stamp>_<skill>_<rung>.json, plus _<arm>_<detail>_r<repeat> for a
+--deliverables result or one given --repeat. ladder.md is
+rebuilt (unless --no-regen) from the newest result per rung, the bench
+baselines under evals/fixtures/, and the newest full-subset CVDP result under
+evals/results/cvdp/ (the pinned non-agentic file, no --category, no --limit,
+every subset problem selected; the newest other run, labelled as such, when
+there is none), so the ade and msde columns fill in as their results land.
+Exit 0 the rung counts, 1 it does not (the findings say why), 2 error;
+`--regen` exits 0.
 """
 from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
+import os
 import shutil
+import stat
+import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 EVALS = Path(__file__).resolve().parent
@@ -62,9 +121,11 @@ sys.path.insert(0, str(ENGINE / "scripts"))
 sys.path.insert(0, str(ENGINE / "lib"))
 import attest  # noqa: E402
 import checklib  # noqa: E402
+import cocotblib  # noqa: E402
 import gate as gate_mod  # noqa: E402
 import rulingslib  # noqa: E402
 import statelib  # noqa: E402
+import ttlib  # noqa: E402
 from checklib import CheckError  # noqa: E402
 
 SCRIPT = "ladder"
@@ -212,6 +273,7 @@ def score(args) -> tuple[dict, list[dict]]:
         "note": args.note,
         "kind": "reference" if args.reference else "skill",
     }
+    result.update(provenance(args, "state"))
     violations = [checklib.violation("ladder", "error", None, args.rung,
                                      "gate_not_green", [], p, "attest")
                   for p in green_problems]
@@ -228,6 +290,389 @@ def score(args) -> tuple[dict, list[dict]]:
             "ladder", "error", None, args.rung, "rulings_undeclared", [],
             f"{undeclared} mutant ruling(s) in the run that the caller did not "
             "declare as the owner's (--rulings): scored as hand edits", "caller"))
+    return result, violations
+
+
+# ---- provenance ------------------------------------------------------------
+
+def _git_head() -> str | None:
+    try:
+        p = subprocess.run(["git", "-C", str(REPO), "rev-parse", "HEAD"],
+                           capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return (p.stdout.strip() or None) if p.returncode == 0 else None
+
+
+def _tool_image() -> str | None:
+    """The EDA_TOOLCHAIN tree's name, as bin/eda resolves it."""
+    try:
+        p = subprocess.run([str(EDA_BIN), "--print-toolchain-root"],
+                           capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        p = None
+    root = (p.stdout.strip() if p is not None and p.returncode == 0 else "") \
+        or os.environ.get("EDA_TOOLCHAIN") or ""
+    return Path(root).name or None
+
+
+def provenance(args, scoring: str) -> dict:
+    return {"arm": args.arm, "detail": args.detail, "repeat": args.repeat,
+            "model": args.model, "chip_flow_commit": _git_head(),
+            "tool_image": _tool_image(), "scoring": scoring}
+
+
+# ---- --deliverables: score what an arm left, never what it recorded --------
+
+EDA_BIN = REPO / "bin" / "eda"
+GATE_PY = ENGINE / "scripts" / "gate.py"
+HARDEN_FINAL = Path("harden") / "runs" / "run" / "final"
+# Gates graded only by corpus code against the arm's RTL run first, the
+# hardened views next, and every gate that executes the arm's own testbench
+# last, so arm code never runs before the corpus graders have read their
+# files. A gates.yaml row not named here runs after these, before release.
+GATE_ORDER = ("spec_lint", "lint", "holdout", "formal", "synth",
+              "harden", "timing", "drc", "lvs", "precheck",
+              "sim", "mutate", "cover", "glsim")
+HARDENED_GATES = {"harden", "timing", "drc", "lvs", "precheck", "glsim"}
+TB_GATES = {"sim", "mutate", "cover", "glsim"}
+# what scoring copies from the corpus rung and from the arm; the integrity
+# check hashes exactly these trees before and after every gate
+CORPUS_PARTS = ("spec", "formal", "holdout")
+ARM_PARTS = ("rtl", "tb", str(HARDEN_FINAL))
+NOISE = {"__pycache__", ".pytest_cache"}
+MAX_FILE_BYTES = 512 * 1024 * 1024
+GATE_TIMEOUT_S = 4 * 3600
+
+
+def _is_link_or_missing(path: Path) -> str | None:
+    """Why `path` is not a real directory reached without a link, else None."""
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return "missing"
+    if stat.S_ISLNK(st.st_mode):
+        return "symlink"
+    if not stat.S_ISDIR(st.st_mode):
+        return "not a directory"
+    return None
+
+
+def _real_subdir(root: Path, rel: Path) -> tuple[Path | None, str | None, str]:
+    """root/rel when every component below root is a real directory;
+    otherwise (None, why, the component that stopped it)."""
+    cur = root
+    for part in rel.parts:
+        cur = cur / part
+        why = _is_link_or_missing(cur)
+        if why:
+            return None, why, str(cur.relative_to(root))
+    return cur, None, str(rel)
+
+
+def find_deliverables_root(ws: Path, names: list[str]) -> tuple[Path, str]:
+    """The arm's deliverables sit at the workspace root, or (a skill-arm
+    run) under blocks/<name>/: the root when it has rtl/, else blocks/<n>
+    for the first of `names` that has one, else the only blocks/* that has
+    one. Links are never followed to find it."""
+    if _is_link_or_missing(ws):
+        raise CheckError(f"--deliverables {ws} is not a real directory "
+                         f"({_is_link_or_missing(ws)})")
+    if _is_link_or_missing(ws / "rtl") is None:
+        return ws, "."
+    blocks = ws / "blocks"
+    if _is_link_or_missing(blocks) is None:
+        cands = [n for n in names if n] + sorted(
+            p.name for p in blocks.iterdir() if p.name not in names)
+        found = [n for n in dict.fromkeys(cands)
+                 if _real_subdir(blocks, Path(n) / "rtl")[0] is not None]
+        named = [n for n in found if n in names]
+        if named or len(found) == 1:
+            n = (named or found)[0]
+            return blocks / n, f"blocks/{n}"
+    return ws, "."
+
+
+def copy_regular(src: Path, dst: Path, rel: str, skipped: list[dict]) -> int:
+    """Copy the regular files under src into dst; never follow or copy a
+    symbolic link (one that dangles in the arm's sandbox can resolve on this
+    host - into corpus/, say - and leak the reference into scoring), never
+    copy a device, fifo or socket. Each thing left out goes on `skipped`.
+    Returns how many files were copied. Files land without an exec bit."""
+    n = 0
+    for dirpath, dirnames, filenames in os.walk(src, followlinks=False):
+        here = Path(dirpath)
+        sub = here.relative_to(src)
+        keep = []
+        for d in sorted(dirnames):
+            p = here / d
+            if d in NOISE:
+                continue
+            if os.path.islink(p):
+                skipped.append({"path": f"{rel}/{(sub / d).as_posix()}",
+                                "why": "symlink"})
+            else:
+                keep.append(d)
+        dirnames[:] = keep
+        (dst / sub).mkdir(parents=True, exist_ok=True)
+        for f in sorted(filenames):
+            p = here / f
+            name = f"{rel}/{(sub / f).as_posix()}"
+            if f.endswith(".pyc"):
+                continue
+            st = os.lstat(p)
+            if stat.S_ISLNK(st.st_mode):
+                skipped.append({"path": name, "why": "symlink"})
+                continue
+            if not stat.S_ISREG(st.st_mode):
+                skipped.append({"path": name, "why": "not a regular file"})
+                continue
+            if st.st_size > MAX_FILE_BYTES:
+                skipped.append({"path": name, "why": f"over {MAX_FILE_BYTES} bytes"})
+                continue
+            try:  # O_NOFOLLOW: a file swapped for a link since lstat is refused
+                fd = os.open(p, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+            except OSError as exc:
+                skipped.append({"path": name, "why": f"unreadable: {exc.strerror}"})
+                continue
+            with os.fdopen(fd, "rb") as fin, open(dst / sub / f, "wb") as fout:
+                shutil.copyfileobj(fin, fout)
+            os.chmod(dst / sub / f, 0o644)
+            n += 1
+    return n
+
+
+def snapshot(ws: Path) -> dict[str, str]:
+    """sha256 of every file the graders and the arm's deliverables hold."""
+    out = {}
+    for part in CORPUS_PARTS + ARM_PARTS:
+        base = ws / part
+        if not base.is_dir():
+            continue
+        for p in sorted(base.rglob("*")):
+            if NOISE & set(p.relative_to(ws).parts) or p.suffix == ".pyc":
+                continue
+            if p.is_symlink():
+                out[str(p.relative_to(ws))] = "symlink"
+            elif p.is_file():
+                out[str(p.relative_to(ws))] = hashlib.sha256(p.read_bytes()).hexdigest()
+    return out
+
+
+def _changed(before: dict, after: dict) -> list[str]:
+    return sorted(k for k in set(before) | set(after) if before.get(k) != after.get(k))
+
+
+def run_gate(ws: Path, gate: str, outdir: Path, report: Path | None = None) -> dict:
+    """One gate through gate.py, recorded in the scoring workspace. The
+    result is read from --out, a file outside the workspace, so nothing the
+    arm's code writes into the workspace can stand in for it."""
+    out = outdir / f"gate-{gate}.json"
+    cmd = [sys.executable, str(GATE_PY), "--gate", gate, "--skill", "vde",
+           "--workspace", str(ws), "--out", str(out)]
+    if report is not None:
+        cmd += ["--report", str(report)]
+    t0 = time.monotonic()
+    try:
+        proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True,
+                              text=True, encoding="utf-8", errors="replace",
+                              timeout=GATE_TIMEOUT_S)
+        rc = proc.returncode
+    except subprocess.TimeoutExpired:
+        return {"status": "error", "why": f"timed out after {GATE_TIMEOUT_S}s"}
+    wall = round(time.monotonic() - t0, 1)
+    try:
+        body = json.loads(out.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"status": "error", "wall_s": wall,
+                "why": f"gate.py wrote no result (exit {rc}): {proc.stderr[-300:]}"}
+    status = body.get("status")
+    if status == "error" or rc == 2:
+        why = str(body.get("remediation") or body.get("error") or "")
+        return {"status": "error", "wall_s": wall, "why": why[-400:]}
+    return {"status": status, "wall_s": wall, "failing": body.get("failing_count"),
+            "kinds": sorted({v.get("kind") for v in body.get("failing") or []
+                             if v.get("kind")}),
+            "facts": body.get("facts") or {}}
+
+
+def harden_artefact_report(ws: Path, top: str, path: Path) -> Path:
+    """The harden gate's result for an arm's own LibreLane run, without
+    running LibreLane again: check_harden.py's own completeness rule (every
+    EXPECTED_FORMATS view in final/) on the copied run. Recorded through
+    gate.py --report so release reads it like any other harden result."""
+    import check_harden
+    final = ws / HARDEN_FINAL
+    missing = [f for f in check_harden.EXPECTED_FORMATS
+               if not any((final / f).glob("*")) and not (final / f).is_file()]
+    violations = [] if not missing else [checklib.violation(
+        "harden", "error", None, top, "harden_missing_artifact", [],
+        f"the arm's {HARDEN_FINAL} is missing: {missing}", "ladder")]
+    try:
+        metrics = json.loads((final / "metrics.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        metrics = {}
+    subset = {k: v for k, v in metrics.items() if ":" not in k and k.startswith(
+        ("design__instance", "design__die", "design__core", "timing__setup",
+         "timing__hold"))} if isinstance(metrics, dict) else {}
+    payload = checklib.report(check_harden.SCRIPT, ws / "rtl", violations, top=top,
+                              run_tag="run", metrics=subset,
+                              source="the arm's own LibreLane run, not re-hardened")
+    path.write_text(json.dumps(payload, indent=1), encoding="utf-8")
+    return path
+
+
+def build_scoring_ws(ws: Path, rung_dir: Path, root: Path, block: str) -> dict:
+    """state.py init, the corpus rung's spec.yaml, spec.md, formal/ and
+    holdout/, then the arm's rtl/, tb/ and harden/runs/run/final/ (regular
+    files only). The arm's own spec/, formal/, state.json and records are
+    never copied."""
+    import state as state_mod
+    state_mod.State.init(ws, "vde", block)
+    for f in ("spec.yaml", "spec.md"):
+        if (rung_dir / f).is_file():
+            shutil.copy2(rung_dir / f, ws / "spec" / f)
+    for d in ("formal", "holdout"):
+        shutil.rmtree(ws / d, ignore_errors=True)
+        if (rung_dir / d).is_dir():
+            shutil.copytree(rung_dir / d, ws / d)
+        else:
+            (ws / d).mkdir()
+    skipped: list[dict] = []
+    copied = {}
+    for rel in ARM_PARTS:
+        src, why, where = _real_subdir(root, Path(rel))
+        if src is None:
+            if why != "missing":
+                skipped.append({"path": where, "why": why})
+            copied[rel] = 0
+            continue
+        copied[rel] = copy_regular(src, ws / rel, rel, skipped)
+    return {"copied": copied, "skipped": skipped}
+
+
+def score_deliverables(args) -> tuple[dict, list[dict]]:
+    import speclib
+    if args.skill != "vde":
+        raise CheckError("--deliverables scores vde rungs only: the analog "
+                         "held-out swap ade and msde need is not built "
+                         "(docs/design-evals.md section 3)")
+    if args.rulings:
+        raise CheckError("--deliverables never reads the arm's rulings file "
+                         "(its spec/ is not copied), so --rulings must be 0")
+    rung_dir = CORPUS / args.skill / args.rung
+    if not rung_dir.is_dir():
+        raise CheckError(f"no corpus rung at corpus/{args.skill}/{args.rung}")
+    spec = speclib.load_spec(rung_dir / "spec.yaml")
+    top = spec.get("top") or args.rung
+    src = Path(args.deliverables).absolute()
+    root, root_rel = find_deliverables_root(src, [top, args.rung])
+    t0 = time.monotonic()
+    rows = gate_mod.load_gates(gate_mod.DEFAULT_GATES).get("vde") or {}
+    order = [g for g in GATE_ORDER if g in rows] + [
+        g for g in rows if g not in GATE_ORDER and g != "release"]
+
+    tmp = Path(tempfile.mkdtemp(prefix="chip-flow-score-"))
+    ws, outdir = tmp / top, tmp / "gate-results"
+    outdir.mkdir()
+    try:
+        copy = build_scoring_ws(ws, rung_dir, root, top)
+        hardened = (ws / HARDEN_FINAL).is_dir() and any((ws / HARDEN_FINAL).iterdir())
+        has_tb = bool(cocotblib.test_modules(ws / "tb"))
+        base = snapshot(ws)
+        gates: dict[str, dict] = {}
+        tampered: list[str] = []
+        for g in order + ["release"]:
+            if tampered:
+                gates[g] = {"status": "not run", "why": "corpus or deliverable "
+                            "files changed during scoring"}
+            elif g in HARDENED_GATES and not hardened:
+                gates[g] = {"status": "not hardened",
+                            "why": f"no {HARDEN_FINAL} in the deliverables"}
+            elif g in TB_GATES and not has_tb:
+                gates[g] = {"status": "no testbench",
+                            "why": "no tb/test_*.py in the deliverables"}
+            elif g == "harden":
+                rep = harden_artefact_report(ws, ttlib.wrapper_name(spec),
+                                             outdir / "harden-report.json")
+                gates[g] = run_gate(ws, g, outdir, report=rep)
+            else:
+                gates[g] = run_gate(ws, g, outdir)
+            if not tampered:
+                tampered = _changed(base, snapshot(ws))
+        if args.keep_scoring_ws:
+            kept = Path(args.keep_scoring_ws)
+            shutil.copytree(tmp, kept, symlinks=True)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    owed = [g for g in attest.applicable_gates("vde")] + ["release"]
+    problems = []
+    for g in owed:
+        e = gates.get(g) or {"status": "not run", "why": "not in gates.yaml"}
+        if e["status"] == "pass":
+            continue
+        why = {"fail": "last recorded result is FAIL",
+               "error": f"did not run: {e.get('why')}",
+               }.get(e["status"], e["status"])
+        if g == "release":
+            why = "no recorded pass"
+        problems.append(f"{g}: {why}")
+    if tampered:
+        problems.append("integrity: files changed during scoring: "
+                        + ", ".join(tampered[:10]))
+    ho = gates.get("holdout") or {}
+    hf = ho.get("facts") or {}
+    held = {"status": ho.get("status") if ho.get("status") in ("pass", "fail")
+            else "error", "tests_passed": hf.get("tests_passed"),
+            "tests_run": len(hf.get("tests_run") or []) if hf else None,
+            "kinds": ho.get("kinds") or []}
+    if held["status"] == "error":
+        held["why"] = ho.get("why")
+    fact = lambda g, k: ((gates.get(g) or {}).get("facts") or {}).get(k)  # noqa: E731
+    counts = (not problems and held["status"] == "pass" and args.hand_edits == 0)
+    result = {
+        "skill": args.skill, "rung": args.rung, "block": top,
+        "run": src.name, "phase": None,
+        "scored_at": dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"),
+        "counts": counts, "gates_green": not problems,
+        "gate_problems": problems,
+        "gates_passed": sorted(g for g, e in gates.items() if e["status"] == "pass"),
+        "gates": {g: {k: v for k, v in e.items() if k != "facts"}
+                  for g, e in gates.items()},
+        "hand_edits": args.hand_edits, "rulings": 0, "rulings_undeclared": 0,
+        "held_out": held,
+        "hardened": hardened, "testbench": has_tb,
+        "kill_rate": fact("mutate", "kill_rate"),
+        "line_pct": fact("cover", "line_pct"),
+        "area": fact("synth", "area"),
+        "worst_slack_ns": worst_slack(fact("timing", "corners")),
+        "fix_attempts": None,
+        "tokens": args.session_tokens,
+        "cost_usd": round(args.session_cost_usd, 2)
+        if args.session_cost_usd is not None else None,
+        "wall_s": round(args.wall_s) if args.wall_s is not None else None,
+        "scoring_wall_s": round(time.monotonic() - t0),
+        "deliverables": {"root": root_rel, **copy,
+                         "not_scored": ["the arm's own spec/, formal/, state.json "
+                                        "and gate records"]},
+        "integrity": "ok" if not tampered else tampered,
+        "note": args.note,
+        "kind": "round",
+    }
+    result.update(provenance(args, "deliverables"))
+    violations = [checklib.violation("ladder", "error", None, args.rung,
+                                     "gate_not_green", [], p, "ladder")
+                  for p in problems]
+    if held["status"] != "pass":
+        violations.append(checklib.violation(
+            "ladder", "error", "holdout", args.rung, "holdout_failed", [],
+            f"the corpus held-out tests {held['status']}"
+            + (f" ({', '.join(held['kinds'])})" if held["kinds"] else ""), "holdout"))
+    if args.hand_edits:
+        violations.append(checklib.violation(
+            "ladder", "error", None, args.rung, "hand_edits", [],
+            f"{args.hand_edits} hand edit(s) declared", "caller"))
     return result, violations
 
 
@@ -267,6 +712,19 @@ def latest_ladder_results(results: Path, kind: str = "skill") -> dict:
     return out
 
 
+def latest_round_results(results: Path) -> dict:
+    """Newest deliverables-scored result per (skill, rung, arm, detail,
+    repeat)."""
+    out = {}
+    d = results / "ladder"
+    for p in sorted(d.glob("*.json")) if d.is_dir() else []:
+        r = json.loads(p.read_text(encoding="utf-8"))
+        if r.get("kind") == "round":
+            out[(r["skill"], r["rung"], r.get("arm"), r.get("detail"),
+                 r.get("repeat"))] = r
+    return out
+
+
 def _cell(ladder_row: dict, skill: str, res: dict | None) -> str:
     title = ladder_row["title"]
     if not (CORPUS / skill / ladder_row["rung"]).is_dir():
@@ -292,6 +750,8 @@ def _why_red(r: dict) -> str:
         bits.append(f"{len(r['gate_problems'])} gate(s) not green")
     if r["held_out"]["status"] == "fail":
         bits.append("held-out fails")
+    elif r["held_out"]["status"] == "error":
+        bits.append("held-out did not run")
     if r["hand_edits"]:
         bits.append("hand edits")
     if r.get("rulings_undeclared"):
@@ -365,6 +825,35 @@ def render(results: Path, fixtures: Path) -> str:
                 if (s, row["rung"]) in refs:
                     lines.append(f"| {s} " + _row(row["rung"], refs[(s, row["rung"])]))
 
+    rounds = latest_round_results(results)
+    if rounds:
+        lines += ["", "## Bare against skill rounds", "",
+                  "Each arm's deliverables scored in a fresh scoring workspace "
+                  "(`ladder.py --deliverables`), never from its own record: the "
+                  "corpus held-out tests and properties on its RTL, mutate and cover "
+                  "on its own testbench, signoff on its own hardened run "
+                  "(docs/design-evals.md section 3). These never fill a column above. "
+                  "`scorecard.py --round` pairs them.", "",
+                  "| rung | arm | detail | repeat | model | counts | why not | held-out "
+                  "| kill rate | line % | area | worst slack ns | hardened | testbench "
+                  "| cost USD | wall s | scored |",
+                  "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+        for key in sorted(rounds, key=lambda k: tuple(str(x) for x in k)):
+            r = rounds[key]
+            h = r["held_out"]
+            held = h["status"] if h.get("tests_run") is None else \
+                f"{h['status']} ({h.get('tests_passed')}/{h.get('tests_run')})"
+            lines.append("| " + " | ".join([
+                f"{r['skill']}/{r['rung']}", str(r.get("arm")), str(r.get("detail")),
+                _fmt(r.get("repeat")), r.get("model") or "-",
+                "yes" if r["counts"] else "no", _why_red(r), held,
+                _fmt(r.get("kill_rate")), _fmt(r.get("line_pct"), 1),
+                _fmt(r.get("area"), 1), _fmt(r.get("worst_slack_ns")),
+                "yes" if r.get("hardened") else "not hardened",
+                "yes" if r.get("testbench") else "no testbench",
+                _fmt(r.get("cost_usd")), _fmt(r.get("wall_s")),
+                r["scored_at"][:10]]) + " |")
+
     lines += ["", "## Per-stage benches", "",
               "Frozen fixtures under `evals/fixtures/<stage>/<name>/`; `bench.py --compare` "
               "fails a change that lowers a composite.", ""]
@@ -420,7 +909,14 @@ def run(argv=None):
     ap.add_argument("--regen", action="store_true", help="only rebuild ladder.md")
     ap.add_argument("--skill", choices=("vde", "ade", "msde"))
     ap.add_argument("--rung")
-    ap.add_argument("--run", help="the run's block workspace")
+    ap.add_argument("--run", help="the run's block workspace (scored from its record)")
+    ap.add_argument("--deliverables", metavar="WS",
+                    help="an arm's workspace, scored from its deliverables only "
+                    "(rtl/, tb/, harden/runs/run/final/) in a fresh scoring workspace")
+    ap.add_argument("--arm", choices=("bare", "skill"), default="skill")
+    ap.add_argument("--detail", choices=("terse", "typical", "full"), default="typical")
+    ap.add_argument("--repeat", type=int, help="the repeat number within a cell")
+    ap.add_argument("--model", help="the model id the run used")
     ap.add_argument("--hand-edits", type=int,
                     help="hand edits made during the run (required to score)")
     ap.add_argument("--rulings", type=int, default=0,
@@ -434,6 +930,10 @@ def run(argv=None):
     ap.add_argument("--reference", action="store_true",
                     help="the run is not a skill session (e.g. the corpus reference "
                     "RTL): listed as a reference baseline, never on the skill column")
+    ap.add_argument("--keep-scoring-ws", metavar="DIR",
+                    help="--deliverables: keep a copy of the scoring workspace here")
+    ap.add_argument("--no-regen", action="store_true",
+                    help="write the result but leave ladder.md alone")
     ap.add_argument("--results-dir", default=str(RESULTS))
     ap.add_argument("--fixtures-dir", default=str(EVALS / "fixtures"))
     ap.add_argument("--ladder-md", default=str(EVALS / "ladder.md"))
@@ -444,21 +944,42 @@ def run(argv=None):
     if args.regen:
         md = regen(results, Path(args.fixtures_dir), Path(args.ladder_md))
         return {"script": SCRIPT, "status": "pass", "ladder_md": md.name}, args.out
-    missing = [f for f in ("skill", "rung", "run", "hand_edits")
-               if getattr(args, f) is None]
+    if args.run and args.deliverables:
+        raise CheckError("give --run (score a run's record) or --deliverables "
+                         "(score an arm's deliverables), not both")
+    if args.deliverables and args.reference:
+        raise CheckError("--reference marks a --run record; a --deliverables "
+                         "result is always a round result")
+    if args.repeat is not None and args.repeat < 1:
+        raise CheckError("--repeat counts from 1")
+    missing = [f for f in ("skill", "rung", "hand_edits") if getattr(args, f) is None]
+    if not (args.run or args.deliverables):
+        missing.insert(2, "run")
     if missing:
         raise CheckError("scoring a run needs " + ", ".join(
             "--" + m.replace("_", "-") for m in missing) + " (or --regen)")
-    result, violations = score(args)
+    result, violations = (score_deliverables(args) if args.deliverables
+                          else score(args))
     (results / "ladder").mkdir(parents=True, exist_ok=True)
-    stamp = dt.datetime.now().strftime("%Y-%m-%dT%H%M%S")
-    res_path = results / "ladder" / f"{stamp}_{args.skill}_{args.rung}.json"
+    res_path = results / "ladder" / result_name(args)
     res_path.write_text(json.dumps(result, indent=1) + "\n", encoding="utf-8")
-    regen(results, Path(args.fixtures_dir), Path(args.ladder_md))
+    if not args.no_regen:
+        regen(results, Path(args.fixtures_dir), Path(args.ladder_md))
     payload = {"script": SCRIPT, "status": "violations" if violations else "pass",
                "counts": checklib.summarize(violations), "violations": violations,
                "result": result, "result_file": res_path.name}
     return payload, args.out
+
+
+def result_name(args, stamp: str | None = None) -> str:
+    """<stamp>_<skill>_<rung>.json; a --deliverables result, or one given
+    --repeat, adds _<arm>_<detail>_r<repeat> so a round's results never
+    collide."""
+    stamp = stamp or dt.datetime.now().strftime("%Y-%m-%dT%H%M%S")
+    name = f"{stamp}_{args.skill}_{args.rung}"
+    if args.deliverables or args.repeat is not None:
+        name += f"_{args.arm}_{args.detail}_r{args.repeat if args.repeat is not None else 0}"
+    return name + ".json"
 
 
 def main(argv=None) -> int:
