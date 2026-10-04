@@ -12,3 +12,4 @@ An 8-bit free-running binary counter, target clock period 20 ns (50 MHz).
 - While `rst` is high, `count` is 0 on every following clock edge (synchronous, not asynchronous).
 - `count` wraps from 255 to 0 and keeps counting; no overflow flag.
 - A reset asserted for exactly one clock mid-run clears `count` to 0 on the very next edge, the same as a reset held at start-up.
+- The block is hardened as a Tiny Tapeout tile: its top module `tt_um_counter8` wraps `counter8` with this pin map: `clk` <- `clk`, `rst` <- `~rst_n` (the tile's reset pin is active-low, so it is inverted), `count` -> `uo_out[7:0]`.

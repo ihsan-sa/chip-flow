@@ -20,3 +20,7 @@ An 8-bit free-running binary counter.
 | clk   | in  | 1 | free-running clock |
 | rst   | in  | 1 | synchronous, active-high reset |
 | count | out | 8 | the running count |
+
+## Tiny Tapeout tile
+
+The block is hardened as a Tiny Tapeout tile: its top module `tt_um_counter8` wraps `counter8` with this pin map: `clk` <- `clk`, `rst` <- `~rst_n` (the tile's reset pin is active-low, so it is inverted), `count` -> `uo_out[7:0]`.
