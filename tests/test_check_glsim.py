@@ -2,12 +2,17 @@
 glsim row, "### M4."). Fakes cocotb's own runner (never real Icarus/PDK
 gate-level models - tests/smoke-harden.sh runs the real thing) to prove the
 gate's failure classification and its "every test passes both ways" rule.
+One `slow` test runs real Icarus, on a two-cell fixture rather than the PDK
+models, to prove an escaped-dot instance's SDF delays land.
 """
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 REPO = Path(__file__).resolve().parents[1]
 ENGINE = REPO / "engine"
@@ -293,3 +298,89 @@ def test_sdf_error_the_gate_cannot_attribute_still_refuses(tmp_path, monkeypatch
         code, out = _run(ws, monkeypatch, capsys, _runner_writing_logs(build, sim))
         assert code == 2, (sim, out)
         assert "not fully applied" in out["error"], (sim, out)
+
+
+ESCAPED = REPO / "tests" / "fixtures" / "glsim_escaped_dot"
+
+
+def _escaped_ws(tmp_path, monkeypatch, nl_text=None):
+    """A workspace whose netlist and SDF are the escaped-dot fixture: CTS
+    named the buffer on net `u.clk` `\\clkbuf_u.clk `, and the SDF reaches
+    it from an INTERCONNECT and its own CELL block."""
+    ws = make_ws(tmp_path)
+    _patch_pdk(monkeypatch, tmp_path)
+    final = ws / "harden" / "runs" / "run" / "final"
+    (final / "nl" / "tt_um_counter8.nl.v").write_text(
+        nl_text if nl_text is not None else (ESCAPED / "top.nl.v").read_text(),
+        encoding="utf-8")
+    (final / "sdf" / check_glsim.SDF_CORNER /
+     f"tt_um_counter8__{check_glsim.SDF_CORNER}.sdf").write_text(
+        (ESCAPED / "top.sdf").read_text(), encoding="utf-8")
+    return ws
+
+
+def test_escaped_dot_instance_is_renamed_in_the_sdf_passs_own_copies(
+        tmp_path, monkeypatch, capsys):
+    ws = _escaped_ws(tmp_path, monkeypatch)
+    built = {}
+
+    class Runner:
+        def build(self, sources, log_file, **kw):
+            built[Path(log_file).name] = sources
+
+        def test(self, results_xml, **kw):
+            Path(results_xml).write_text(PASS_XML_X, encoding="utf-8")
+
+    code, out = _run(ws, monkeypatch, capsys, Runner())
+    assert code == 0, out
+    # `clkbuf_u__clk` is already a net there, so the rename steps past it
+    assert out["sdf"]["instances_renamed"] == {"clkbuf_u.clk": "clkbuf_u__clk_1"}
+    assert out["sdf"]["sdf_unannotated"] == []
+    build_dir = ws / "log" / "glsim_build"
+    sdf = (build_dir / "sdf_icarus.sdf").read_text()
+    assert "\\." not in sdf
+    assert "(INTERCONNECT _1_.Z clkbuf_u__clk_1.A " in sdf
+    assert "(INSTANCE clkbuf_u__clk_1)" in sdf
+    nl = (build_dir / "sdf_icarus.nl.v").read_text()
+    assert "a_buf clkbuf_u__clk_1  (.A(\\u.clk ), .Z(z));" in nl
+    assert "wire \\u.clk ;" in nl and "wire clkbuf_u__clk;" in nl
+    # only the sdf pass builds from the renamed copy
+    assert str(build_dir / "sdf_icarus.nl.v") in built["build_sdf.log"]
+    nl_src = ws / "harden" / "runs" / "run" / "final" / "nl" / "tt_um_counter8.nl.v"
+    assert str(nl_src) in built["build_functional.log"]
+    assert str(nl_src) not in built["build_sdf.log"]
+
+
+def test_sdf_naming_an_escaped_instance_the_netlist_lacks_refuses(
+        tmp_path, monkeypatch, capsys):
+    nl = (ESCAPED / "top.nl.v").read_text().replace("\\clkbuf_u.clk ", "cb ")
+    ws = _escaped_ws(tmp_path, monkeypatch, nl_text=nl)
+    code, out = _run(ws, monkeypatch, capsys, _runner_writing_logs())
+    assert code == 2, out
+    assert "clkbuf_u\\.clk" in out["error"]
+
+
+@pytest.mark.slow
+def test_escaped_dot_interconnect_annotates_under_real_icarus(tmp_path):
+    """Icarus aborts vvp on an INTERCONNECT to `clkbuf_u\\.clk.A` ("NULL
+    handle passed to vpi_scan"); from the renamed copies it runs, and both
+    the 1 ns INTERCONNECT and the 2 ns IOPATH land on the buffer."""
+    nl_text = (ESCAPED / "top.nl.v").read_text()
+    renames = check_glsim.escaped_dot_renames(
+        (ESCAPED / "top.sdf").read_text(), nl_text)
+    sdf, nl = tmp_path / "top.sdf", tmp_path / "top.nl.v"
+    check_glsim.sdf_for_icarus(ESCAPED / "top.sdf", sdf, renames)
+    check_glsim.netlist_for_icarus(ESCAPED / "top.nl.v", nl, renames)
+    vvp = tmp_path / "sim.vvp"
+    eda = str(check_glsim.EDA_BIN)
+    build = subprocess.run(
+        [eda, "iverilog", "-gspecify", "-ginterconnect", f'-DSDF="{sdf}"',
+         "-o", str(vvp), str(ESCAPED / "tb.v"), str(nl), str(ESCAPED / "cells.v")],
+        capture_output=True, text=True)
+    assert build.returncode == 0, build.stderr
+    run = subprocess.run([eda, "vvp", "-n", str(vvp)],
+                         capture_output=True, text=True, timeout=60)
+    log = run.stdout + run.stderr
+    assert run.returncode == 0, log
+    assert "SDF ERROR" not in log, log
+    assert "z rose at 8000" in log, log
