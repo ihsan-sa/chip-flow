@@ -189,7 +189,8 @@ On gate fail (exit 1, `failing` findings with `kind`/`file`/`module`):
   mutant fail (docs/design.md section 2). The bench-writer's legal move
   is a bound matching the spec, a `.measure` fix, or a `sensitivity` on a
   bound (a kill threshold against the unmutated design, never a pass
-  bound). The only other way past a survivor is the owner's ruling on that one mutant in
+  bound; `sensitivity_abs` for a measure that sits near zero, held to the
+  deck's own resolution). The only other way past a survivor is the owner's ruling on that one mutant in
   `spec/mutant_rulings.yaml` (`equivalent`, or a `below_spread` entry the
   gate checks against its own run); no agent writes one for itself. Each
   survivor's `deltas` in the gate's facts are what such an entry needs.

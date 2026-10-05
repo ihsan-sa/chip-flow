@@ -54,9 +54,27 @@ declare max(3 sigma, 2%) of the measure's mc spread when it is known. It
 also refuses a sensitivity on a measure whose unmutated tt value is below
 2% of its own bound's magnitude (or 0): a relative move of a near-zero
 value is the simulator's absolute tolerance, not the mutant. A measure
-the mutant never printed cannot kill this way. Each such kill is in the `mutants` facts as
-`sensitivity_kill` (bench, measure, delta, sensitivity), and counted in
-`killed_by_sensitivity`.
+the mutant never printed cannot kill this way.
+
+Such a near-zero measure (a low level, an off current, a stop time far
+inside its bound) may instead carry `sensitivity_abs` with
+`sensitivity_unit` ("s", "V" or "A"): the absolute move |mutant -
+baseline|, in the measure's own units, at or past which the mutant is told
+apart. It is no pass bound either, and it only scores a measure near zero
+in that bench - on any other it is a no-op, so it adds kills only where the
+relative rule is refused. The gate refuses (exit 2) one below the
+simulator's own floor, read from the bench and netlist text (abs_floor): a
+time is held to the transient's effective max step (its tmax, else
+ngspice's min(tstep, span/50)), a voltage to vntol + reltol x the bound's
+magnitude, a current to abstol + reltol x it, from the deck's `.options`
+or ngspice's defaults (no `.options` file outside the bench and the
+netlist is read); a deck whose tran line or options are not plain numbers,
+or a time sensitivity with no transient, is refused too. Each sensitivity
+kill is in the `mutants` facts as `sensitivity_kill` (bench, measure,
+delta, sensitivity, kind "relative" or "absolute", and unit for an absolute
+one), counted in `killed_by_sensitivity` and split by kind in
+`killed_by_sensitivity_kind`. A survivor's facts carry `abs_deltas`,
+mutant - baseline for each near-zero measure, to size one from.
 
 Each mutant deck carries the block's own sizing/sizing.yaml, exactly as a
 sim_tt run's deck does. Before any mutant runs, the UNMUTATED design is run
@@ -269,11 +287,85 @@ def check_sensitivity_baselines(bounds: list[dict], bench: str,
                 "tolerance, not a mutant; drop the sensitivity")
 
 
-def sensitivity_kill(baseline: dict, measures: dict,
-                     sens: dict[str, float]) -> dict | None:
+def abs_floor(bound: dict, texts: list[str]) -> tuple[float, str]:
+    """(floor, what it is) for a bound's `sensitivity_abs`: the smallest
+    absolute move, in its `sensitivity_unit`, the deck in `texts` (the bench
+    and the netlist) resolves at all. A time ("s") is the transient's
+    effective max step, the largest over every tran line - a crossing is
+    only placed to within one step. A voltage ("V") is vntol + reltol x
+    the bound's magnitude, and a current ("A") abstol + reltol x it -
+    ngspice's own convergence test, |change| <= reltol x |value| + vntol
+    (abstol), at the scale the spec grades the measure on. Options come
+    from the deck's own `.options` lines, ngspice's defaults otherwise.
+    CheckError when the deck gives no floor to read."""
+    unit, name = bound["sensitivity_unit"], bound["measure"]
+    try:
+        if unit == "s":
+            steps = netlistlib.tran_max_steps(texts)
+            if not steps:
+                raise ValueError("the bench runs no transient, so no time "
+                                 "step bounds the measure")
+            return max(steps), f"the transient's max step {max(steps):g} s"
+        tol = netlistlib.sim_tolerances(texts)
+    except ValueError as exc:
+        raise CheckError(
+            f"{name!r} declares a sensitivity_abs in {unit!r} but the deck "
+            f"gives no simulator floor to hold it to: {exc} - write the "
+            "tran line and .options as plain numbers, or drop the "
+            "sensitivity_abs") from None
+    scale = bound_scale(bound)
+    absolute = tol["vntol"] if unit == "V" else tol["abstol"]
+    label = "vntol" if unit == "V" else "abstol"
+    floor = absolute + tol["reltol"] * scale
+    return floor, (f"{label} {absolute:g} + reltol {tol['reltol']:g} x the "
+                   f"bound's {scale:g} = {floor:g} {unit}")
+
+
+def bench_abs_sensitivities(bounds: list[dict], bench: str,
+                            tt_measures: set[str],
+                            texts: list[str]) -> dict[str, dict]:
+    """{measure: {sensitivity, unit, scale}} for every bound declaring a
+    `sensitivity_abs`. Refused (CheckError) on a bound not scored at tt,
+    and below abs_floor(): a smaller move is the simulator's own
+    resolution, not the mutant."""
+    out: dict[str, dict] = {}
+    for b in bounds:
+        if "sensitivity_abs" not in b:
+            continue
+        name = str(b["measure"]).lower()
+        s = float(b["sensitivity_abs"])
+        unit = b["sensitivity_unit"]
+        if name not in tt_measures:
+            raise CheckError(
+                f"tb/{bench}: {b['measure']!r} declares a sensitivity_abs "
+                "but is not scored at tt - bench_strength runs tt only; drop "
+                "it")
+        try:
+            floor, why = abs_floor(b, texts)
+        except CheckError as exc:
+            raise CheckError(f"tb/{bench}: {exc}") from None
+        # "refuse an absolute sensitivity that sits inside simulator noise"
+        if s < floor:
+            raise CheckError(
+                f"tb/{bench}: {b['measure']!r} sensitivity_abs {s:g} {unit} "
+                f"is below the simulator floor, {why} - a smaller move is "
+                f"the deck's own resolution, not a mutant; declare at least "
+                f"{floor:g} {unit}")
+        out[name] = {"sensitivity": s, "unit": unit, "scale": bound_scale(b)}
+    return out
+
+
+def sensitivity_kill(baseline: dict, measures: dict, sens: dict[str, float],
+                     abs_sens: dict[str, dict] | None = None) -> dict | None:
     """The largest move past its declared sensitivity, as {measure, delta,
-    sensitivity}, or None: a measure whose baseline is 0 or missing, or
-    that the mutant never printed, cannot kill this way."""
+    sensitivity, kind}, or None. kind "relative": delta is (mutant -
+    baseline) / baseline, and a measure whose baseline is 0 or missing
+    cannot kill this way. kind "absolute" (abs_sens, also naming its unit):
+    delta is mutant - baseline, and it kills at |delta| >= sensitivity -
+    only on a measure near_zero() against its bound, where the relative
+    rule is refused; elsewhere it is a no-op, so it only ever adds kills
+    the relative rule cannot make. A measure the mutant never printed
+    kills neither way."""
     best = None
     for name in sorted(sens):
         b, v = baseline.get(name), measures.get(name)
@@ -283,8 +375,42 @@ def sensitivity_kill(baseline: dict, measures: dict,
         if abs(d) > sens[name] and (best is None
                                     or abs(d) > abs(best["delta"])):
             best = {"measure": name, "delta": round(d, 6),
-                    "sensitivity": sens[name]}
+                    "sensitivity": sens[name], "kind": "relative"}
+    if best is not None:
+        return best
+    for name in sorted(abs_sens or {}):
+        s = abs_sens[name]
+        b, v = baseline.get(name), measures.get(name)
+        if b is None or v is None or not near_zero(b, s["scale"]):
+            continue
+        d = v - b
+        # "scores as |mutant - baseline| >= it, for the near-zero measures
+        # the relative rule refuses"
+        if abs(d) >= s["sensitivity"] and (
+                best is None or abs(d) / s["sensitivity"]
+                > abs(best["delta"]) / best["sensitivity"]):
+            best = {"measure": name, "delta": float(f"{d:.6g}"),
+                    "sensitivity": s["sensitivity"], "kind": "absolute",
+                    "unit": s["unit"]}
     return best
+
+
+def absolute_deltas(baselines: dict[str, dict], measures: dict[str, dict],
+                    names: frozenset[str]) -> dict[str, float]:
+    """{measure: mutant - baseline} over `names` (the near-zero measures),
+    the larger |delta| where two benches share a name - what a bench-writer
+    sizes a sensitivity_abs from."""
+    out: dict[str, float] = {}
+    for bench, mm in measures.items():
+        base = baselines.get(bench) or {}
+        for name in sorted(names):
+            b, v = base.get(name), mm.get(name)
+            if b is None or v is None:
+                continue
+            d = v - b
+            if name not in out or abs(d) > abs(out[name]):
+                out[name] = d
+    return out
 
 
 def check_below_spread(ruling: dict, mutant: dict, tt_measures: set[str],
@@ -449,6 +575,9 @@ def run(argv=None):
                                    tt_names[bench_path.name])
         check_sensitivity_baselines(bounds, bench_path.name, sens,
                                     baselines[bench_path.name])
+        abs_sens = bench_abs_sensitivities(
+            bounds, bench_path.name, tt_names[bench_path.name],
+            [bench_text, netlist_text])
         mutants = netlistlib.device_mutants(netlist_text, devices, bench_text)
         for mutant in mutants:
             outcome = run_mutant(
@@ -466,7 +595,8 @@ def run(argv=None):
                 entry["killed"] = True
             if not entry["killed"]:
                 hit = sensitivity_kill(baselines[bench_path.name],
-                                       outcome.get("measures") or {}, sens)
+                                       outcome.get("measures") or {}, sens,
+                                       abs_sens)
                 if hit:
                     entry["killed"] = True
                     entry["sensitivity_kill"] = {"bench": bench_path.name,
@@ -510,6 +640,9 @@ def run(argv=None):
     bench_lines = set().union(*(_lines(t) for t in bench_texts))
     near_zero_names = frozenset(
         near_zero_measures(bounds_by_bench, baselines, tt_names))
+    for m in survivors:
+        m["abs_deltas"] = absolute_deltas(baselines, m["measures"],
+                                          near_zero_names)
     for mid, ruling in below.items():
         check_below_spread(ruling, by_id[mid], all_tt,
                            bench_lines if by_id[mid]["target"] == "bench"
@@ -567,6 +700,9 @@ def run(argv=None):
              "describe": m["describe"]}
         if not m["killed"]:
             f["deltas"] = {k: round(v, 6) for k, v in sorted(m["deltas"].items())}
+            if m["abs_deltas"]:
+                f["abs_deltas"] = {k: float(f"{v:.6g}") for k, v in
+                                   sorted(m["abs_deltas"].items())}
         if "sensitivity_kill" in m:
             f["sensitivity_kill"] = m["sensitivity_kill"]
         return f
@@ -581,6 +717,10 @@ def run(argv=None):
                    for u in unmutated],
         killed_by_sensitivity=sum(1 for m in by_id.values()
                                   if "sensitivity_kill" in m),
+        killed_by_sensitivity_kind={
+            k: sum(1 for m in by_id.values()
+                   if m.get("sensitivity_kill", {}).get("kind") == k)
+            for k in ("relative", "absolute")},
         equivalent=len(equivalent), below_spread=len(below),
         equivalent_ids=sorted(equivalent), below_spread_ids=sorted(below),
         mutants={mid: fact(m) for mid, m in sorted(by_id.items())})

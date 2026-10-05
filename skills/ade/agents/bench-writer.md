@@ -120,9 +120,19 @@ section 2's mutate rule, analog form).
   against the unmutated design's own tt value that counts as a kill.
   Declare max(3 sigma, 2%) of that measure's mc spread, 2% when no sigma
   is known. The gate refuses less than 2%, and any sensitivity on a
-  measure that sits near zero (v_low, an off current), where a relative
-  move is only simulator tolerance. It is not a pass bound
-  (sim_tt/sim_pvt never read it). If no spec measure moves, fix the
+  measure that sits near zero (v_low, an off current, a stop time far
+  inside its bound), where a relative move is only simulator tolerance.
+  For such a measure, read the survivor's `abs_deltas` (mutant - baseline,
+  in the measure's own units) and declare `sensitivity_abs` with
+  `sensitivity_unit` ("s", "V" or "A") instead: the absolute move that
+  counts as a kill. It must sit at or above the deck's own resolution -
+  the transient's max step for a time, vntol + reltol x the bound for a
+  voltage, abstol + reltol x the bound for a current - or the gate refuses
+  it and names that floor. Never shrink the tran step or tighten
+  `.options` only to get under a move: the floor is the deck's real
+  resolution, and a move inside it is not a kill. A survivor whose move
+  sits inside the floor goes under OPEN for an owner ruling. Neither kind
+  is a pass bound (sim_tt/sim_pvt never read them). If no spec measure moves, fix the
   `.measure` to score what the device actually sets; a measure the spec
   doesn't declare is a spec change, so put it under OPEN. Never resize
   the design to make a mutant fail - that is the analog-designer's file,

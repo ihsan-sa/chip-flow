@@ -15,7 +15,10 @@ design's own tt value, that the bench counts as a kill. Declare
 max(3 sigma, 2%) of that measure's mc spread, 2% when no mc sigma is
 known. The gate refuses less than 2%, and refuses a sensitivity on a
 measure that sits near zero (v_low, an off current), where a relative
-move is only simulator tolerance. It is not a pass bound, so the
+move is only simulator tolerance. Such a measure takes `sensitivity_abs`
+and `sensitivity_unit` ("s", "V" or "A") instead, sized from the
+survivor's `abs_deltas`; the gate refuses one below the deck's own
+resolution and names that floor. Neither is a pass bound, so the
 design's sim_tt and sim_pvt results don't change.
 
 **Trap:** don't resize the design so the mutant happens to fail, and

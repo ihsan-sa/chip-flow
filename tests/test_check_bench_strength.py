@@ -528,7 +528,8 @@ def test_an_in_spec_move_past_the_sensitivity_is_a_kill(tmp_path, monkeypatch, c
     assert out["killed_by_sensitivity"] == 1
     assert out["mutants"]["xmref_size_doubled_w"]["sensitivity_kill"] == {
         "bench": "mirror_tb.cir", "measure": "iout_ratio", "delta": 0.05,
-        "sensitivity": 0.03}
+        "sensitivity": 0.03, "kind": "relative"}
+    assert out["killed_by_sensitivity_kind"] == {"relative": 1, "absolute": 0}
 
 
 def test_without_a_sensitivity_the_same_move_still_survives(tmp_path, monkeypatch, capsys):
@@ -684,6 +685,103 @@ def test_near_zero_measures_needs_every_bench_to_agree():
     nz = check_bench_strength.near_zero_measures
     assert nz(by_bench, both, tt) == {"v_low"}
     assert nz(by_bench, one, tt) == set()
+
+
+# ------------------------------------------- absolute sensitivity kills
+# A measure near zero (t_stop 1 ns against its 1 us bound) refuses a
+# relative sensitivity; a `sensitivity_abs` in its own units kills on it
+# instead, never below the deck's own resolution: here the transient's max
+# step, 2 ns.
+
+TRAN_BENCH = BENCH_TEMPLATE.replace("op\n", "tran 1n 2u 0 2n\n")
+
+
+def with_abs(ws: Path, monkeypatch, base_t_stop: float, sens: float,
+             unit: str = "s", measure: str = "t_stop",
+             bench: str = TRAN_BENCH) -> None:
+    (ws / "tb" / "mirror_tb.cir").write_text(bench, encoding="utf-8")
+    (ws / "tb" / "mirror_tb.bounds.json").write_text(json.dumps([
+        {"measure": "iout_ratio", "min": 1.8, "max": 2.2},
+        {"measure": "gain", "min": 9.0, "max": 11.0},
+        {"measure": "t_stop", "max": 1e-6},
+        {"measure": "v_low", "max": 0.2}]), encoding="utf-8")
+    bounds = json.loads((ws / "tb" / "mirror_tb.bounds.json").read_text())
+    for b in bounds:
+        if b["measure"] == measure:
+            b.update(sensitivity_abs=sens, sensitivity_unit=unit)
+    (ws / "tb" / "mirror_tb.bounds.json").write_text(json.dumps(bounds),
+                                                     encoding="utf-8")
+    monkeypatch.setitem(BASE, "t_stop", base_t_stop)
+    monkeypatch.setitem(BASE, "v_low", 1e-9)
+
+
+def test_an_absolute_move_on_a_near_zero_measure_is_a_kill(tmp_path, monkeypatch, capsys):
+    ws = make_ruled_ws(tmp_path, monkeypatch, {
+        "xmref_size_doubled_w": {**BASE, "t_stop": 6e-9, "v_low": 1e-9},
+        "xmout_size_doubled_w": {**BASE, "t_stop": 2.5e-9, "v_low": 1e-9}},
+        None)
+    with_abs(ws, monkeypatch, 1e-9, 2e-9)
+    code, out = run_gate(ws, capsys)
+    assert out["killed_by_sensitivity_kind"] == {"relative": 0,
+                                                 "absolute": 1}, out
+    assert out["mutants"]["xmref_size_doubled_w"]["sensitivity_kill"] == {
+        "bench": "mirror_tb.cir", "measure": "t_stop", "delta": 5e-9,
+        "sensitivity": 2e-9, "kind": "absolute", "unit": "s"}
+    # a 1.5 ns move is inside the 2 ns sensitivity: still a survivor, and
+    # its absolute move is in its facts to size one from
+    assert code == 1 and out["survived"] == 1
+    assert [v["refs"] for v in errors(out)] == [["xmout"]]
+    assert out["mutants"]["xmout_size_doubled_w"]["abs_deltas"]["t_stop"] \
+        == pytest.approx(1.5e-9)
+
+
+def test_an_absolute_sensitivity_on_a_measure_not_near_zero_is_a_no_op(tmp_path, monkeypatch, capsys):
+    # t_stop 0.5 us is half its bound: the same 5 ns move is a 1% relative
+    # move the relative rule judges, so the absolute one adds no kill
+    ws = make_ruled_ws(tmp_path, monkeypatch, {
+        "xmref_size_doubled_w": {**BASE, "t_stop": 5.05e-7, "v_low": 1e-9}},
+        None)
+    with_abs(ws, monkeypatch, 5e-7, 2e-9)
+    code, out = run_gate(ws, capsys)
+    assert code == 1 and out["survived"] == 1, out
+    assert out["killed_by_sensitivity"] == 0
+    assert "sensitivity_kill" not in out["mutants"]["xmref_size_doubled_w"]
+
+
+def test_an_absolute_sensitivity_inside_the_time_step_is_refused(tmp_path, monkeypatch, capsys):
+    ws = make_ruled_ws(tmp_path, monkeypatch, {
+        "xmref_size_doubled_w": {**BASE, "t_stop": 6e-9, "v_low": 1e-9}},
+        None)
+    with_abs(ws, monkeypatch, 1e-9, 1e-9)
+    code, out = run_gate(ws, capsys)
+    assert code == 2 and "below the simulator floor" in out["error"], out
+    assert "max step 2e-09" in out["error"]
+
+
+def test_a_time_sensitivity_with_no_transient_is_refused(tmp_path, monkeypatch, capsys):
+    ws = make_ruled_ws(tmp_path, monkeypatch, {}, None)
+    with_abs(ws, monkeypatch, 1e-9, 1e-6, bench=BENCH_TEMPLATE)
+    code, out = run_gate(ws, capsys)
+    assert code == 2 and "no transient" in out["error"], out
+
+
+def test_a_voltage_sensitivity_is_held_to_vntol_plus_reltol_of_the_bound(tmp_path, monkeypatch, capsys):
+    # defaults: 1 uV + 1e-3 x 0.2 V = 201 uV; the deck's own .options
+    # reltol=1e-2 raises it to 2.001 mV
+    ws = make_ruled_ws(tmp_path, monkeypatch, {
+        "xmref_size_doubled_w": {**BASE, "v_low": 5e-3}}, None)
+    with_abs(ws, monkeypatch, 1e-9, 1e-4, unit="V", measure="v_low")
+    code, out = run_gate(ws, capsys)
+    assert code == 2 and "vntol 1e-06 + reltol 0.001" in out["error"], out
+    with_abs(ws, monkeypatch, 1e-9, 1e-3, unit="V", measure="v_low")
+    code, out = run_gate(ws, capsys)
+    assert out["mutants"]["xmref_size_doubled_w"]["sensitivity_kill"][
+        "kind"] == "absolute", out
+    with_abs(ws, monkeypatch, 1e-9, 1e-3, unit="V", measure="v_low",
+             bench=TRAN_BENCH.replace(".control", ".options reltol=1e-2\n"
+                                      ".control"))
+    code, out = run_gate(ws, capsys)
+    assert code == 2 and "below the simulator floor" in out["error"], out
 
 
 # ------------------------------------------------ devices no mutant covers

@@ -262,3 +262,37 @@ def test_connection_removed_floats_a_three_terminal_resistors_first_terminal():
     out = m["apply"](text)
     assert out.splitlines()[0].startswith("xr1 __floating_xr1__ vss vss ppolyf_u")
     assert out.splitlines()[1] == text.splitlines()[1]
+
+
+# ------------------------------------------------ simulator tolerances
+
+def test_spice_number_reads_scale_suffixes_and_refuses_an_expression():
+    assert netlistlib.spice_number("0.2n") == pytest.approx(2e-10)
+    assert netlistlib.spice_number("1meg") == 1e6
+    assert netlistlib.spice_number("5e-7") == 5e-7
+    assert netlistlib.spice_number("20us") == pytest.approx(2e-5)
+    assert netlistlib.spice_number("{t_stop}") is None
+
+
+def test_tran_max_steps_reads_tmax_or_ngspice_default():
+    deck = (".tran 1n 1u\n* tran 1 2 3 4\n.control\n"
+            "tran 0.1n 20u 0 0.2n uic\n.endc\n")
+    # .tran 1n 1u: min(1n, 1u/50) = 1n; the control line's own tmax 0.2n
+    assert netlistlib.tran_max_steps([deck]) == pytest.approx([1e-9, 2e-10])
+    assert netlistlib.tran_max_steps([".tran 1u 10u\n"]) == pytest.approx(
+        [2e-7])
+    assert netlistlib.tran_max_steps(["op\n"]) == []
+    with pytest.raises(ValueError):
+        netlistlib.tran_max_steps([".tran 1n {tend}\n"])
+
+
+def test_sim_tolerances_defaults_and_the_loosest_option_set():
+    assert netlistlib.sim_tolerances(["op\n"]) == {
+        "reltol": 1e-3, "abstol": 1e-12, "vntol": 1e-6}
+    tol = netlistlib.sim_tolerances([
+        ".options reltol = 1e-4 abstol=1p\n+ vntol=2u ; tightened\n",
+        ".control\noption reltol=1e-2\n.endc\n"])
+    assert tol == pytest.approx({"reltol": 1e-2, "abstol": 1e-12,
+                                 "vntol": 2e-6})
+    with pytest.raises(ValueError):
+        netlistlib.sim_tolerances([".options reltol={r}\n"])
