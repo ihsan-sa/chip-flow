@@ -33,6 +33,13 @@ failure, a crash before a single test ran) -> CheckError - a pass that
 never ran is a refusal, never silently 2-for-2. So is an sdf pass whose
 logs show Icarus omitted or could not apply the SDF (check_sdf_logs). A completed run with a
 failing or skipped test, in either pass -> a `violations` finding, exit 1.
+
+The sdf pass builds from its own copies of the netlist and SDF, with every
+instance whose escaped name holds a dot (CTS names the buffer on a
+flattened net `u.clk` `\\clkbuf_0_u.clk `) renamed to a plain identifier
+the same way in both, because Icarus cannot find such an instance from an SDF at all
+(escaped_dot_renames). The result's `sdf` facts list them as
+`instances_renamed`; an SDF naming one the netlist lacks is a CheckError.
 """
 from __future__ import annotations
 
@@ -91,17 +98,76 @@ UNMATCHED_MODPATH_RE = re.compile(
 CELLTYPE_RE = re.compile(r'\(CELLTYPE\s+"([^"]+)"\)')
 INSTANCE_RE = re.compile(r"\(INSTANCE\s+([^)\s]*)\s*\)")
 MODULE_RE = re.compile(r"^\s*module\s+(\w+)")
+# Icarus's SDF reader drops an identifier's escapes and then splits an
+# INTERCONNECT port on every '.', so `a\.b.I` looks up an instance `a`,
+# finds none and aborts vvp ("NULL handle passed to vpi_scan"). No spelling
+# of the name gets past that (`a\\.b.I`, `\\a.b .I` and DIVIDER `/` all
+# fail the same way or worse), and an INSTANCE so named prints an SDF ERROR.
+# So the sdf pass renames each such instance to a plain identifier.
+# SDF_SEGMENT_RE is one level of an SDF hierarchical name (unescaped '.'
+# separates levels); VERILOG_ESCAPED_RE an escaped Verilog identifier.
+SDF_SEGMENT_RE = re.compile(r"(?:[A-Za-z0-9_$]|\\\S)+")
+VERILOG_ESCAPED_RE = re.compile(r"\\(\S+)(?=\s)")
+SIMPLE_ID_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
 
 
-def sdf_for_icarus(src: Path, dest: Path) -> int:
-    """Copy src to dest without its all-zero INTERCONNECT entries; return
-    how many were dropped."""
+def escaped_dot_renames(sdf_text: str, nl_text: str) -> dict[str, str]:
+    r"""{name: plain identifier} for each instance the SDF names with an
+    escaped dot (`a\.b` in the SDF, `\a.b ` in the netlist), the plain name
+    unused anywhere in the netlist. CheckError when the netlist has no
+    escaped identifier of that name, since Icarus would abort on it."""
+    escaped = set(VERILOG_ESCAPED_RE.findall(nl_text))
+    taken = set(SIMPLE_ID_RE.findall(nl_text)) | escaped
+    renames: dict[str, str] = {}
+    for seg in SDF_SEGMENT_RE.findall(sdf_text):
+        if "\\." not in seg:
+            continue
+        name = re.sub(r"\\(.)", r"\1", seg)
+        if name in renames:
+            continue
+        if name not in escaped:
+            raise CheckError(f"the SDF names instance {seg}, which the "
+                             "netlist has no escaped identifier for")
+        base = re.sub(r"[^A-Za-z0-9_$]", "_", name.replace(".", "__"))
+        if not re.match(r"[A-Za-z_]", base):
+            base = "_" + base
+        plain, n = base, 0
+        while plain in taken:
+            n += 1
+            plain = f"{base}_{n}"
+        taken.add(plain)
+        renames[name] = plain
+    return renames
+
+
+def netlist_for_icarus(src: Path, dest: Path, renames: dict[str, str]) -> None:
+    """Copy src to dest with each escaped identifier in renames replaced by
+    its plain name. An instance shares its module's namespace with its nets,
+    so an exact match on the escaped name is that instance."""
+    text = src.read_text(encoding="utf-8", errors="replace")
+    dest.write_text(VERILOG_ESCAPED_RE.sub(
+        lambda m: renames.get(m.group(1), m.group(0)), text), encoding="utf-8")
+
+
+def sdf_for_icarus(src: Path, dest: Path,
+                   renames: dict[str, str] | None = None) -> int:
+    """Copy src to dest without its all-zero INTERCONNECT entries and with
+    each escaped-dot instance name in renames replaced by its plain name;
+    return how many INTERCONNECTs were dropped."""
+    renames = renames or {}
+
+    def plain(m: re.Match) -> str:
+        seg = m.group(0)
+        if "\\." not in seg:
+            return seg
+        return renames[re.sub(r"\\(.)", r"\1", seg)]
+
     kept, dropped = [], 0
     for line in src.read_text(encoding="utf-8", errors="replace").splitlines():
         if ZERO_INTERCONNECT_RE.match(line):
             dropped += 1
             continue
-        kept.append(line)
+        kept.append(SDF_SEGMENT_RE.sub(plain, line) if "\\." in line else line)
     dest.write_text("\n".join(kept) + "\n", encoding="utf-8")
     return dropped
 
@@ -243,11 +309,16 @@ def run_pass(name: str, ws: Path, spec: dict, final_dir: Path,
         raise CheckError(f"no gate-level netlist at {nl} - has the harden "
                          "gate run?")
     harness = build_dir / f"{top}_glsim_{name}.v"
-    dropped = 0
+    dropped, renames = 0, {}
     if sdf is not None:
         icarus_sdf = build_dir / f"{name}_icarus.sdf"
-        dropped = sdf_for_icarus(sdf, icarus_sdf)
-        sdf = icarus_sdf
+        icarus_nl = build_dir / f"{name}_icarus.nl.v"
+        renames = escaped_dot_renames(
+            sdf.read_text(encoding="utf-8", errors="replace"),
+            nl.read_text(encoding="utf-8", errors="replace"))
+        dropped = sdf_for_icarus(sdf, icarus_sdf, renames)
+        netlist_for_icarus(nl, icarus_nl, renames)
+        sdf, nl = icarus_sdf, icarus_nl
     try:
         harness.write_text(
             ttlib.generate_glsim_harness(spec, sdf_path=sdf), encoding="utf-8")
@@ -295,7 +366,8 @@ def run_pass(name: str, ws: Path, spec: dict, final_dir: Path,
         raise CheckError(f"{name} pass: cocotb produced no test cases in "
                          f"{results_xml}")
     return results, {"zero_interconnects_dropped": dropped,
-                     "sdf_unannotated": waived}
+                     "sdf_unannotated": waived,
+                     "instances_renamed": renames}
 
 
 def run(argv=None):
