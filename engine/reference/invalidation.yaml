@@ -14,7 +14,8 @@
 #   1. HASH layer - record-gate stores a normalized content hash of every
 #      input artifact; a gate is hash-valid iff every recorded input hash
 #      matches the artifact's current hash. This catches ANY edit, declared
-#      or not.
+#      or not. gate.py takes those hashes when the gate STARTS, so an edit
+#      made while a long gate runs leaves its result stale, not fresh.
 #   2. MARK layer - `state.py edit --class <c>` stamps the mapped stale
 #      gates/artifacts with an explicit stale mark. This catches DERIVED
 #      artifacts whose files have not changed yet (a GDS after an RTL edit)

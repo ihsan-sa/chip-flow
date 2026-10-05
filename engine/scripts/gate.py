@@ -16,7 +16,7 @@ commits on failure and never pushes.
 
 JSON to stdout (or --out): {script, gate, skill, status:pass|fail|
 not_applicable, counts, criteria, failing:[findings that triggered],
-record_result, commit_result?}.
+inputs_at_start?, record_result, commit_result?}.
 An error goes to --out as well, as {script, gate, status:error, error,
 remediation}, so a caller reading --out never finds an earlier run there.
 Exit 0 = pass or not applicable, 1 = fail, 2 = error (bad gate name,
@@ -43,7 +43,15 @@ The gate RECORDS ITSELF. When the input sits inside a workspace (a
 directory holding a state.json - found by walking the input's parents, or
 named outright with --workspace), the result goes through
 state.record_gate: input hashes, attempt count, stale-mark clearing all
-apply. Pass AND fail are recorded (the fix loop wants every attempt). A
+apply. The input hashes are taken when the gate STARTS, before its check
+reads anything (hash_inputs_at_start), and travel in the result as
+`inputs_at_start`; record_gate records those, not the files as they stand
+when the run ends. An input edited while a long gate ran therefore leaves
+the result stale (its recorded hash no longer matches), never fresh against
+a file the check did not read, and the result's
+record_result.inputs_changed_during_run names the kinds that moved. A
+--report run has no start to hash at, so its inputs are hashed at record
+time as before. Pass AND fail are recorded (the fix loop wants every attempt). A
 scratch/corpus input with no workspace records nothing, and the result says
 so (`record_result.recorded: false` + reason); --no-record opts out
 explicitly. An ERROR is never recorded as a result, but when the check
@@ -316,10 +324,35 @@ def record_gate_result(skill: str, gate_name: str, gate: dict, result: dict,
         return {"ok": False, "recorded": False,
                 "workspace": str(ws).replace("\\", "/"),
                 "reason": f"{type(exc).__name__}: {exc}"}
-    return {"ok": True, "recorded": True,
-            "workspace": str(ws).replace("\\", "/"), "gate": gate_name,
-            "status": g["status"], "attempts": g["attempts"],
-            "inputs": (g.get("last") or {}).get("inputs")}
+    out = {"ok": True, "recorded": True,
+           "workspace": str(ws).replace("\\", "/"), "gate": gate_name,
+           "status": g["status"], "attempts": g["attempts"],
+           "inputs": (g.get("last") or {}).get("inputs")}
+    moved = (g.get("last") or {}).get("inputs_changed_during_run")
+    if moved:
+        out["inputs_changed_during_run"] = moved
+    return out
+
+
+def hash_inputs_at_start(skill: str, gate_name: str,
+                         workspace: Path | None) -> dict | None:
+    """{kind: hash} for every input `gate_name` reads, taken before its
+    check runs, so the result is recorded against the files the check read
+    (state.record_gate, result["inputs_at_start"]). None when nothing would
+    be recorded anyway: no state.json at the workspace, or a gate with no
+    gate_inputs entry (record_gate_result says why)."""
+    try:
+        ws = find_workspace(None, str(workspace) if workspace else None)
+    except RuntimeError:
+        return None     # record_gate_result reports the missing state.json
+    if ws is None:
+        return None
+    imap = statelib.load_map()
+    if gate_name not in (imap["gate_inputs"].get(skill) or {}):
+        return None
+    registry = checklib.load_json(ws / "state.json",
+                                  "state.json").get("artifacts") or {}
+    return statelib.gate_input_hashes(ws, skill, gate_name, imap, registry)
 
 
 def mark_gate_error(gate_name: str, error: str,
@@ -454,6 +487,7 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     error_mark = None
+    inputs_at_start = None
     try:
         gates = load_gates(Path(args.gates))
         if args.list:
@@ -483,6 +517,11 @@ def main(argv: list[str] | None = None) -> int:
         else:
             if not args.workspace:
                 ap.error("--workspace is required unless --report is given")
+            # The brief: "hash the inputs when the gate starts and record
+            # those" - taken here, before the check reads a file.
+            if not args.no_record:
+                inputs_at_start = hash_inputs_at_start(
+                    skill, args.gate, Path(args.workspace))
             try:
                 report = run_report_for_gate(
                     gate, Path(args.workspace).resolve(),
@@ -495,6 +534,8 @@ def main(argv: list[str] | None = None) -> int:
                 raise
 
         result = evaluate(args.gate, gate, report)
+        if inputs_at_start is not None:
+            result["inputs_at_start"] = inputs_at_start
 
         if result["status"] == "not_applicable":
             # Never recorded: a result keyed on this gate's inputs would stay
@@ -567,6 +608,11 @@ def main(argv: list[str] | None = None) -> int:
           f"({n} failing / {result['counts'].get('total', 0)} total)",
           file=sys.stderr)
     rr = result.get("record_result")
+    if rr is not None and rr.get("inputs_changed_during_run"):
+        print(f"gate {args.gate}: recorded STALE - "
+              f"{', '.join(rr['inputs_changed_during_run'])} changed while "
+              "the gate ran; re-run it against the current files",
+              file=sys.stderr)
     if rr is not None and not rr.get("ok"):
         print(f"gate {args.gate}: result NOT recorded in state.json - "
               f"{rr.get('reason')}", file=sys.stderr)
