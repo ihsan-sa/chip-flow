@@ -165,6 +165,11 @@ def engine_error_violations(check: str, testbench: str, corner: str,
 
 # -------------------------------------------------------------------- bounds
 
+# the units a bound's `sensitivity_abs` may be declared in: time, voltage,
+# current - the three a deck's own resolution can be read for
+SENSITIVITY_UNITS = ("s", "V", "A")
+
+
 def load_bounds(path: Path) -> list[dict]:
     """Load+validate a `.bounds.json` sidecar. Ported from hwde's
     simlib.load_bounds: a non-empty JSON list of {measure, min?, max?,
@@ -174,7 +179,9 @@ def load_bounds(path: Path) -> list[dict]:
     corner names the bound is scored at (a spec measure scored at `[tt]`
     only). An optional `sensitivity` (a finite number > 0, a relative
     change) is not a pass bound: no sim gate reads it, only bench_strength
-    does (check_bench_strength.py)."""
+    does (check_bench_strength.py). Nor is an optional `sensitivity_abs`
+    (a finite number > 0, an absolute change in the measure's own units),
+    which needs `sensitivity_unit` beside it: "s", "V" or "A"."""
     data = load_json(path, "bounds sidecar")
     if not isinstance(data, list) or not data:
         raise CheckError(f"{path}: bounds sidecar must be a non-empty JSON "
@@ -201,6 +208,17 @@ def load_bounds(path: Path) -> list[dict]:
                     or not math.isfinite(v) or v <= 0:
                 raise CheckError(f"{path}[{i}] ({name}): 'sensitivity' must "
                                  "be a finite number > 0 (a relative change)")
+        if "sensitivity_abs" in entry or "sensitivity_unit" in entry:
+            v = entry.get("sensitivity_abs")
+            if isinstance(v, bool) or not isinstance(v, (int, float)) \
+                    or not math.isfinite(v) or v <= 0:
+                raise CheckError(f"{path}[{i}] ({name}): 'sensitivity_abs' "
+                                 "must be a finite number > 0 (an absolute "
+                                 "change in the measure's own units)")
+            if entry.get("sensitivity_unit") not in SENSITIVITY_UNITS:
+                raise CheckError(f"{path}[{i}] ({name}): 'sensitivity_abs' "
+                                 "needs 'sensitivity_unit' beside it, one of "
+                                 f"{', '.join(SENSITIVITY_UNITS)}")
         sev = entry.get("severity", "error")
         if sev not in ("error", "warning"):
             raise CheckError(f"{path}[{i}] ({name}): severity must be "

@@ -188,10 +188,28 @@ def test_load_bounds_keeps_a_sensitivity_and_refuses_a_bad_one(tmp_path):
             simlib.load_bounds(p)
 
 
+def test_load_bounds_keeps_an_absolute_sensitivity_only_with_its_unit(tmp_path):
+    p = tmp_path / "b.bounds.json"
+    ok = {"measure": "t", "max": 1e-6, "sensitivity_abs": 2e-10,
+          "sensitivity_unit": "s"}
+    p.write_text(json.dumps([ok]), encoding="utf-8")
+    assert simlib.load_bounds(p)[0]["sensitivity_abs"] == 2e-10
+    for bad in ({"sensitivity_abs": 0}, {"sensitivity_abs": True},
+                {"sensitivity_unit": "ns"}, {"sensitivity_unit": None}):
+        p.write_text(json.dumps([{**ok, **bad}]), encoding="utf-8")
+        with pytest.raises(CheckError, match="sensitivity"):
+            simlib.load_bounds(p)
+    p.write_text(json.dumps([{"measure": "t", "max": 1e-6,
+                              "sensitivity_unit": "s"}]), encoding="utf-8")
+    with pytest.raises(CheckError, match="sensitivity_abs"):
+        simlib.load_bounds(p)
+
+
 def test_a_sensitivity_never_changes_a_bound_check():
     # a design that meets the spec still passes sim_tt/sim_pvt: the sim
     # gates score min/max only
     b = [{"measure": "f", "min": 8.0, "max": 12.0, "sensitivity": 0.02,
+          "sensitivity_abs": 0.5, "sensitivity_unit": "V",
           "severity": "error"}]
     assert simlib.compare_bounds(b, {"f": 9.5}, "tb.cir", "tt",
                                  check="sim_tt") == []

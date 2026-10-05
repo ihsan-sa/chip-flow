@@ -457,3 +457,91 @@ def _bgain_mutant(ref: str, src: dict) -> dict:
     return {"id": f"{ref}_gain_halved", "ref": ref, "kind": "gain_halved",
             "target": "netlist",
             "describe": f"{ref}: expression gain halved", "apply": apply}
+
+
+# ------------------------------------------------ simulator tolerances
+# What a deck tells ngspice about its own resolution, so a gate can refuse a
+# threshold that sits inside it (check_bench_strength's absolute
+# sensitivity floor). ngspice's own defaults stand when a deck sets none.
+
+NGSPICE_TOLERANCES = {"reltol": 1e-3, "abstol": 1e-12, "vntol": 1e-6}
+SPICE_SCALE = {"t": 1e12, "g": 1e9, "meg": 1e6, "k": 1e3, "mil": 25.4e-6,
+               "m": 1e-3, "u": 1e-6, "n": 1e-9, "p": 1e-12, "f": 1e-15}
+SPICE_NUMBER_RE = re.compile(
+    r"^([-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?)(meg|mil|[tgkmunpf])?[a-z]*$",
+    re.IGNORECASE)
+OPTIONS_RE = re.compile(r"^\s*\.?options?\s+(.*)$", re.IGNORECASE)
+TRAN_RE = re.compile(r"^\s*\.?tran\s+(.*)$", re.IGNORECASE)
+
+
+def spice_number(token: str) -> float | None:
+    """A SPICE number with its scale suffix (`0.2n`, `20u`, `1meg`, `5e-7`),
+    or None when the token is not one (an expression, a variable)."""
+    m = SPICE_NUMBER_RE.match(token.strip())
+    if not m:
+        return None
+    return float(m.group(1)) * SPICE_SCALE.get((m.group(2) or "").lower(), 1.0)
+
+
+def _directive_args(text: str, pattern: re.Pattern) -> list[list[str]]:
+    """The argument tokens of every line matching `pattern`, continuation
+    lines joined and a trailing `;`/`$` comment dropped."""
+    out = []
+    for line in join_continuations(text):
+        m = pattern.match(line)
+        if not m:
+            continue
+        toks = []
+        for tok in re.sub(r"\s*=\s*", "=", m.group(1)).split():
+            if tok[0] in ";$":
+                break
+            toks.append(tok)
+        out.append(toks)
+    return out
+
+
+def sim_tolerances(texts: list[str]) -> dict[str, float]:
+    """{reltol, abstol, vntol} as the decks in `texts` leave them: the
+    loosest (largest) value any `.options`/`option` line sets, ngspice's
+    default otherwise. Raises ValueError for a value that is not a plain
+    number, which no floor can be read from."""
+    out = dict(NGSPICE_TOLERANCES)
+    seen: dict[str, float] = {}
+    for text in texts:
+        for toks in _directive_args(text, OPTIONS_RE):
+            for tok in toks:
+                key, _, val = tok.partition("=")
+                key = key.lower()
+                if key not in out:
+                    continue
+                v = spice_number(val)
+                if v is None:
+                    raise ValueError(f"option {key}={val!r} is not a number")
+                seen[key] = max(seen.get(key, v), v)
+    out.update(seen)
+    return out
+
+
+def tran_max_steps(texts: list[str]) -> list[float]:
+    """The effective max step of every `.tran`/control `tran` line in
+    `texts`: its own tmax, else ngspice's default min(tstep,
+    (tstop - tstart) / 50). Raises ValueError for a tstep/tstop/tstart/tmax
+    that is not a plain number."""
+    out = []
+    for text in texts:
+        for toks in _directive_args(text, TRAN_RE):
+            nums = []
+            for tok in toks:
+                if tok.lower() == "uic":
+                    break
+                v = spice_number(tok)
+                if v is None:
+                    raise ValueError(f"tran argument {tok!r} is not a number")
+                nums.append(v)
+            if len(nums) < 2:
+                raise ValueError("a tran line needs tstep and tstop")
+            tstep, tstop = nums[0], nums[1]
+            tstart = nums[2] if len(nums) > 2 else 0.0
+            out.append(nums[3] if len(nums) > 3
+                       else min(tstep, (tstop - tstart) / 50.0))
+    return out
