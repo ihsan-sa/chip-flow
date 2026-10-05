@@ -556,3 +556,88 @@ def test_mark_gate_error_without_a_state_or_a_record(tmp_path):
     (ws / "state.json").write_text("{not json", encoding="utf-8")
     r = gate.mark_gate_error("lint", "boom", ws)
     assert (r["ok"], r["marked"]) == (False, False)
+
+
+# A check that edits rtl/ while it "runs", as a person editing the RTL during
+# a long formal run would; with REVERT in the workspace it puts the file back
+# before it returns.
+EDITING_CHECK = '''
+from pathlib import Path
+
+def run(argv=None):
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--workspace")
+    ap.add_argument("--out")
+    args = ap.parse_args(argv)
+    ws = Path(args.workspace)
+    rtl = ws / "rtl" / "top.v"
+    before = rtl.read_text(encoding="utf-8")
+    rtl.write_text(before + "// edited mid-run\\n", encoding="utf-8")
+    if (ws / "REVERT").exists():
+        rtl.write_text(before, encoding="utf-8")
+    payload = {"script": "check_fakegate", "status": "pass",
+              "counts": {"total": 0}, "violations": [],
+              "report_schema": 1, "checker_version": 1,
+              "generated_at": "2026-01-01T00:00:00+00:00",
+              "input": str(args.workspace), "input_digest": None}
+    return payload, args.out
+'''
+
+
+def _run_editing_gate(tmp_path, capsys, revert: bool):
+    import statelib
+    ws = make_ws(tmp_path)
+    (ws / "rtl").mkdir(exist_ok=True)
+    (ws / "rtl" / "top.v").write_text("module top; endmodule\n",
+                                      encoding="utf-8")
+    if revert:
+        (ws / "REVERT").write_text("", encoding="utf-8")
+    imap = statelib.load_map()
+    before = statelib.gate_input_hashes(ws, "vde", "lint", imap)
+    code = gate.main(["--gate", "lint", "--workspace", str(ws),
+                      "--gates", str(make_gates_yaml(tmp_path)),
+                      "--checks-dir",
+                      str(make_checks_dir(tmp_path, EDITING_CHECK))])
+    cap = capsys.readouterr()
+    st = state_mod.State.load(ws / "state.json")
+    return ws, code, json.loads(cap.out), cap.err, st, before
+
+
+def test_input_edited_mid_run_records_start_hash_and_reads_stale(
+        tmp_path, capsys):
+    """The brief: "hash the inputs when the gate starts and record those, or
+    mark the result stale if they changed by the time it ends". A pass whose
+    rtl/ changed while it ran is recorded against the rtl it read, so it is
+    stale against the edited rtl - never pass-and-fresh."""
+    import statelib
+    ws, code, out, err, st, before = _run_editing_gate(tmp_path, capsys,
+                                                       revert=False)
+    assert code == 0 and out["status"] == "pass"
+    last = st.data["gates"]["lint"]["last"]
+    assert last["inputs"] == before                  # the start hashes
+    assert last["inputs"]["rtl"] != statelib.gate_input_hashes(
+        ws, "vde", "lint", statelib.load_map())["rtl"]
+    assert last["inputs_changed_during_run"] == ["rtl"]
+    assert out["record_result"]["inputs_changed_during_run"] == ["rtl"]
+    assert "recorded STALE" in err
+    fresh = st.freshness()["gates"]["lint"]
+    assert (fresh["fresh"], fresh["changed_inputs"]) == (False, ["rtl"])
+    summary = st.resume_summary()
+    assert "lint" not in summary["gates_passed_fresh"]
+    assert "lint" in summary["gates_stale"]
+
+
+def test_input_restored_by_run_end_is_fresh(tmp_path, capsys):
+    """The kept case beside the one above: an rtl/ that reads the same at
+    the end as at the start leaves the pass fresh and names nothing moved."""
+    ws, code, out, err, st, before = _run_editing_gate(tmp_path, capsys,
+                                                       revert=True)
+    assert code == 0 and out["status"] == "pass"
+    last = st.data["gates"]["lint"]["last"]
+    assert last["inputs"] == before
+    assert "inputs_changed_during_run" not in last
+    assert "inputs_changed_during_run" not in out["record_result"]
+    assert "recorded STALE" not in err
+    assert st.freshness()["gates"]["lint"]["fresh"] is True
+    assert "lint" in st.resume_summary()["gates_passed_fresh"]

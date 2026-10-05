@@ -21,6 +21,7 @@ Schema (version 3):
       "gates": {gate_name: {phase, status: pass|fail, attempts: int,
                             last: {ts, status, failing_count, total,
                                    inputs: {kind: "<norm>:<sha>"|null},
+                                   inputs_changed_during_run?: [kind],
                                    job: id|null, facts?: {name: number}},
                             history: [same shape as last, oldest first],
                             stale: [mark]?}},
@@ -53,6 +54,11 @@ Schema (version 3):
     error (edit_class "gate_error", + error; gate.py), cleared by
     record-gate (gates) / re-register (artifacts). A gate is FRESH iff its recorded input hashes all match the
     current normalized hashes AND it carries no mark (engine/lib/statelib.py).
+    The recorded hashes are the ones the run READ: a result carrying
+    `inputs_at_start` (gate.py hashes the inputs before its check runs) is
+    recorded against those, so an input edited while a long gate ran leaves
+    the result stale, never fresh against a file the gate did not read; the
+    kinds that moved go in last.inputs_changed_during_run.
 
 CLI (docs/design.md 1.1 script contract: argparse, JSON to stdout, exit 0 ok
 / 2 error; state.py has no violation concept so exit 1 is unused):
@@ -459,11 +465,15 @@ class State:
                         "against the current file")
         if gate == "holdout":
             self._refuse_holdout_drift("record the holdout gate")
+        inputs, moved = self._hash_gate_inputs(
+            gate, result.get("inputs_at_start"))
         entry = {"ts": now(), "status": status,
                  "failing_count": result.get("failing_count", 0),
                  "total": (result.get("counts") or {}).get("total", 0),
-                 "inputs": self._hash_gate_inputs(gate),
+                 "inputs": inputs,
                  "job": result.get("job")}
+        if moved:
+            entry["inputs_changed_during_run"] = moved
         # M6: keep the scalar facts a check reported (kill_rate, area,
         # line_pct ...) and timing's per-corner slack, so evals/ladder.py can
         # score a finished run from state.json without re-running its gates.
@@ -481,12 +491,14 @@ class State:
         g["status"] = status
         g["last"] = entry
         g["history"].append(entry)
-        # the gate just ran against the CURRENT inputs: whatever edit marks
-        # it carried are resolved (pass or fail - the result is current
-        # either way)
+        # the gate just ran: whatever edit marks it carried are resolved
+        # (pass or fail - the result is current either way). An input that
+        # moved during the run needs no mark: the recorded start hash no
+        # longer matches it, so freshness already reports the gate stale.
         g.pop("stale", None)
         self._log("gate", gate=gate, status=status, attempt=g["attempts"],
-                  failing_count=entry["failing_count"])
+                  failing_count=entry["failing_count"],
+                  **({"inputs_changed_during_run": moved} if moved else {}))
         return g
 
     def mark_gate_error(self, gate: str, error: str) -> dict | None:
@@ -509,17 +521,33 @@ class State:
     def _imap(self) -> dict:
         return statelib.load_map()
 
-    def _hash_gate_inputs(self, gate: str) -> dict:
-        """Normalized hashes of every artifact the gate reads (statelib),
-        resolved against the state file's own directory - the freshness key
-        the result stays valid under. Hashed kinds are silently
-        auto-registered in the artifacts registry."""
+    def _hash_gate_inputs(self, gate: str, at_start: dict | None = None
+                          ) -> tuple[dict, list[str]]:
+        """({kind: hash}, [kinds that moved during the run]) for every
+        artifact the gate reads (statelib), resolved against the state
+        file's own directory - the freshness key the result stays valid
+        under. `at_start` is the run's own hashes taken before its check
+        read anything (gate.py, result["inputs_at_start"]): a kind it names
+        is recorded at that hash, because that is the file the gate read,
+        and is listed as moved when the file now hashes differently. A kind
+        it does not name is hashed now. Hashed kinds are silently
+        auto-registered in the artifacts registry, at the recorded hash."""
         imap = self._imap()
         ws = self.path.parent
         registry = self.data["artifacts"]
+        if not isinstance(at_start, dict):
+            at_start = {}
         inputs: dict[str, str | None] = {}
+        moved: list[str] = []
         for kind in (imap["gate_inputs"].get(self._skill()) or {}).get(gate, []):
             rel, sha = statelib.hash_kind(ws, kind, imap, registry)
+            seen = at_start.get(kind, sha)
+            if seen is not None and not isinstance(seen, str):
+                raise CheckError(f"gate result inputs_at_start[{kind!r}] "
+                                 f"is {seen!r}, not a hash string or null")
+            if seen != sha:
+                moved.append(kind)
+                sha = seen
             inputs[kind] = sha
             entry = registry.get(kind)
             if not isinstance(entry, dict):
@@ -527,7 +555,7 @@ class State:
             entry.update({"path": rel, "kind": kind, "sha256": sha,
                           "hashed": now()})
             registry[kind] = entry          # stale marks (if any) survive
-        return inputs
+        return inputs, moved
 
     def set_artifact(self, name: str, path: str) -> None:
         """Register/refresh an artifact by name. Explicit registration means
@@ -1223,7 +1251,9 @@ def run(argv=None):
     common(p)
     p.add_argument("--gate", required=True)
     p.add_argument("--result", required=True,
-                   help="gate.py result JSON (has status/failing_count)")
+                   help="gate.py result JSON (has status/failing_count; "
+                        "its inputs_at_start, when present, are the hashes "
+                        "recorded)")
     p.add_argument("--phase")
 
     p = sub.add_parser("artifact")
