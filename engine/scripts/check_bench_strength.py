@@ -3,12 +3,12 @@
 "### M8."): device mutants, analog's answer to /vde's `mutate`
 (design.md section 2: "Analog has the same idea in `bench_strength`.").
 
-    check_bench_strength.py --workspace DIR [--out FILE]
+    check_bench_strength.py --workspace DIR [--jobs auto|N] [--out FILE]
 
 For every device spec.yaml declares (`devices`), netlistlib.device_mutants()
 builds the mutations gates.yaml names - size doubled, connection removed,
 type flipped (netlist/*.cir), bias halved (a plain source in tb/*.cir) - and
-each is run, ONE change at a time, against every tb/*.cir bench at the
+each is run, ONE change at a time, against the tb/*.cir benches at the
 single 'tt' corner (bench_strength scores the bench's own bounds, not PVT
 margin - that is sim_pvt's job). A mutant is KILLED when that run produces
 at least one violation the baseline does not (a bound miss, a missing
@@ -19,6 +19,18 @@ past that measure's declared `sensitivity`; pass criteria (gates.yaml):
 killed, bar the per-mutant rulings below. A SURVIVOR (a mutant no bench
 catches) is the fault this gate exists to name: "bounds wide enough to
 pass anything".
+
+A mutant runs its benches cheapest first - by the unmutated baseline's own
+measured runtime, to 0.1 s, ties by name; the order is the `bench_order`
+fact - and stops at the first bench that kills it, which its fact names
+as `killed_by`. A killed mutant therefore never runs the benches after
+that one; a survivor runs them all, so its deltas cover every bench.
+Mutants run in a worker pool of --jobs (default ${CHIP_FLOW_BENCH_JOBS},
+else "auto") at once: "auto" is max(1, cores - 1-minute load), re-read
+before each mutant starts, with this pool's own sims that have run long
+enough to be in the load average taken back out of it, so a busy box
+gets 1. Each mutant's result depends on that mutant alone, and the facts
+come out in id order, so any --jobs gives the same report as --jobs 1.
 
 A declared behavioural `b...` source in netlist/*.cir gets its own two
 mutants (netlistlib.device_mutants): output_stuck (its expression replaced
@@ -119,8 +131,12 @@ workspace's own recorded netlist/bench state.
 from __future__ import annotations
 
 import argparse
+import math
+import os
 import shutil
 import sys
+import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent
@@ -147,6 +163,13 @@ DELTA_ABS_TOL = 0.001
 DELTA_REL_TOL = 0.05
 SIGMA_K = 3.0
 SPREAD_FLOOR = 0.02
+# the worker pool (run_pool): --jobs, else this env var, else "auto".
+JOBS_ENV = "CHIP_FLOW_BENCH_JOBS"
+# a worker that has run this long is counted in the 1-minute load average
+# (1 - e^-3 = 95% of it), so auto_jobs() takes it back out of the load.
+SETTLED_S = 180.0
+# how often a pool waiting on its workers re-reads the load, in seconds.
+POLL_S = 15.0
 
 
 def run_mutant(eda_bin, ws: Path, mutant: dict, netlist_path: Path,
@@ -171,6 +194,107 @@ def run_mutant(eda_bin, ws: Path, mutant: dict, netlist_path: Path,
     return sim_run.run_bench_at_corner(
         eda_bin, bench_name, mutated_bench_text, bounds, subs, corner,
         out_dir, timeout, check="bench_strength")
+
+
+def parse_jobs(text: str) -> int | None:
+    """--jobs / CHIP_FLOW_BENCH_JOBS: "auto" (None) or a worker count >= 1."""
+    if str(text).strip().lower() == "auto":
+        return None
+    try:
+        n = int(text)
+    except ValueError:
+        n = 0
+    if n < 1:
+        raise CheckError(f"--jobs {text!r} is neither 'auto' nor a whole "
+                         f"number >= 1 (also read from ${JOBS_ENV})")
+    return n
+
+
+def box_cores() -> int:
+    return os.cpu_count() or 1
+
+
+def box_load1() -> float:
+    return os.getloadavg()[0]
+
+
+def auto_jobs(cores: int, load1: float, settled: int) -> int:
+    """The 'auto' cap: max(1, cores - 1-minute load), floored, and never
+    more than `cores`. The load counts this pool's own sims too, so the
+    `settled` workers - running SETTLED_S or longer, so in the load
+    average - are taken back out of it; a younger one is still counted
+    against the cap twice (in the load and in the pool), which errs to
+    fewer workers, never more. A box at load 13 on 6 cores gets 1."""
+    # "capped to what the box has free: max(1, cores - 1-minute load)"
+    return max(1, min(cores, math.floor(cores - load1 + settled)))
+
+
+def run_pool(tasks: list, fn, jobs: int | None, *, cores=box_cores,
+             load1=box_load1, clock=time.monotonic) -> list:
+    """[fn(t) for t in tasks], in task order, with up to `jobs` running at
+    once - or, for jobs None ('auto'), auto_jobs() re-read before every
+    start and every POLL_S while waiting, so a box that gets busy stops
+    being handed more. jobs 1 runs them in this thread, one after another.
+    fn's first exception is raised once the workers already running end."""
+    if jobs == 1 or len(tasks) <= 1:
+        return [fn(t) for t in tasks]
+    results: list = [None] * len(tasks)
+    with ThreadPoolExecutor(max_workers=jobs or cores()) as ex:
+        running: dict = {}   # future -> (task index, start time)
+        nxt = 0
+        while nxt < len(tasks) or running:
+            if jobs:
+                cap = jobs
+            else:
+                now = clock()
+                cap = auto_jobs(cores(), load1(), sum(
+                    1 for _, t0 in running.values() if now - t0 >= SETTLED_S))
+            while nxt < len(tasks) and len(running) < cap:
+                running[ex.submit(fn, tasks[nxt])] = (nxt, clock())
+                nxt += 1
+            done, _ = wait(running, timeout=POLL_S,
+                           return_when=FIRST_COMPLETED)
+            for fut in done:
+                idx, _t0 = running.pop(fut)
+                results[idx] = fut.result()
+    return results
+
+
+def score_mutant(plan: list[tuple[str, dict]], ctx: dict, run_args: dict,
+                 bench_names: list[str]) -> dict:
+    """Run one mutant through its benches in `plan` order (cheapest
+    baseline first) and stop at the first bench that kills it: a violation
+    its baseline does not have, else a move past a declared sensitivity.
+    `killed_by` names that bench. A survivor ran every bench, so its
+    `measures` hold all of them, in `bench_names` (alphabetical) order."""
+    first = plan[0][1]
+    entry = {"id": first["id"], "ref": first["ref"], "kind": first["kind"],
+             "target": first["target"], "describe": first["describe"],
+             "killed": False, "benches_tested": [], "measures": {}}
+    # "Stop simulating a mutant once one bench has killed it"
+    for name, mutant in plan:
+        c = ctx[name]
+        outcome = run_mutant(
+            run_args["eda_bin"], run_args["ws"], mutant,
+            run_args["netlist_path"], run_args["netlist_text"], c["path"],
+            c["text"], c["bounds"], run_args["corner"], run_args["t_root"],
+            run_args["nominal_vdd"], run_args["out_dir"],
+            run_args["timeout"], run_args["sizing"])
+        entry["benches_tested"].append(name)
+        entry["measures"][name] = outcome.get("measures") or {}
+        if any(violation_key(v) not in c["base_keys"]
+               for v in outcome["violations"]):
+            entry["killed"], entry["killed_by"] = True, name
+            break
+        hit = sensitivity_kill(c["baseline"], outcome.get("measures") or {},
+                               c["sens"], c["abs_sens"])
+        if hit:
+            entry["killed"], entry["killed_by"] = True, name
+            entry["sensitivity_kill"] = {"bench": name, **hit}
+            break
+    entry["measures"] = {b: entry["measures"][b] for b in bench_names
+                         if b in entry["measures"]}
+    return entry
 
 
 def violation_key(v: dict) -> tuple:
@@ -510,14 +634,12 @@ def coverage_gaps(netlist_text: str, declared: list,
     return out
 
 
-def run(argv=None):
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--workspace", required=True, help="block workspace")
-    ap.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
-    ap.add_argument("--out", help="write result JSON here instead of stdout")
-    args = ap.parse_args(argv)
-
-    ws = Path(args.workspace)
+def prepare(ws: Path, timeout: float, out_subdir: str = OUT_SUBDIR) -> dict:
+    """Everything a mutant run needs, with every refusal the gate makes
+    before its first mutant: each bench's baseline is run and timed, in
+    alphabetical order, and its sensitivities checked. `plans` maps each
+    mutant id (in the order the benches generate them) to its
+    [(bench, mutant)] in `order`: cheapest baseline first, ties by name."""
     eda_bin = sim_run.EDA_BIN
     spec = speclib.load_spec(ws / "spec" / "spec.yaml")
     devices = spec.get("devices") or []
@@ -527,8 +649,6 @@ def run(argv=None):
     supply = spec.get("supply") or {}
     nominal_vdd = supply.get("vdd")
 
-    rulings = rulingslib.load(ws, "bench_strength")
-
     tt_corner = corners_mod.corners_by_name(corners_mod.load(), ["tt"])[0]
 
     netlist_path = sim_run.find_netlist(ws)
@@ -536,15 +656,20 @@ def run(argv=None):
     sizing = sim_run.load_sizing(ws)
     t_root = sim_run.toolchain_root(eda_bin)
 
-    out_dir = ws / OUT_SUBDIR
+    out_dir = ws / out_subdir
     shutil.rmtree(out_dir, ignore_errors=True)
     out_dir.mkdir(parents=True)
 
-    by_id: dict[str, dict] = {}
+    run_args = {"eda_bin": eda_bin, "ws": ws, "netlist_path": netlist_path,
+                "netlist_text": netlist_text, "corner": tt_corner,
+                "t_root": t_root, "nominal_vdd": nominal_vdd,
+                "out_dir": out_dir, "timeout": timeout, "sizing": sizing}
+    ctx: dict[str, dict] = {}         # bench name -> what scoring needs
     baselines: dict[str, dict] = {}   # bench name -> its tt measures
     tt_names: dict[str, set] = {}     # bench name -> measures bound at tt
     bounds_by_bench: dict[str, list] = {}  # bench name -> its bounds
     bench_texts: list[str] = []
+    generated: dict[str, list] = {}   # mutant id -> [(bench, mutant)]
     for bench_path, bounds_path in sim_run.find_benches(ws):
         bench_text = bench_path.read_text(encoding="utf-8")
         bench_texts.append(bench_text)
@@ -553,10 +678,12 @@ def run(argv=None):
         tt_names[bench_path.name] = {
             str(b["measure"]).lower() for b in bounds
             if b.get("corners", "all") == "all" or "tt" in b["corners"]}
+        t0 = time.monotonic()
         baseline = run_mutant(
             eda_bin, ws, {"id": "baseline", "target": None}, netlist_path,
             netlist_text, bench_path, bench_text, bounds, tt_corner, t_root,
-            nominal_vdd, out_dir, args.timeout, sizing)
+            nominal_vdd, out_dir, timeout, sizing)
+        seconds = time.monotonic() - t0
         # sim_tt passes with warning-severity bound misses, so only an
         # error refuses; a warning the baseline already has cannot count
         # as a kill below, or every mutant would be "killed" by it.
@@ -569,7 +696,6 @@ def run(argv=None):
                 f"({len(base_errors)} error(s), first: "
                 f"{first}) - a mutant kill would mean nothing; make sim_tt "
                 f"pass first (deck: {baseline['deck']})")
-        base_keys = {violation_key(v) for v in baseline["violations"]}
         baselines[bench_path.name] = baseline.get("measures") or {}
         sens = bench_sensitivities(bounds, bench_path.name,
                                    tt_names[bench_path.name])
@@ -578,31 +704,59 @@ def run(argv=None):
         abs_sens = bench_abs_sensitivities(
             bounds, bench_path.name, tt_names[bench_path.name],
             [bench_text, netlist_text])
-        mutants = netlistlib.device_mutants(netlist_text, devices, bench_text)
-        for mutant in mutants:
-            outcome = run_mutant(
-                eda_bin, ws, mutant, netlist_path, netlist_text, bench_path,
-                bench_text, bounds, tt_corner, t_root, nominal_vdd, out_dir,
-                args.timeout, sizing)
-            entry = by_id.setdefault(mutant["id"], {
-                "id": mutant["id"], "ref": mutant["ref"], "kind": mutant["kind"],
-                "target": mutant["target"],
-                "describe": mutant["describe"], "killed": False,
-                "benches_tested": [], "measures": {}})
-            if not entry["killed"] and any(
-                    violation_key(v) not in base_keys
-                    for v in outcome["violations"]):
-                entry["killed"] = True
-            if not entry["killed"]:
-                hit = sensitivity_kill(baselines[bench_path.name],
-                                       outcome.get("measures") or {}, sens,
-                                       abs_sens)
-                if hit:
-                    entry["killed"] = True
-                    entry["sensitivity_kill"] = {"bench": bench_path.name,
-                                                 **hit}
-            entry["benches_tested"].append(bench_path.name)
-            entry["measures"][bench_path.name] = outcome.get("measures") or {}
+        ctx[bench_path.name] = {
+            "path": bench_path, "text": bench_text, "bounds": bounds,
+            "base_keys": {violation_key(v) for v in baseline["violations"]},
+            "baseline": baselines[bench_path.name], "sens": sens,
+            "abs_sens": abs_sens, "seconds": seconds}
+        for mutant in netlistlib.device_mutants(netlist_text, devices,
+                                                bench_text):
+            generated.setdefault(mutant["id"], []).append(
+                (bench_path.name, mutant))
+    # "Order the benches so the cheap ones run first, by the baseline's own
+    # measured runtime" - to 0.1 s, so two near-equal benches order by name
+    # rather than by timer noise.
+    order = sorted(ctx, key=lambda n: (round(ctx[n]["seconds"], 1), n))
+    rank = {n: i for i, n in enumerate(order)}
+    plans = {mid: sorted(pairs, key=lambda p: rank[p[0]])
+             for mid, pairs in generated.items()}
+    return {"spec": spec, "devices": devices, "netlist_text": netlist_text,
+            "run_args": run_args, "ctx": ctx, "baselines": baselines,
+            "tt_names": tt_names, "bounds_by_bench": bounds_by_bench,
+            "bench_texts": bench_texts, "order": order, "plans": plans}
+
+
+def score_all(state: dict, ids: list[str], jobs: int | None) -> dict:
+    """{mutant id: score_mutant() entry} for `ids`, in `ids` order, run
+    through run_pool(): the same entries whatever `jobs` is."""
+    names = sorted(state["ctx"])
+    entries = run_pool(
+        ids, lambda mid: score_mutant(state["plans"][mid], state["ctx"],
+                                      state["run_args"], names), jobs)
+    return {e["id"]: e for e in entries}
+
+
+def run(argv=None):
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--workspace", required=True, help="block workspace")
+    ap.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
+    ap.add_argument("--jobs", default=os.environ.get(JOBS_ENV, "auto"),
+                    help="mutants simulated at once: 'auto' (default; "
+                    "max(1, cores - 1-minute load), re-read as it goes) or "
+                    f"a number; ${JOBS_ENV} sets the default")
+    ap.add_argument("--out", help="write result JSON here instead of stdout")
+    args = ap.parse_args(argv)
+    jobs = parse_jobs(args.jobs)
+
+    ws = Path(args.workspace)
+    rulings = rulingslib.load(ws, "bench_strength")
+    state = prepare(ws, args.timeout)
+    spec, devices = state["spec"], state["devices"]
+    netlist_text = state["netlist_text"]
+    baselines, tt_names = state["baselines"], state["tt_names"]
+    bounds_by_bench = state["bounds_by_bench"]
+    bench_texts = state["bench_texts"]
+    by_id = score_all(state, list(state["plans"]), jobs)
 
     unmutated = coverage_gaps(netlist_text, devices, by_id.values())
     if not by_id:
@@ -703,6 +857,8 @@ def run(argv=None):
             if m["abs_deltas"]:
                 f["abs_deltas"] = {k: float(f"{v:.6g}") for k, v in
                                    sorted(m["abs_deltas"].items())}
+        else:
+            f["killed_by"] = m["killed_by"]
         if "sensitivity_kill" in m:
             f["sensitivity_kill"] = m["sensitivity_kill"]
         return f
@@ -723,6 +879,7 @@ def run(argv=None):
             for k in ("relative", "absolute")},
         equivalent=len(equivalent), below_spread=len(below),
         equivalent_ids=sorted(equivalent), below_spread_ids=sorted(below),
+        bench_order=state["order"],
         mutants={mid: fact(m) for mid, m in sorted(by_id.items())})
     return payload, args.out
 
