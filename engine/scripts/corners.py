@@ -18,6 +18,8 @@ never re-implemented there):
     default_corners(data) -> list[dict]       the default sweep, validated
     corners_by_name(data, names) -> list[dict]
     grid_corners(data, grid) -> list[dict]    a spec-declared PVT grid
+    grid_name(process, temp_c, supply_pct)    a grid corner's name
+    names_of(corner) -> set[str]              every name that is `corner`
     spec_corners(data, field, passives=()) -> list[dict]
                                              spec.yaml `corners` -> the sweep
     passive_devices(netlist_text) -> list[str] which spread-prone passives
@@ -250,12 +252,29 @@ def grid_corners(data: dict, grid) -> list[dict]:
     for p in procs:
         for t in temps:
             for s in supplies:
-                name = f"{'tt' if p == 'typical' else p}_{_tag(t)}c"
-                if s != 0:
-                    name += f"_v{'p' if s > 0 else ''}{_tag(s)}"
-                out.append({"name": name, "process": p, "temp_c": t,
-                            "supply_pct": s})
+                out.append({"name": grid_name(p, t, s), "process": p,
+                            "temp_c": t, "supply_pct": s})
     return out
+
+
+def grid_name(process: str, temp_c, supply_pct) -> str:
+    """The name grid_corners gives the corner at these axis points."""
+    name = f"{'tt' if process == 'typical' else process}_{_tag(temp_c)}c"
+    if supply_pct != 0:
+        name += f"_v{'p' if supply_pct > 0 else ''}{_tag(supply_pct)}"
+    return name
+
+
+def names_of(corner: dict) -> set[str]:
+    """Every name a bound's `corners` list may use for `corner`: its own
+    name, and the name a spec grid gives the same process/temp/supply point
+    (`tt` is also `tt_27c`) - unless it moves the passives off where that
+    grid corner would leave them (tt_pss is not tt_27c)."""
+    names = {corner["name"]}
+    if passive_of(corner) == passive_of({"process": corner["process"]}):
+        names.add(grid_name(corner["process"], corner["temp_c"],
+                            corner["supply_pct"]))
+    return names
 
 
 def spec_corners(data: dict, field="default", passives=(),

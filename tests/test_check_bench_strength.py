@@ -1074,3 +1074,62 @@ def test_wilson_interval():
     assert hi == pytest.approx(1.0) and 0.69 < lo < 0.73
     lo, hi = est.wilson(5, 10)
     assert abs((lo + hi) / 2 - 0.5) < 1e-9 and 0.23 < lo < 0.24
+
+
+# ------------------------------------------- bounds scoped by a grid name
+# sim_pvt names a spec grid's typical corner `tt_27c` (corners.grid_name),
+# and that is the same corner bench_strength runs as `tt`; a bound scoped to
+# either name is scored here, one scoped to another corner is not.
+
+def scoped_bounds(ws: Path, corners: list[str], **extra) -> None:
+    (ws / "tb" / "mirror_tb.bounds.json").write_text(json.dumps([
+        {"measure": "iout_ratio", "min": 1.8, "max": 2.2,
+         "corners": corners, **extra}]), encoding="utf-8")
+
+
+@pytest.mark.parametrize("scope", [["tt_27c"], ["ss", "tt_27c"], ["tt"]])
+def test_a_bound_scoped_to_a_name_of_tt_kills(scope, tmp_path, monkeypatch, capsys):
+    ws = make_ws(tmp_path)
+    scoped_bounds(ws, scope)
+    monkeypatch.setattr(sim_run, "EDA_BIN", make_reference_check_fake_eda(tmp_path))
+    code, out = run_gate(ws, capsys)
+    assert code == 0 and out["survived"] == 0, out
+    assert out["total_mutants"] > 0
+
+
+@pytest.mark.parametrize("scope", [["ss"], ["tt_125c"], ["tt_pss"]])
+def test_a_bound_scoped_to_another_corner_kills_nothing(scope, tmp_path, monkeypatch, capsys):
+    ws = make_ws(tmp_path)
+    scoped_bounds(ws, scope)
+    monkeypatch.setattr(sim_run, "EDA_BIN", make_reference_check_fake_eda(tmp_path))
+    code, out = run_gate(ws, capsys)
+    assert code == 1 and out["survived"] == out["total_mutants"] > 0, out
+
+
+def test_a_sensitivity_on_a_tt_27c_bound_kills(tmp_path, monkeypatch, capsys):
+    ws = make_ruled_ws(tmp_path, monkeypatch,
+                       {"xmref_size_doubled_w": IN_SPEC_5PC}, None)
+    scoped_bounds(ws, ["tt_27c"], sensitivity=0.03)
+    code, out = run_gate(ws, capsys)
+    assert code == 0 and out["killed_by_sensitivity"] == 1, out
+
+
+def test_a_sensitivity_on_a_tt_pss_bound_is_refused(tmp_path, monkeypatch, capsys):
+    # tt_pss shares tt's process/temp/supply but moves the passives
+    ws = make_ruled_ws(tmp_path, monkeypatch,
+                       {"xmref_size_doubled_w": IN_SPEC_5PC}, None)
+    scoped_bounds(ws, ["tt_pss"], sensitivity=0.03)
+    code, out = run_gate(ws, capsys)
+    assert code == 2 and "not scored at tt" in out["error"], out
+
+
+def test_at_corner_name_adds_the_runs_own_name_only_for_an_alias():
+    tt = {"name": "tt", "process": "typical", "temp_c": 27, "supply_pct": 0}
+    bounds = [{"measure": "a", "corners": ["tt_27c"]},
+              {"measure": "b", "corners": ["tt_pss"]},
+              {"measure": "c"},
+              {"measure": "d", "corners": ["tt"]}]
+    out = check_bench_strength.at_corner_name(bounds, tt)
+    assert [b.get("corners") for b in out] == [
+        ["tt_27c", "tt"], ["tt_pss"], None, ["tt"]]
+    assert bounds[0]["corners"] == ["tt_27c"]  # the caller's list untouched

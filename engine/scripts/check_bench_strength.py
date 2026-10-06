@@ -10,7 +10,9 @@ builds the mutations gates.yaml names - size doubled, connection removed,
 type flipped (netlist/*.cir), bias halved (a plain source in tb/*.cir) - and
 each is run, ONE change at a time, against the tb/*.cir benches at the
 single 'tt' corner (bench_strength scores the bench's own bounds, not PVT
-margin - that is sim_pvt's job). A mutant is KILLED when that run produces
+margin - that is sim_pvt's job). A bound counts at tt when its `corners`
+list names that corner by any of its names (corners.names_of: `tt`, or
+`tt_27c` as a spec grid and so sim_pvt call it). A mutant is KILLED when that run produces
 at least one violation the baseline does not (a bound miss, a missing
 measure, or a real ngspice engine error - anything
 sim_run.run_bench_at_corner would report), or when it moves a tt measure
@@ -170,6 +172,24 @@ JOBS_ENV = "CHIP_FLOW_BENCH_JOBS"
 SETTLED_S = 180.0
 # how often a pool waiting on its workers re-reads the load, in seconds.
 POLL_S = 15.0
+
+
+def at_corner_name(bounds: list[dict], corner: dict) -> list[dict]:
+    """`bounds` with each `corners` list that names `corner` by another of
+    its names (corners.names_of - `tt_27c` for `tt`) naming it by its own
+    too, so compare_bounds and the tt measure set both score that bound at
+    this run. Brief: "a bound counts at the typical corner when its corners
+    list holds the corner the run actually uses, or any name that is that
+    corner (e.g. 'tt' or 'tt_27c')"."""
+    names = corners_mod.names_of(corner)
+    out = []
+    for b in bounds:
+        scope = b.get("corners", "all")
+        if (scope != "all" and corner["name"] not in scope
+                and names.intersection(scope)):
+            b = {**b, "corners": [*scope, corner["name"]]}
+        out.append(b)
+    return out
 
 
 def run_mutant(eda_bin, ws: Path, mutant: dict, netlist_path: Path,
@@ -673,11 +693,11 @@ def prepare(ws: Path, timeout: float, out_subdir: str = OUT_SUBDIR) -> dict:
     for bench_path, bounds_path in sim_run.find_benches(ws):
         bench_text = bench_path.read_text(encoding="utf-8")
         bench_texts.append(bench_text)
-        bounds = simlib.load_bounds(bounds_path)
+        bounds = at_corner_name(simlib.load_bounds(bounds_path), tt_corner)
         bounds_by_bench[bench_path.name] = bounds
         tt_names[bench_path.name] = {
             str(b["measure"]).lower() for b in bounds
-            if b.get("corners", "all") == "all" or "tt" in b["corners"]}
+            if simlib.scored_at(b, tt_corner["name"])}
         t0 = time.monotonic()
         baseline = run_mutant(
             eda_bin, ws, {"id": "baseline", "target": None}, netlist_path,
