@@ -898,3 +898,179 @@ def test_a_declared_ref_found_nowhere_fails_the_gate(tmp_path, monkeypatch, caps
     assert code == 1, out
     assert [v["refs"] for v in errors(out)
             if v["kind"] == "device_not_mutated"] == [["ighost"]], out
+
+
+# --- speed: early stop, cheapest bench first, the worker pool ------------
+# Two benches: aaa_slow_tb sorts first by name but its baseline is slower,
+# so the gate must run mirror_tb first. type_flipped is killed by both
+# benches, size_doubled only by the slow one, every other mutant survives.
+
+def make_two_bench_ws(tmp_path: Path, monkeypatch) -> tuple[Path, list, dict]:
+    import threading
+    ws = make_ws(tmp_path)
+    (ws / "tb" / "aaa_slow_tb.cir").write_text(BENCH_TEMPLATE,
+                                               encoding="utf-8")
+    (ws / "tb" / "aaa_slow_tb.bounds.json").write_text(json.dumps(
+        [{"measure": "iout_ratio", "min": 1.8, "max": 2.2}]),
+        encoding="utf-8")
+    monkeypatch.setattr(sim_run, "EDA_BIN",
+                        make_reference_check_fake_eda(tmp_path))
+    calls: list = []
+    lock = threading.Lock()
+    live = {"now": 0, "max": 0}
+
+    def fake_run_mutant(eda_bin, ws_, mutant, netlist_path, netlist_text,
+                        bench_path, *args, **kw):
+        import time
+        mid, bench = mutant["id"], bench_path.stem
+        with lock:
+            calls.append((mid, bench))
+            live["now"] += 1
+            live["max"] = max(live["max"], live["now"])
+        try:
+            if mid == "baseline":
+                time.sleep(0.15 if bench == "aaa_slow_tb" else 0.0)
+                return {"violations": [], "measures": {"iout_ratio": 2.0},
+                        "deck": "d"}
+            # finish out of id order, so a pool that kept completion order
+            # would scramble the facts
+            time.sleep(0.01 * (len(mid) % 5))
+            if "type_flipped" in mid or ("size_doubled" in mid
+                                         and bench == "aaa_slow_tb"):
+                return {"violations": [{"kind": "bound", "refs": [mid]}],
+                        "measures": {}}
+            ratio = 2.0 + (0.01 if bench == "mirror_tb" else 0.02)
+            return {"violations": [], "measures": {"iout_ratio": ratio}}
+        finally:
+            with lock:
+                live["now"] -= 1
+
+    monkeypatch.setattr(check_bench_strength, "run_mutant", fake_run_mutant)
+    return ws, calls, live
+
+
+def _gate(ws, capsys, *extra):
+    code = check_bench_strength.main(["--workspace", str(ws), *extra])
+    out = json.loads(capsys.readouterr().out)
+    out.pop("generated_at")
+    return code, out
+
+
+def test_a_killed_mutant_stops_at_the_cheapest_bench_that_kills_it(tmp_path, monkeypatch, capsys):
+    ws, calls, _ = make_two_bench_ws(tmp_path, monkeypatch)
+    code, out = _gate(ws, capsys, "--jobs", "1")
+    assert out["bench_order"] == ["mirror_tb.cir", "aaa_slow_tb.cir"], out
+    m = out["mutants"]
+    flipped = [k for k in m if "type_flipped" in k]
+    doubled = [k for k in m if "size_doubled" in k]
+    assert flipped and doubled, m
+    for k in flipped:
+        # killed by both benches: only the cheap one ran, and it is named
+        assert m[k]["killed"] and m[k]["killed_by"] == "mirror_tb.cir", m[k]
+        assert [b for mid, b in calls if mid == k] == ["mirror_tb"], calls
+    for k in doubled:
+        # the cheap bench misses it, so the slow one runs and kills it
+        assert m[k]["killed_by"] == "aaa_slow_tb.cir", m[k]
+        assert [b for mid, b in calls if mid == k] == ["mirror_tb",
+                                                       "aaa_slow_tb"]
+    survivors = [k for k, f in m.items() if not f["killed"]]
+    assert survivors and code == 1, out
+    for k in survivors:
+        # a survivor ran every bench, and its deltas keep the larger move
+        assert "killed_by" not in m[k], m[k]
+        assert sorted(b for mid, b in calls if mid == k) == [
+            "aaa_slow_tb", "mirror_tb"]
+        assert m[k]["deltas"] == {"iout_ratio": 0.01}, m[k]
+    assert out["killed"] == len(flipped) + len(doubled), out
+
+
+def test_serial_and_parallel_runs_give_identical_facts(tmp_path, monkeypatch, capsys):
+    ws, calls, live = make_two_bench_ws(tmp_path, monkeypatch)
+    serial = _gate(ws, capsys, "--jobs", "1")
+    assert live["max"] == 1
+    n_serial = len(calls)
+    parallel = _gate(ws, capsys, "--jobs", "4")
+    assert live["max"] > 1, "the pool never ran two mutants at once"
+    assert parallel == serial
+    assert list(parallel[1]["mutants"]) == sorted(parallel[1]["mutants"])
+    assert len(calls) == 2 * n_serial
+
+
+def test_jobs_comes_from_the_env_and_a_bad_value_is_refused(tmp_path, monkeypatch, capsys):
+    ws, _, live = make_two_bench_ws(tmp_path, monkeypatch)
+    monkeypatch.setenv(check_bench_strength.JOBS_ENV, "3")
+    _gate(ws, capsys)
+    assert 1 < live["max"] <= 3
+    monkeypatch.setenv(check_bench_strength.JOBS_ENV, "0")
+    code = check_bench_strength.main(["--workspace", str(ws)])
+    assert code == 2 and "--jobs" in capsys.readouterr().out
+
+
+def test_auto_reads_cores_and_the_one_minute_load(monkeypatch):
+    bs = check_bench_strength
+    monkeypatch.setattr(bs.os, "cpu_count", lambda: 6)
+    monkeypatch.setattr(bs.os, "getloadavg", lambda: (13.0, 20.0, 23.0))
+    assert (bs.box_cores(), bs.box_load1()) == (6, 13.0)
+    assert bs.auto_jobs(bs.box_cores(), bs.box_load1(), 0) == 1
+    assert bs.auto_jobs(6, 23.0, 1) == 1      # busy box: never more than 1
+    assert bs.auto_jobs(6, 0.5, 0) == 5       # floor(6 - 0.5)
+    assert bs.auto_jobs(6, 0.0, 0) == 6
+    # four of our own settled sims are in a load of 5: one more fits
+    assert bs.auto_jobs(6, 5.0, 4) == 5
+    assert bs.auto_jobs(6, 0.0, 9) == 6       # never past the cores
+
+
+def test_auto_pool_never_runs_more_than_the_load_leaves_free(monkeypatch):
+    import threading
+    import time
+    bs = check_bench_strength
+    lock, live = threading.Lock(), {"now": 0, "max": 0}
+
+    def task(i):
+        with lock:
+            live["now"] += 1
+            live["max"] = max(live["max"], live["now"])
+        time.sleep(0.02)
+        with lock:
+            live["now"] -= 1
+        return i * i
+
+    busy = bs.run_pool(list(range(8)), task, None, cores=lambda: 6,
+                       load1=lambda: 13.0)
+    assert busy == [i * i for i in range(8)] and live["max"] == 1
+    live["max"] = 0
+    idle = bs.run_pool(list(range(8)), task, None, cores=lambda: 3,
+                       load1=lambda: 0.0)
+    assert idle == [i * i for i in range(8)] and 1 < live["max"] <= 3
+
+
+def test_the_sampled_estimate_is_advisory_and_never_a_pass(tmp_path, monkeypatch, capsys):
+    import estimate_bench_strength as est
+    import gate
+    ws, _, _ = make_two_bench_ws(tmp_path, monkeypatch)
+    argv = ["--workspace", str(ws), "--sample", "3", "--seed", "7",
+            "--jobs", "1"]
+    code = est.main(argv)
+    out = json.loads(capsys.readouterr().out)
+    # "It must never record a gate pass or count as the gate having run"
+    assert code == 1 and out["status"] != "pass" and out["gate_ran"] is False
+    assert [v["kind"] for v in out["violations"]] == ["advisory_not_a_gate"]
+    assert out["seed"] == 7 and out["sample_size"] == len(out["mutants"]) == 3
+    lo, hi = out["kill_rate_ci95"]
+    assert 0.0 <= lo <= out["kill_rate"] <= hi <= 1.0, out
+    assert not (ws / "log" / "bench_strength").exists()
+    # the same seed draws the same mutants
+    assert est.main(argv) == 1
+    assert json.loads(capsys.readouterr().out)["mutants"] == out["mutants"]
+    with pytest.raises(RuntimeError, match="estimate_bench_strength"):
+        gate.validate_report("bench_strength",
+                             {"tool": "bench_strength"}, out)
+
+
+def test_wilson_interval():
+    import estimate_bench_strength as est
+    assert est.wilson(0, 0) == (0.0, 1.0)
+    lo, hi = est.wilson(10, 10)
+    assert hi == pytest.approx(1.0) and 0.69 < lo < 0.73
+    lo, hi = est.wilson(5, 10)
+    assert abs((lo + hi) / 2 - 0.5) < 1e-9 and 0.23 < lo < 0.24
