@@ -87,6 +87,20 @@ def reference_cell(ws: Path, block: str, ref_text: str) -> str:
     return cell
 
 
+def _number(name: str, val) -> float:
+    """A sizing value as a number. YAML reads `1e-06` (no decimal point) as
+    a string, so a numeric string is taken as its number. Anything else, in
+    a name the netlist uses, is a refusal: netgen has no bench to evaluate
+    an expression."""
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        raise CheckError(
+            f"sizing.yaml's {name} is {val!r}, not a number - lvs writes "
+            "sizing values into the netlist netgen reads, so give it a "
+            "plain number") from None
+
+
 def sized_reference(ref_text: str, cell: str, sizing: dict) -> tuple[str, dict]:
     """ref_text with the sizing values put where the netlist takes its W/L
     from. Returns (text, {name: value applied}). Three places, in order:
@@ -112,6 +126,7 @@ def sized_reference(ref_text: str, cell: str, sizing: dict) -> tuple[str, dict]:
                 pat = re.compile(rf"(\s{re.escape(name)}\s*=\s*)[^\s]+",
                                  re.IGNORECASE)
                 if pat.search(line):
+                    val = values[name] = _number(name, val)
                     line = pat.sub(lambda m: f"{m.group(1)}{val:.6g}", line,
                                    count=1)
                     applied[name] = val
@@ -120,6 +135,7 @@ def sized_reference(ref_text: str, cell: str, sizing: dict) -> tuple[str, dict]:
                and re.search(rf"\{{\s*{re.escape(name)}\s*\}}", ref_text,
                              re.IGNORECASE)]
     if missing and head_at is not None:
+        values.update({name: _number(name, values[name]) for name in missing})
         out.insert(head_at, ".param " + " ".join(
             f"{name}={values[name]:.6g}" for name in missing) + "\n")
         applied.update({name: values[name] for name in missing})

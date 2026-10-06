@@ -129,6 +129,25 @@ def test_sized_reference_applies_sizing_to_subckt_defaults_only():
 
 
 
+def test_sized_reference_reads_yaml_exponent_strings_as_numbers():
+    # yaml.safe_load gives "1e-06" (no decimal point) back as a string.
+    text = ".subckt cmp a b w_tail=6e-6\nxm a b a a nfet w={w_tail}\n.ends\n"
+    sized, applied = check_analog_lvs.sized_reference(
+        text, "cmp", {"w_tail": {"value": "1e-06"}})
+    assert applied == {"w_tail": 1e-6}
+    assert "w_tail=1e-06\n" in sized.splitlines(keepends=True)[0]
+
+
+def test_sized_reference_refuses_a_non_numeric_value():
+    text = ".subckt cmp a b w_tail=6e-6\n.ends\n"
+    with pytest.raises(check_analog_lvs.CheckError, match="w_tail"):
+        check_analog_lvs.sized_reference(
+            text, "cmp", {"w_tail": {"value": "2*w_in"}})
+    sized, _ = check_analog_lvs.sized_reference(
+        text, "cmp", {"w_tail": {"value": 2e-6}})
+    assert "w_tail=2e-06" in sized
+
+
 def test_sized_reference_replaces_global_params():
     text = (".param w_tail=6e-6 w_in=4e-6\n"
             ".subckt cmp a b\n"
