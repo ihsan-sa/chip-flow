@@ -98,6 +98,90 @@ def test_sim_tt_fails_when_measure_out_of_bound(tmp_path, monkeypatch, capsys):
     assert out["violations"][0]["kind"] == "sim_bound_fail"
 
 
+# a spec grid like ece298a's PLL: its corners are named tt_27c, ff_m40c_vp10..
+GRID = ("corners: {grid: {process: [typical, ff, ss], temp_c: [-40, 27, 125], "
+        "supply_pct: [-10, 0, 10]}}\n")
+RATIO_9 = "\n  Measurements for Transient Analysis\niout_ratio  =  9.00000e+00\n"
+RATIO_2 = "\n  Measurements for Transient Analysis\niout_ratio  =  2.00000e+00\n"
+
+
+def grid_ws(tmp_path: Path, mirror_bounds: list, extra: dict) -> Path:
+    """make_ws on the grid spec, mirror_tb's sidecar replaced and each
+    `extra` {bench stem: bounds} added as a bench of its own."""
+    ws = make_ws(tmp_path)
+    spec = ws / "spec" / "spec.yaml"
+    spec.write_text(spec.read_text(encoding="utf-8") + GRID, encoding="utf-8")
+    (ws / "tb" / "mirror_tb.bounds.json").write_text(
+        json.dumps(mirror_bounds), encoding="utf-8")
+    for stem, bounds in extra.items():
+        (ws / "tb" / f"{stem}.cir").write_text(BENCH_TEMPLATE, encoding="utf-8")
+        (ws / "tb" / f"{stem}.bounds.json").write_text(
+            json.dumps(bounds), encoding="utf-8")
+    return ws
+
+
+def run_tt(ws, tmp_path, monkeypatch, capsys, stdout):
+    monkeypatch.setattr(sim_run, "EDA_BIN", make_fake_eda(tmp_path, stdout))
+    code = check_sim_tt.main(["--workspace", str(ws)])
+    return code, json.loads(capsys.readouterr().out)
+
+
+def test_a_tt_27c_bound_is_scored_and_failed_at_tt(tmp_path, monkeypatch, capsys):
+    # tt is tt_27c (corners.names_of), so the bound is scored; tt_pss
+    # moves the passives, so the missing measure scoped there is not.
+    ws = grid_ws(tmp_path, [
+        {"measure": "iout_ratio", "min": 1.8, "max": 2.2, "corners": ["tt_27c"]},
+        {"measure": "vco_gain", "min": 1, "max": 2, "corners": ["tt_pss"]}], {})
+    code, out = run_tt(ws, tmp_path, monkeypatch, capsys, RATIO_9)
+    assert code == 1, out
+    assert [(v["kind"], v["refs"]) for v in out["violations"]] == [
+        ("sim_bound_fail", ["iout_ratio", "tt"])]
+    assert out["out_of_scope"] == []
+
+
+def test_an_ff_only_bench_is_out_of_scope_at_tt(tmp_path, monkeypatch, capsys):
+    # policy: skipped by sim_tt and listed as out of scope, since the
+    # spec's grid (what sim_pvt runs) scores it at ff_m40c_vp10
+    ws = grid_ws(tmp_path, [{"measure": "iout_ratio", "min": 1.8, "max": 2.2}],
+                 {"presc_tb": [{"measure": "iout_ratio", "min": 1.8, "max": 2.2,
+                                "corners": ["ff_m40c_vp10"]}]})
+    code, out = run_tt(ws, tmp_path, monkeypatch, capsys, RATIO_2)
+    assert code == 0, out
+    assert [r["bench"] for r in out["results"]] == ["mirror_tb.cir"]
+    assert out["out_of_scope"] == [
+        {"bench": "presc_tb.cir", "scored_at": ["ff_m40c_vp10"]}]
+    assert out["not_scored"] == [
+        {"bench": "presc_tb.cir", "corner": "tt",
+         "reason": "no bound in the sidecar is scored at this corner"}]
+
+
+def test_a_bench_no_spec_corner_scores_is_refused(tmp_path, monkeypatch, capsys):
+    # this spec sweeps the default five, and none of them is tt_125c (the
+    # default ff IS ff_m40c_vp10, so that name would reach)
+    ws = make_ws(tmp_path)
+    (ws / "tb" / "presc_tb.cir").write_text(BENCH_TEMPLATE, encoding="utf-8")
+    (ws / "tb" / "presc_tb.bounds.json").write_text(json.dumps(
+        [{"measure": "iout_ratio", "min": 1.8, "max": 2.2,
+          "corners": ["tt_125c"]}]), encoding="utf-8")
+    code, out = run_tt(ws, tmp_path, monkeypatch, capsys, RATIO_2)
+    assert code == 1, out
+    assert [(v["kind"], v["file"]) for v in out["violations"]] == [
+        ("sim_bench_not_run", "tb/presc_tb.cir")]
+    assert out["out_of_scope"] == []
+
+
+def test_no_bench_scored_at_tt_is_refused(tmp_path, monkeypatch, capsys):
+    # every bench out of scope at tt: the gate scored nothing, not a pass
+    ws = grid_ws(tmp_path, [{"measure": "iout_ratio", "min": 1.8, "max": 2.2,
+                             "corners": ["ff_m40c_vp10"]}], {})
+    code, out = run_tt(ws, tmp_path, monkeypatch, capsys, RATIO_2)
+    assert code == 1, out
+    assert [(v["kind"], v["file"]) for v in out["violations"]] == [
+        ("sim_bench_not_run", "tb/")]
+    assert out["out_of_scope"] == [
+        {"bench": "mirror_tb.cir", "scored_at": ["ff_m40c_vp10"]}]
+
+
 def make_real_mirror_ws(tmp_path: Path) -> Path:
     ws = tmp_path / "ws"
     for sub in ("spec", "netlist", "tb"):

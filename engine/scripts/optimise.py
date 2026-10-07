@@ -221,7 +221,7 @@ def score_sizing(ws: Path, eda_bin: Path, t_root: Path, netlist_path: Path,
         if result["engine_errors"]:
             return MISSING_MEASURE_PENALTY
         for b in bounds:
-            if not simlib.scored_at(b, tt_corner["name"]):
+            if not simlib.scored_at(b, corners_mod.names_of(tt_corner)):
                 continue
             key = b["measure"].lower()
             if key not in result["measures"]:
@@ -247,7 +247,7 @@ def full_corner_margin(results: list[dict],
                    else min(worst, MISSING_MEASURE_PENALTY)
             continue
         for b in bounds_by_bench.get(r["bench"], []):
-            if not simlib.scored_at(b, r["corner"]):
+            if not simlib.scored_at(b, r["names"]):
                 continue
             key = b["measure"].lower()
             m = (measure_margin(r["measures"][key], b) if key in r["measures"]

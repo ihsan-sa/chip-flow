@@ -324,6 +324,17 @@ def test_compare_bounds_tt_only_bound_skipped_at_other_corners():
     assert out[0]["refs"] == ["fosc", "tt"]
 
 
+def test_compare_bounds_scores_a_bound_by_any_name_of_the_corner():
+    # sim_run passes corners.names_of(corner): tt is also tt_27c
+    b = [{"measure": "fvco", "min": 9e6, "max": 11e6, "severity": "error",
+          "corners": ["tt_27c"]}]
+    assert simlib.compare_bounds(b, {"fvco": 6e6}, "tb/pll.cir",
+                                 corner="tt") == []
+    out = simlib.compare_bounds(b, {"fvco": 6e6}, "tb/pll.cir", corner="tt",
+                                names={"tt", "tt_27c"})
+    assert [v["refs"] for v in out] == [sorted(["fvco", "tt"])]
+    assert simlib.scored_at(b[0], {"tt_pss"}) is False
+
 def test_compare_bounds_corners_all_scores_every_corner():
     b = [{"measure": "x", "min": 1, "max": 2, "severity": "error",
           "corners": "all"}]

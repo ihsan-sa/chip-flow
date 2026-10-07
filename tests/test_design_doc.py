@@ -288,6 +288,24 @@ def test_measures_use_the_scored_bounds_and_their_corners(tmp_path):
     assert "not kept" in kept_not and "1.5" not in kept_not
 
 
+def test_a_measure_scoped_by_another_name_of_the_corner_is_shown(tmp_path):
+    """A bound scoped [tt_27c] reads the tt result, whose `names` hold
+    tt_27c; one scoped [tt_pss] does not."""
+    ws = make_ws(tmp_path, skill="ade")
+    (ws / "tb").mkdir(exist_ok=True)
+    (ws / "tb" / "b.bounds.json").write_text(json.dumps([
+        {"measure": "f", "min": 1.0, "max": 2.0, "corners": ["tt_27c"]},
+        {"measure": "g", "max": 5.0, "corners": ["tt_pss"]}]))
+    pvt = {"ran": True, "detail": "recorded", "facts": {"results": [
+        {"corner": "tt", "names": ["tt", "tt_27c"],
+         "measures": {"f": 1.5, "g": 1.0}}]}}
+    text = design_doc.measures_table(ws, {}, pvt)
+    f_row = next(ln for ln in text.splitlines() if "{\\small f}" in ln)
+    g_row = next(ln for ln in text.splitlines() if "{\\small g}" in ln)
+    assert "1.5 &" in f_row
+    assert "1.0 &" not in g_row and "not measured" in g_row
+
+
 def test_the_release_record_names_a_scope_out_made_at_h1(tmp_path):
     """A corner dimension the person scoped out at H1 is said in the
     document's release record, in their words - never left out."""

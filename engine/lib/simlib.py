@@ -233,20 +233,24 @@ def load_bounds(path: Path) -> list[dict]:
     return out
 
 
-def scored_at(bound: dict, corner: str) -> bool:
-    """Whether `bound` is scored at the corner named `corner`: its
-    `corners` is absent or "all", or a list that names `corner` exactly
-    (compare_bounds and sim_run's bench skip both decide it here, so they
-    can never disagree on a corner name)."""
+def scored_at(bound: dict, corner) -> bool:
+    """Whether `bound` is scored at a corner: its `corners` is absent or
+    "all", or a list that holds any name of that corner. `corner` is the
+    corner's every name (corners.names_of - `tt` is also `tt_27c`, but
+    `tt_pss` is not) or one bare name, which then must match exactly.
+    compare_bounds, sim_run's bench skip, optimise and bench_strength all
+    decide it here, so they can never disagree on a corner name."""
+    names = {corner} if isinstance(corner, str) else set(corner)
     scope = bound.get("corners", "all")
-    return scope == "all" or corner in scope
+    return scope == "all" or not names.isdisjoint(scope)
 
 
 def compare_bounds(bounds: list[dict], measures: dict[str, float],
                    testbench: str, corner: str = "tt",
                    failed_measures: set[str] | None = None,
                    check: str = "sim",
-                   unsettled: set[str] | None = None) -> list[dict]:
+                   unsettled: set[str] | None = None,
+                   names=None) -> list[dict]:
     """Ported from hwde's simlib.compare_bounds, `corner` added (every
     finding names which corner it failed at - sim_pvt runs several).
 
@@ -257,13 +261,14 @@ def compare_bounds(bounds: list[dict], measures: dict[str, float],
     from parse_failed_measures - distinguished only in the message text,
     the fault either way).
 
-    A bound with a `corners` list that does not name `corner` is skipped
+    A bound with a `corners` list that names the corner by none of its
+    `names` (corners.names_of; just `corner` when not given) is skipped
     outright - not scored, not missing - so a tt-only measure is never
     checked at ss; absent or "all" scores it at every corner."""
     failed_measures = failed_measures or set()
     out: list[dict] = []
     for b in bounds:
-        if not scored_at(b, corner):
+        if not scored_at(b, names or corner):
             continue
         name = b["measure"]
         key = name.lower()

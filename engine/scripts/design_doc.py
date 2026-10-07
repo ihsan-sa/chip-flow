@@ -485,8 +485,11 @@ def measures_table(ws: Path, spec: dict, pvt: dict | None) -> str:
             r"$\leq$ " + num(b["max"]) if "max" in b else "none"
         want = m.get("corners", "all")
         want = set(want) if isinstance(want, list) else None  # "all"
+        # a result's `names` is every name of its corner (tt is tt_27c);
+        # a result recorded before it had them has only `corner`
         vals = [(r.get("corner"), (r.get("measures") or {}).get(name)) for r in results
-                if want is None or r.get("corner") in want]
+                if want is None or not want.isdisjoint(
+                    r.get("names") or [r.get("corner")])]
         vals = [(c, v) for c, v in vals if isinstance(v, (int, float))]
         scope = "all" if want is None else ", ".join(tex(c) for c in sorted(want))
         if vals:
