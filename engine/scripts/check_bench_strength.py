@@ -174,24 +174,6 @@ SETTLED_S = 180.0
 POLL_S = 15.0
 
 
-def at_corner_name(bounds: list[dict], corner: dict) -> list[dict]:
-    """`bounds` with each `corners` list that names `corner` by another of
-    its names (corners.names_of - `tt_27c` for `tt`) naming it by its own
-    too, so compare_bounds and the tt measure set both score that bound at
-    this run. Brief: "a bound counts at the typical corner when its corners
-    list holds the corner the run actually uses, or any name that is that
-    corner (e.g. 'tt' or 'tt_27c')"."""
-    names = corners_mod.names_of(corner)
-    out = []
-    for b in bounds:
-        scope = b.get("corners", "all")
-        if (scope != "all" and corner["name"] not in scope
-                and names.intersection(scope)):
-            b = {**b, "corners": [*scope, corner["name"]]}
-        out.append(b)
-    return out
-
-
 def run_mutant(eda_bin, ws: Path, mutant: dict, netlist_path: Path,
               netlist_text: str, bench_path: Path, bench_text: str,
               bounds: list[dict], corner: dict, t_root: Path,
@@ -693,11 +675,11 @@ def prepare(ws: Path, timeout: float, out_subdir: str = OUT_SUBDIR) -> dict:
     for bench_path, bounds_path in sim_run.find_benches(ws):
         bench_text = bench_path.read_text(encoding="utf-8")
         bench_texts.append(bench_text)
-        bounds = at_corner_name(simlib.load_bounds(bounds_path), tt_corner)
+        bounds = simlib.load_bounds(bounds_path)
         bounds_by_bench[bench_path.name] = bounds
         tt_names[bench_path.name] = {
             str(b["measure"]).lower() for b in bounds
-            if simlib.scored_at(b, tt_corner["name"])}
+            if simlib.scored_at(b, corners_mod.names_of(tt_corner))}
         t0 = time.monotonic()
         baseline = run_mutant(
             eda_bin, ws, {"id": "baseline", "target": None}, netlist_path,

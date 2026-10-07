@@ -34,7 +34,8 @@ is an error (exit 2), never a silent sweep change.
 Unscored corners: a bench is not run at a corner where no bound in its
 sidecar is scored (sim_run.py's module docstring); the report's `not_scored`
 lists each skipped {bench, corner, reason}, and a bench run at no corner of
-the set is a `sim_bench_not_run` error.
+the set is a `sim_bench_not_run` error. A bound names a corner by any of its
+names (corners.names_of: `tt_27c` is `tt`).
 """
 from __future__ import annotations
 
@@ -47,9 +48,7 @@ ENGINE = SCRIPTS.parent
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(ENGINE / "lib"))
 import checklib  # noqa: E402
-import corners as corners_mod  # noqa: E402
 import sim_run  # noqa: E402
-import speclib  # noqa: E402
 
 SCRIPT = "check_sim_pvt"
 DEFAULT_TIMEOUT = 60.0
@@ -63,16 +62,7 @@ def run(argv=None):
     args = ap.parse_args(argv)
 
     ws = Path(args.workspace)
-    spec = speclib.load_spec(ws / "spec" / "spec.yaml")
-    passives = corners_mod.passive_devices(sim_run.find_netlist(ws).read_text(
-        encoding="utf-8", errors="replace"))
-    state_path = ws / "state.json"
-    scoped_out = corners_mod.recorded_scope_outs(
-        checklib.load_json(state_path, "state.json")
-        if state_path.is_file() else {})
-    corner_list = corners_mod.spec_corners(
-        corners_mod.load(), spec.get("corners", "default"), passives,
-        pinned=[s["dimension"] for s in scoped_out])
+    corner_list, scoped_out = sim_run.spec_sweep(ws)
 
     result = sim_run.run_workspace_benches(
         ws, corners=corner_list, timeout=args.timeout, check="sim_pvt")

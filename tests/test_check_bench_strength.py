@@ -1121,15 +1121,3 @@ def test_a_sensitivity_on_a_tt_pss_bound_is_refused(tmp_path, monkeypatch, capsy
     scoped_bounds(ws, ["tt_pss"], sensitivity=0.03)
     code, out = run_gate(ws, capsys)
     assert code == 2 and "not scored at tt" in out["error"], out
-
-
-def test_at_corner_name_adds_the_runs_own_name_only_for_an_alias():
-    tt = {"name": "tt", "process": "typical", "temp_c": 27, "supply_pct": 0}
-    bounds = [{"measure": "a", "corners": ["tt_27c"]},
-              {"measure": "b", "corners": ["tt_pss"]},
-              {"measure": "c"},
-              {"measure": "d", "corners": ["tt"]}]
-    out = check_bench_strength.at_corner_name(bounds, tt)
-    assert [b.get("corners") for b in out] == [
-        ["tt_27c", "tt"], ["tt_pss"], None, ["tt"]]
-    assert bounds[0]["corners"] == ["tt_27c"]  # the caller's list untouched

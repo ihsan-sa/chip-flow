@@ -11,6 +11,14 @@ module (and engine/lib/simlib.py) for how a measure is parsed, why the
 ngspice exit code is never trusted, and the `{{PDK}}`/`{{CORNER}}`/
 `{{TEMP_C}}`/`{{VDD}}`/`{{NETLIST}}`/`{{SIZING}}` deck template contract
 every tb/*.cir bench is written against.
+
+A bound scoped `[tt_27c]` is scored here: it names the tt corner by
+another of its names (corners.names_of). A bench whose bounds are all
+scoped to other corners (say only `[ff_m40c_vp10]`) is not run here and is
+listed in the report's `out_of_scope` with the corners that score it - not
+a failure, and not a pass - so long as some corner of the spec's sweep
+(sim_run.spec_sweep, what sim_pvt runs) scores it; when none does it is a
+`sim_bench_not_run` error, and so is a run where no bench was scored at tt.
 """
 from __future__ import annotations
 
@@ -38,7 +46,8 @@ def run(argv=None):
 
     ws = Path(args.workspace)
     result = sim_run.run_workspace_benches(
-        ws, corner_names=["tt"], timeout=args.timeout, check="sim_tt")
+        ws, corner_names=["tt"], timeout=args.timeout, check="sim_tt",
+        scope_corners=sim_run.spec_sweep(ws)[0])
 
     # stamp() hashes exactly this path as input_digest; gate.py's own
     # record_gate cross-checks that against invalidation.yaml's gate_inputs
@@ -46,7 +55,8 @@ def run(argv=None):
     payload = checklib.report(SCRIPT, ws / "netlist", result["violations"],
                               top=result["top"], corners=result["corners"],
                               results=result["results"],
-                              not_scored=result["not_scored"])
+                              not_scored=result["not_scored"],
+                              out_of_scope=result["out_of_scope"])
     return payload, args.out
 
 
