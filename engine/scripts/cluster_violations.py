@@ -214,6 +214,8 @@ FIXER_HINTS: dict[str, str] = {
     "passive_corner_unselected": "testbench",
     # a bench none of whose bounds is scored at any corner the run sweeps
     "sim_bench_not_run": "testbench",
+    # a bound scoped only to corners sim_pvt's sweep never runs
+    "sim_bound_not_swept": "testbench",
     # a step bench's own "did not settle within the window" verdict: the
     # window is already sized from the expected settling, so the block is
     # slower than its design equations said - sizing, not a wider window

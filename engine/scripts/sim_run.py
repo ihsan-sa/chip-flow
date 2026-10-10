@@ -269,7 +269,8 @@ def run_workspace_benches(ws: Path, eda_bin: Path | None = None,
                           check: str = "sim",
                           out_subdir: str = "log/sim",
                           skip_unscored: bool = True,
-                          scope_corners: list[dict] | None = None) -> dict:
+                          scope_corners: list[dict] | None = None,
+                          refuse_unswept: bool = False) -> dict:
     """Run every tb/*.cir with a bounds sidecar at every requested corner
     (default: corners.py's default_corners()) - `corners` passes the corner
     dicts themselves (a spec's grid has names corners.yaml never lists),
@@ -280,7 +281,11 @@ def run_workspace_benches(ws: Path, eda_bin: Path | None = None,
     of `scope_corners` (the spec's whole sweep, spec_sweep(); default: the
     requested corners) scores it - another gate's run scores it there - and
     is a sim_bench_not_run error when none does. No bench run at all is a
-    sim_bench_not_run error too: the gate scored nothing. Returns {top,
+    sim_bench_not_run error too: the gate scored nothing. With
+    refuse_unswept (sim_pvt, whose run is the whole sweep), a bench that
+    is run but holds a bound scoped to corners no corner of the sweep
+    answers to is a sim_bound_not_swept error per such bound: that bound
+    would otherwise go unscored while the gate passes. Returns {top,
     corners, results: [run_bench_at_corner() dicts], not_scored: [{bench,
     corner, reason}], out_of_scope: [{bench, scored_at}], violations:
     [flattened]}."""
@@ -354,12 +359,29 @@ def run_workspace_benches(ws: Path, eda_bin: Path | None = None,
         # report as out of scope for that corner ... This only holds when
         # some corner of the spec's grid scores it ... If no corner in the
         # grid scores a bench's bounds, refuse."
+        sweep = scope_corners or corner_list
+        sweep_names = [corners_mod.names_of(c) for c in sweep]
+        unswept = [b for b in bounds
+                   if not any(simlib.scored_at(b, n) for n in sweep_names)]
+        if refuse_unswept and len(unswept) < len(bounds):
+            # every bound unswept is sim_bench_not_run's case, below
+            for b in unswept:
+                not_run.append(checklib.violation(
+                    check, b["severity"], f"tb/{bench_path.name}", None,
+                    "sim_bound_not_swept", [b["measure"]],
+                    f"{bench_path.name}: bound {b['measure']} is scored only "
+                    f"at {b['corners']}, and this sweep "
+                    f"({', '.join(c['name'] for c in sweep)}) runs none of "
+                    f"them, so it would never be scored. A passive corner "
+                    f"(tt_pss, tt_pff) is swept only when the netlist uses a "
+                    f"poly/diffusion resistor or a MIM cap that is not scoped "
+                    f"out: scope the measure (spec and sidecar) to a corner "
+                    f"of this sweep, or name the corner in the spec's "
+                    f"`corners`", "sim_run"))
         if ran:
             continue
-        sweep = scope_corners or corner_list
-        reach = [c["name"] for c in sweep
-                 if any(simlib.scored_at(b, corners_mod.names_of(c))
-                        for b in bounds)]
+        reach = [c["name"] for c, n in zip(sweep, sweep_names)
+                 if any(simlib.scored_at(b, n) for b in bounds)]
         if reach:
             out_of_scope.append({"bench": bench_path.name, "scored_at": reach})
         else:

@@ -98,6 +98,8 @@ REQUIRED_AXES = ("process", "temperature_c", "supply_pct")
 PDK_PASSIVE = ("typical", "ss", "ff")
 RESISTOR_RE = re.compile(r"^(?:[np](?:plus|polyf)_[us](?:_\w+)?|nwell)$", re.I)
 MIM_RE = re.compile(r"^cap_mim_\w+$", re.I)
+# every device passive_devices can report
+PASSIVE_DEVICES = ("mim_cap", "resistor")
 
 
 def load(path: Path | str = DEFAULT_YAML) -> dict:
