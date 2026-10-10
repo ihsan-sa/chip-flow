@@ -150,6 +150,41 @@ def test_spec_corners_forms():
         corners.spec_corners(data, {"grid": DAC_GRID, "extra": 1})
 
 
+def test_grid_extra_appends_passive_skew_corners_in_order():
+    data = corners.load(REAL_YAML)
+    got = corners.spec_corners(
+        data, {"grid": DAC_GRID, "extra": ["ss_pff", "ff_pss"]})
+    assert [c["name"] for c in got[:9]] == [
+        c["name"] for c in corners.grid_corners(data, DAC_GRID)]
+    assert [c["name"] for c in got[9:]] == ["ss_pff", "ff_pss"]
+    assert [c["passive"] for c in got[9:]] == ["ff", "ss"]
+    # a duplicate inside extra is appended once
+    got = corners.spec_corners(
+        data, {"grid": DAC_GRID, "extra": ["ss_pff", "ss_pff"]})
+    assert [c["name"] for c in got[9:]] == ["ss_pff"]
+
+
+def test_grid_extra_skips_a_corner_the_grid_already_has():
+    data = corners.load(REAL_YAML)
+    grid = {"process": ["typical", "ff", "ss"], "temp_c": [-40, 27, 125]}
+    base = corners.grid_corners(data, grid)
+    assert "tt_27c" in {c["name"] for c in base}
+    got = corners.spec_corners(data, {"grid": grid, "extra": ["tt", "tt_pss"]})
+    # tt is tt_27c; tt_pss moves the passives off it, so it stays
+    assert [c["name"] for c in got[len(base):]] == ["tt_pss"]
+
+
+def test_grid_extra_bad_forms_raise():
+    data = corners.load(REAL_YAML)
+    with pytest.raises(CheckError):
+        corners.spec_corners(data, {"grid": DAC_GRID, "extra": ["nope"]})
+    for bad in ([], 1, "ss_pff", [1]):
+        with pytest.raises(CheckError, match="extra"):
+            corners.spec_corners(data, {"grid": DAC_GRID, "extra": bad})
+    with pytest.raises(CheckError, match="extra"):
+        corners.spec_corners(data, {"grid": DAC_GRID, "other": 1})
+
+
 # --- passive spread -----------------------------------------------------------
 
 DAC_TILE_NETLIST = (REPO / "corpus" / "msde" / "dac_tile" / "analog"

@@ -145,3 +145,17 @@ def test_bad_footprint_is_refused(tmp_path, capsys, fp):
     assert code == 1
     out = json.loads(capsys.readouterr().out)
     assert [v["kind"] for v in out["violations"]] == ["bad_footprint"]
+
+
+def test_spec_grid_with_extra_passes_and_bad_extra_is_bad_corners(tmp_path, capsys):
+    grid = "{process: [typical, ff, ss], temp_c: [-40, 25, 125]}"
+    ws = make_ws(tmp_path, GOOD_YAML.replace(
+        "corners: default", f"corners: {{grid: {grid}, extra: [ss_pff, ff_pss]}}"))
+    assert check_spec_lint_ade.main(["--workspace", str(ws)]) == 0
+    capsys.readouterr()
+    for i, extra in enumerate(("[nope]", "1")):
+        ws = make_ws(tmp_path / f"b{i}", GOOD_YAML.replace(
+            "corners: default", f"corners: {{grid: {grid}, extra: {extra}}}"))
+        assert check_spec_lint_ade.main(["--workspace", str(ws)]) == 1
+        out = json.loads(capsys.readouterr().out)
+        assert [v["kind"] for v in out["violations"]] == ["bad_corners"]

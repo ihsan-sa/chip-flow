@@ -39,7 +39,9 @@ axis' coldest and hottest points. Temperatures and supplies may be any value
 inside the axis range (25 C is not an axis point, but lies inside it);
 supply_pct defaults to [0], the spec's own nominal VDD. Grid corners are
 named `<process>_<temp>c[_v<supply>]` (typical -> tt, a minus sign -> m):
-`ss_m40c`, `tt_25c`, `ff_125c_vp10`.
+`ss_m40c`, `tt_25c`, `ff_125c_vp10`. A grid may add `extra: [name, ...]`,
+corners.yaml entries appended after the grid's own (skipping any already in
+it); that is how a grid spec opts into passive_skew_corners (ss_pff, ff_pss).
 
 Passive spread. The PDK keeps poly/diffusion resistor sheet resistance
 (`.lib res_<p>`, ppolyf_u_1k +/-20%) and MIM capacitance (`.lib
@@ -419,6 +421,12 @@ def recorded_scope_outs(state_data: dict) -> list[dict]:
     return out
 
 
+_CORNERS_FORMS = ("spec.yaml 'corners' must be 'default', 'all', a "
+                  "non-empty list of corner names, {grid: {...}}, or "
+                  "{grid: {...}, extra: [corner name, ...]} with a "
+                  "non-empty list of names")
+
+
 def _spec_corners(data: dict, field) -> list[dict]:
     # brief: "Let a spec declare that grid, and keep the default five
     # corners when it doesn't."
@@ -428,14 +436,26 @@ def _spec_corners(data: dict, field) -> list[dict]:
         return grid_corners(data, {"process": list(data["process"]),
                                    "temp_c": list(data["temperature_c"]),
                                    "supply_pct": list(data["supply_pct"])})
-    if isinstance(field, dict) and set(field) == {"grid"}:
-        return grid_corners(data, field["grid"])
+    if isinstance(field, dict) and set(field) in ({"grid"}, {"grid", "extra"}):
+        out = grid_corners(data, field["grid"])
+        if "extra" not in field:
+            return out
+        extra = field["extra"]
+        if not (isinstance(extra, list) and extra
+                and all(isinstance(c, str) for c in extra)):
+            raise CheckError(_CORNERS_FORMS)
+        have = set().union(*(names_of(c) for c in out)) if out else set()
+        for c in corners_by_name(data, extra):
+            if names_of(c) & have:
+                continue
+            out.append(c)
+            have |= names_of(c)
+        return out
     if isinstance(field, list) and field and all(isinstance(c, str) for c in field):
         names = [c["name"] for c in data["default_corners"]]
         names += [c for c in field if c not in names]
         return corners_by_name(data, names)
-    raise CheckError("spec.yaml 'corners' must be 'default', 'all', a "
-                     "non-empty list of corner names, or {grid: {...}}")
+    raise CheckError(_CORNERS_FORMS)
 
 
 def resolve_vdd(corner: dict, nominal_vdd: float) -> float:
