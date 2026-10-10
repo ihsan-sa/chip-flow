@@ -35,7 +35,12 @@ Unscored corners: a bench is not run at a corner where no bound in its
 sidecar is scored (sim_run.py's module docstring); the report's `not_scored`
 lists each skipped {bench, corner, reason}, and a bench run at no corner of
 the set is a `sim_bench_not_run` error. A bound names a corner by any of its
-names (corners.names_of: `tt_27c` is `tt`).
+names (corners.names_of: `tt_27c` is `tt`). A bench that runs but holds a
+bound scoped only to corners the set never sweeps (`[tt_pff]` on a netlist
+with no resistor or MIM cap, or with that spread scoped out) is a
+`sim_bound_not_swept` error per such bound: spec_lint accepts a passive
+corner name without reading the netlist, so this is where an unscored bound
+is refused rather than passed.
 """
 from __future__ import annotations
 
@@ -65,7 +70,8 @@ def run(argv=None):
     corner_list, scoped_out = sim_run.spec_sweep(ws)
 
     result = sim_run.run_workspace_benches(
-        ws, corners=corner_list, timeout=args.timeout, check="sim_pvt")
+        ws, corners=corner_list, timeout=args.timeout, check="sim_pvt",
+        refuse_unswept=True)
     top, corner_list = result["top"], result["corners"]
     results, violations = result["results"], result["violations"]
 

@@ -383,3 +383,55 @@ def test_a_scope_out_the_h1_answer_does_not_make_is_an_error(tmp_path,
     out = json.loads(capsys.readouterr().out)
     assert code == 2 and "does not name resistor" in out["error"], out
     assert "state.py" in out["remediation"]
+
+
+# --- a bound scoped to a corner the sweep never runs -------------------------
+
+RES_LINE = "xr1 a b vss ppolyf_u_1k r_width=2e-6 r_length=1e-5"
+RES_LIB = ".lib '{{PDK}}/libs.tech/ngspice/sm141064.spice' {{RES_CORNER}}"
+
+
+def _with_pff_bound(ws: Path) -> None:
+    """The PLL shape: one bound everywhere, one scoped to tt_pff."""
+    (ws / "tb" / "mirror_tb.bounds.json").write_text(json.dumps(
+        [{"measure": "iout_ratio", "min": 1.95, "max": 2.05},
+         {"measure": "iout_ratio", "min": 1.0, "max": 3.0,
+          "corners": ["tt_pff"]}]), encoding="utf-8")
+
+
+def test_a_tt_pff_bound_on_a_resistor_netlist_is_scored(tmp_path,
+                                                        monkeypatch, capsys):
+    ws = _passive_ws(tmp_path, RES_LINE, RES_LIB)
+    _with_pff_bound(ws)
+    monkeypatch.setattr(sim_run, "EDA_BIN",
+                        _fake_eda_failing_on(tmp_path, "no-such-section"))
+    code = check_sim_pvt.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0, out
+    assert "tt_pff" in {r["corner"] for r in out["results"]}
+
+
+@pytest.mark.parametrize("scoped_out", [False, True])
+def test_a_bound_scoped_to_an_unswept_corner_is_refused(tmp_path, monkeypatch,
+                                                        capsys, scoped_out):
+    """spec_lint accepts [tt_pff] without reading the netlist. A netlist
+    with no resistor, or a MIM-only one whose spread is scoped out, never
+    sweeps tt_pff: before, the bench ran at the other corners, that bound
+    was never scored and the gate passed."""
+    if scoped_out:
+        ws = _passive_ws(tmp_path, "xc1 a vss cap_mim_2f0fF c_width=1e-5 "
+                         "c_length=1e-5",
+                         ".lib '{{PDK}}/libs.tech/ngspice/sm141064.spice' "
+                         "mimcap_typical")
+        _h1_scope_out(ws)
+    else:
+        ws = make_ws(tmp_path)
+    _with_pff_bound(ws)
+    monkeypatch.setattr(sim_run, "EDA_BIN",
+                        _fake_eda_failing_on(tmp_path, "no-such-section"))
+    code = check_sim_pvt.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 1, out
+    assert "tt_pff" not in out["corners"]
+    assert [(v["kind"], v["refs"]) for v in out["violations"]] == [
+        ("sim_bound_not_swept", ["iout_ratio"])], out

@@ -58,7 +58,7 @@ CHECK_KINDS = {"sim", "formal", "both", "measure"}
 #                                      block's netlist/*.cir must instantiate
 #                                      (check_netlist_lint.py cross-checks)
 #                                      and bench_strength mutates
-#     corners: "default" | "all" | [str,...] | {grid: {...}}
+#     corners: "default" | "all" | [str,...] | {grid: {...}, extra?: [str,...]}
 #                                      optional (default: corners.py's own
 #                                      default_corners()); the forms and
 #                                      the grid's rules are corners.py's
@@ -153,10 +153,11 @@ def lint_spec_ade(spec: dict, rel_path: str = "spec/spec.yaml") -> list[dict]:
     if not ((isinstance(corners_field, str) and corners_field in ADE_MEASURE_CORNER_KINDS)
            or (isinstance(corners_field, list) and corners_field
                and all(isinstance(c, str) for c in corners_field))
-           or (isinstance(corners_field, dict) and set(corners_field) == {"grid"})):
+           or (isinstance(corners_field, dict) and set(corners_field) in ({"grid"}, {"grid", "extra"}))):
         bad("bad_corners", "spec.yaml 'corners' must be 'default', 'all', "
                            "a non-empty list of corner names, or "
-                           "{grid: {process, temp_c, supply_pct}}")
+                           "{grid: {process, temp_c, supply_pct}, "
+                           "extra?: [corner name, ...]}")
 
     measures = spec.get("measures")
     if not isinstance(measures, list) or not measures:

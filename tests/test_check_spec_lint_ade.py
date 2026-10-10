@@ -124,6 +124,50 @@ def test_measure_scoped_to_a_corner_the_grid_never_runs_is_refused(tmp_path, cap
     assert check_spec_lint_ade.main(["--workspace", str(ws2)]) == 0
 
 
+def _scoped(corners: str) -> str:
+    return GOOD_YAML.replace("    bounds: {min: 1.8, max: 2.2}\n",
+                             "    bounds: {min: 1.8, max: 2.2}\n"
+                             f"    corners: {corners}\n")
+
+
+def test_measure_scoped_to_a_passive_corner_passes(tmp_path, capsys):
+    """Red before: the lint expanded the spec with no passives, so a PLL
+    measure scoped to [tt_pff] (a resistor netlist sweeps it) was refused
+    and its bound went unscored. The lint reads the spec alone; a netlist
+    that does not sweep tt_pff is sim_pvt's sim_bound_not_swept."""
+    ws = make_ws(tmp_path, _scoped("[tt_pff]"))
+    (ws / "netlist").mkdir()
+    (ws / "netlist" / "pll.cir").write_text(
+        "xr1 a b vss ppolyf_u_1k r_width=2e-6 r_length=1e-5\n",
+        encoding="utf-8")
+    assert check_spec_lint_ade.main(["--workspace", str(ws)]) == 0, \
+        capsys.readouterr().out
+    grid = ("corners: {grid: {process: [typical, ff, ss], "
+            "temp_c: [-40, 25, 125]}}")
+    ws2 = make_ws(tmp_path / "b", _scoped("[tt_pss]").replace(
+        "corners: default", grid))
+    assert check_spec_lint_ade.main(["--workspace", str(ws2)]) == 0, \
+        capsys.readouterr().out
+
+
+def test_measure_names_a_corner_by_its_alias(tmp_path, capsys):
+    # names_of: the default tt corner is also tt_27c, as sim_pvt scores it
+    ws = make_ws(tmp_path, _scoped("[tt_27c]"))
+    assert check_spec_lint_ade.main(["--workspace", str(ws)]) == 0, \
+        capsys.readouterr().out
+
+
+@pytest.mark.parametrize("corners", ["[ss_pff]", "[tt_25c]", "[nosuch]"])
+def test_measure_scoped_to_a_corner_no_sweep_runs_is_refused(
+        tmp_path, capsys, corners):
+    # ss_pff is swept only when the spec names it; tt_25c is a grid name
+    # the default five never answer to
+    ws = make_ws(tmp_path, _scoped(corners))
+    assert check_spec_lint_ade.main(["--workspace", str(ws)]) == 1
+    out = json.loads(capsys.readouterr().out)
+    assert [v["kind"] for v in out["violations"]] == ["measure_bad_corners"]
+
+
 def test_positive_footprint_passes(tmp_path, capsys):
     ws = make_ws(tmp_path, GOOD_YAML + "footprint_um: {width: 60, height: 60.5}\n")
     code = check_spec_lint_ade.main(["--workspace", str(ws)])
@@ -145,3 +189,17 @@ def test_bad_footprint_is_refused(tmp_path, capsys, fp):
     assert code == 1
     out = json.loads(capsys.readouterr().out)
     assert [v["kind"] for v in out["violations"]] == ["bad_footprint"]
+
+
+def test_spec_grid_with_extra_passes_and_bad_extra_is_bad_corners(tmp_path, capsys):
+    grid = "{process: [typical, ff, ss], temp_c: [-40, 25, 125]}"
+    ws = make_ws(tmp_path, GOOD_YAML.replace(
+        "corners: default", f"corners: {{grid: {grid}, extra: [ss_pff, ff_pss]}}"))
+    assert check_spec_lint_ade.main(["--workspace", str(ws)]) == 0
+    capsys.readouterr()
+    for i, extra in enumerate(("[nope]", "1")):
+        ws = make_ws(tmp_path / f"b{i}", GOOD_YAML.replace(
+            "corners: default", f"corners: {{grid: {grid}, extra: {extra}}}"))
+        assert check_spec_lint_ade.main(["--workspace", str(ws)]) == 1
+        out = json.loads(capsys.readouterr().out)
+        assert [v["kind"] for v in out["violations"]] == ["bad_corners"]
