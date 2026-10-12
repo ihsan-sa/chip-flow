@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   check:
-    name: tests/check.sh (landing gate)
+    name: check
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
