@@ -151,6 +151,111 @@ def test_port_lines_braces_every_bus_bit_with_use_and_class():
         assert re.search(r"\{[^{}]+\}", line), line
 
 
+def _pinned_gds(tmp_path: Path, *, a_label_on_metal: bool = True) -> Path:
+    """A cell like the r2r DAC's dac_code[i]: port a's label on a Metal2 pad
+    at the left edge, whose Via1 drops onto a Metal1 strip running into the
+    cell; an internal net labelled net1; vdd labelled on its Metal3 rail,
+    vss on its Metal1 rail with a Via1/Via2 stack up to its Metal3 rail."""
+    layout = db.Layout()
+    layout.dbu = 0.001
+    cell = layout.create_cell("mac")
+
+    def box(layer, *b):
+        cell.shapes(layout.layer(layer, 0)).insert(db.DBox(*b))
+
+    def label(layer, text, x, y):
+        cell.shapes(layout.layer(layer, 10)).insert(db.DText(text, x, y))
+    box(36, 0, 10, 2, 11)                              # a's Metal2 pad
+    label(36, "a", 0.5 if a_label_on_metal else 3.5, 10.5)
+    box(35, 1.37, 10.37, 1.63, 10.63)                  # its Via1
+    box(34, 1, 10, 40, 11)                             # a's internal strip
+    box(34, 5, 12, 40, 13)
+    label(34, "net1", 20, 12.5)                        # an internal net
+    box(42, 0, 18, 40, 20)
+    label(42, "vdd", 20, 19)
+    box(34, 0, 0, 40, 1)
+    label(34, "vss", 20, 0.5)
+    box(35, 20, 0.3, 20.26, 0.56)
+    box(36, 19.8, 0, 20.5, 1.5)
+    box(38, 20, 1, 20.26, 1.26)
+    box(42, 0, 0, 40, 2)                               # vss's Metal3 rail
+    path = tmp_path / "mac.gds"
+    layout.write(str(path))
+    return path
+
+
+PINNED = {"a": False, "vdd": True, "vss": True}
+
+
+def test_pin_lines_grow_each_port_to_its_metal_and_drop_other_labels(
+        tmp_path):
+    lines = check_top_harden.pin_lines(_pinned_gds(tmp_path), "mac", PINNED)
+    # a's pin is its Metal2 pad, not the Metal1 strip its net runs on
+    assert "setlabel box 0.000um 10.000um 2.000um 11.000um" in lines
+    assert not any("40.000um 11.000um" in line for line in lines)
+    # vdd's label sits on its rail; vss's sits on Metal1 and gains the
+    # Metal3 rail of its net as a second port label
+    assert "setlabel box 0.000um 18.000um 40.000um 20.000um" in lines
+    assert "setlabel box 0.000um 0.000um 40.000um 1.000um" in lines
+    i = lines.index("box 0.000um 0.000um 40.000um 2.000um")
+    assert lines[i + 1:i + 3] == ["label {vss} c metal3",
+                                  "port make [port {vss} index]"]
+    assert not any(line.startswith("label {vdd}") for line in lines)
+    # net1 names no port: its label is deleted, the label after a port's
+    # select is resized instead
+    i = lines.index("box 19.995um 12.495um 20.005um 12.505um")
+    assert lines[i + 1:i + 3] == ["select area labels", "delete"]
+    assert lines.count("delete") == 1
+
+
+def test_pin_lines_refuse_a_port_label_on_no_metal(tmp_path):
+    gds = _pinned_gds(tmp_path, a_label_on_metal=False)
+    with pytest.raises(CheckError, match="the label a at .* no Metal2"):
+        check_top_harden.pin_lines(gds, "mac", PINNED)
+
+
+def test_lef_pins_too_small_names_point_and_missing_pins(tmp_path):
+    lef = tmp_path / "mac.lef"
+    lef.write_text("\n".join([
+        "MACRO mac", "  PIN a", "    PORT", "      LAYER Metal2 ;",
+        "        RECT 0.000 10.000 2.000 11.000 ;", "    END", "  END a",
+        "  PIN b", "    PORT", "      LAYER Metal2 ;",
+        "        RECT 0.495 10.495 0.505 10.505 ;", "    END", "  END b",
+        "END mac", ""]))
+    assert check_top_harden.lef_pins_too_small(lef, ["a", "b", "c"]) == [
+        "b", "c"]
+
+
+@pytest.mark.slow
+def test_lef_offers_only_the_metal_under_each_port_label(tmp_path):
+    """Against real magic: the abstract's pin for a is its Metal2 pad and
+    the Metal1 strip its Via1 lands on is OBS (ece298a's R-2R DAC, where
+    the router dropped a Via1 onto that strip); the unported net1 is OBS,
+    not a pin; vss keeps its Metal3 rail for the PDN; and the abstract is
+    still the drawn extent."""
+    lef = check_top_harden.write_lef(_pinned_gds(tmp_path), "mac", [],
+                                     PINNED)
+    text = lef.read_text(encoding="utf-8")
+
+    def block(start, end):
+        m = re.search(rf"^\s*{start}\s*$(.*?)^\s*{end}\s*$", text,
+                      re.MULTILINE | re.DOTALL)
+        assert m, text
+        return m.group(1)
+    pin_a = block("PIN a", "END a")
+    assert "LAYER Metal1" not in pin_a and "LAYER Via1" not in pin_a
+    assert "RECT 0.000 10.000 2.000 11.000 ;" in pin_a
+    obs = block("OBS", "END")
+    assert "RECT 1.000 10.000 40.000 11.000 ;" in obs
+    assert "RECT 1.370 10.370 1.630 10.630 ;" in obs
+    assert "RECT 5.000 12.000 40.000 13.000 ;" in obs
+    assert "PIN net1" not in text
+    assert check_top_harden.lef_pin_layers(lef, "vss") == {"Metal1",
+                                                           "Metal3"}
+    assert check_top_harden.lef_size(lef) == (40.0, 20.0)
+    assert check_top_harden.lef_pins_too_small(lef, list(PINNED)) == []
+
+
 @pytest.mark.slow
 def test_magic_lef_direction_survives_a_bus_bit_pin_name(tmp_path):
     """The regression itself, against real magic (not a fake): a synthetic
@@ -225,13 +330,13 @@ def test_lef_covers_a_macro_whose_boundary_is_one_flattened_cell(tmp_path):
     gds = tmp_path / "mac.gds"
     layout.write(str(gds))
 
-    lef = check_top_harden.write_lef(gds, "mac", [])
+    lef = check_top_harden.write_lef(gds, "mac", [], {})
     assert check_top_harden.lef_size(lef) == (207.82, 139.56)
     assert "ORIGIN 2.040 3.200 ;" in lef.read_text()
 
     with pytest.raises(check_top_harden.CheckError, match="smaller than"):
         check_top_harden.write_lef(
-            gds, "mac", ["property FIXED_BBOX {0 0 100 100}"])
+            gds, "mac", ["property FIXED_BBOX {0 0 100 100}"], {})
 
 
 @pytest.mark.slow

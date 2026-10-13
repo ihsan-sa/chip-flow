@@ -28,12 +28,17 @@ on the vendored analog pin template, and LibreLane routes each such pin
 to its pad (engine/lib/ttlib.py, "Analog tile").
 Analog pins that interface.yaml names nowhere are its supplies; the one
 named like vdd goes to VPWR and the one like vss to VGND (PDN macro hookup).
-The macro sits in the middle of the tile. The recipe - LEF by plain `lef
+The macro sits in the middle of the tile. The recipe - LEF by magic's `lef
 write`, the PDN's Metal3-Metal4 connect, extraction from GDS - is
-docs/spikes/macro_harden.md's, except that the LEF abstract covers
+docs/spikes/macro_harden.md's, except in two ways. The LEF abstract covers
 everything the macro draws, never a PR boundary smaller than that (one a
 flattened standard cell left behind); magic writing an abstract more than
-1 um short of the drawn extent on either axis is a refusal. The tile's
+1 um short of the drawn extent on either axis is a refusal. And the LEF is
+written -pinonly: each port's pin is the rectangle of metal under its label
+(a supply's adds its net's Metal3) and the rest of the macro is OBS, so the
+router never lands on a port's internal wiring. A port label on no metal of
+its own layer, or a port the LEF gives no pin 0.23 um a side, is a refusal;
+a label that names no port is dropped, its metal OBS. The tile's
 Metal4 stripes join the macro on Metal3 only, so a supply pin with no
 Metal3 shape is a `macro_power_unreachable` finding (no harden runs).
 
@@ -199,7 +204,8 @@ def analog_macro(analog: Path, signals: dict[str, str], out_dir: Path,
     lef_out = write_lef(gds_out, cell, [
         *port_lines(sig_pins, signals, ua),
         f"port {tcl_tok(vdd)} use power", f"port {tcl_tok(vdd)} class inout",
-        f"port {tcl_tok(vss)} use ground", f"port {tcl_tok(vss)} class inout"])
+        f"port {tcl_tok(vss)} use ground", f"port {tcl_tok(vss)} class inout"],
+        {**{p: False for p in [*sig_pins, *ua]}, vdd: True, vss: True})
 
     def rng(s: str) -> str:
         w = int(widths.get(s, 1))
@@ -230,11 +236,127 @@ def analog_macro(analog: Path, signals: dict[str, str], out_dir: Path,
                       "spice": str(spice_out.resolve())}}
 
 
-def write_lef(gds_out: Path, cell: str, ports: list[str]) -> Path:
+# gf180mcuD's routing stack in GDS layer numbers: each metal (its labels on
+# datatype 10) and the via up from it.
+METALS = {"Metal1": 34, "Metal2": 36, "Metal3": 42, "Metal4": 46,
+          "Metal5": 81}
+VIAS_UP = {"Metal1": 35, "Metal2": 38, "Metal3": 40, "Metal4": 41}
+LABEL_DATATYPE = 10
+# gf180's narrowest metal (Metal1, 0.23 um): a pin narrower than this is
+# magic's 10 nm label point, not metal a router can land on.
+MIN_PIN_UM = 0.23
+
+
+def pin_lines(gds: Path, cell: str, ports: dict[str, bool]) -> list[str]:
+    """The magic Tcl lines, run after `port makeall`, that make `lef write
+    -pinonly` give each port in `ports` ({name: is a supply}) a pin a router
+    can land on and offer nothing else. -pinonly writes a port's label as
+    its pin and the rest of its net as OBS, and the generators' labels are
+    GDS points, so each port's label is grown to the rectangle of its own
+    layer's metal under it. A label `ports` does not name is deleted, so its
+    net goes out as OBS. A supply also gets a port label on each Metal3
+    rectangle of its net, where macro_pdn.tcl joins the tile's stripes.
+    Refuses a port label that sits on no metal of its layer."""
+    import klayout.db as db
+    layout = db.Layout()
+    layout.read(str(gds))
+    top = layout.cell(cell)
+
+    def region(layer: int, datatype: int = 0):
+        li = layout.find_layer(layer, datatype)
+        return (db.Region() if li is None else
+                db.Region(top.begin_shapes_rec(li)).merged())
+
+    def rects(reg) -> list:
+        return [t.bbox() for poly in reg.each()
+                for t in poly.decompose_trapezoids(db.Polygon.TD_simple)
+                if t.is_box()]
+
+    def um(b) -> str:
+        return " ".join(f"{v * layout.dbu:.3f}um"
+                        for v in (b.left, b.bottom, b.right, b.top))
+
+    metal = {m: region(n) for m, n in METALS.items()}
+    via_up = {m: region(n) for m, n in VIAS_UP.items()}
+    names = list(METALS)
+
+    def net_metal3(layer: str, start) -> list:
+        net = {m: start if m == layer else db.Region() for m in names}
+        while True:
+            grown = dict(net)
+            for lo, hi in zip(names, names[1:]):
+                grown[hi] = grown[hi] + metal[hi].interacting(
+                    via_up[lo].interacting(net[lo]))
+                grown[lo] = grown[lo] + metal[lo].interacting(
+                    via_up[lo].interacting(net[hi]))
+            grown = {m: r.merged() for m, r in grown.items()}
+            if all(grown[m].count() == net[m].count() for m in names):
+                return rects(net["Metal3"])
+            net = grown
+
+    wanted = {p.lower(): p for p in ports}
+    lines, supply_rects = [], {}
+    for layer, gds_layer in METALS.items():
+        li = layout.find_layer(gds_layer, LABEL_DATATYPE)
+        texts = [] if li is None else [
+            s.text for s in top.shapes(li).each() if s.is_text()]
+        for text in texts:
+            at = db.Box(text.x - 5, text.y - 5, text.x + 5, text.y + 5)
+            lines += ["select clear", f"box {um(at)}", "select area labels"]
+            pin = wanted.get(text.string.lower())
+            if pin is None:
+                lines.append("delete")
+                continue
+            shape = metal[layer].interacting(db.Region(at))
+            under = [r for r in rects(shape)
+                     if r.contains(db.Point(text.x, text.y))]
+            if not under:
+                x, y = text.x * layout.dbu, text.y * layout.dbu
+                raise CheckError(
+                    f"{gds.name}: the label {pin} at ({x:.3f}, {y:.3f}) "
+                    f"sits on no {layer}, so its "
+                    f"pin would be a 10 nm point; put it on the {layer} the "
+                    "pin is")
+            pin_box = max(under, key=lambda r: r.area())
+            lines.append(f"setlabel box {um(pin_box)}")
+            if ports[pin]:
+                supply_rects.setdefault(pin, set()).update(
+                    r for r in net_metal3(layer, shape) if r != pin_box)
+    for pin, boxes in sorted(supply_rects.items()):
+        for box in sorted(boxes, key=lambda b: (b.left, b.bottom)):
+            lines += ["select clear", f"box {um(box)}",
+                      f"label {tcl_tok(pin)} c metal3",
+                      f"port make [port {tcl_tok(pin)} index]"]
+    return lines + ["select clear"]
+
+
+def lef_pins_too_small(lef: Path, pins: list[str]) -> list[str]:
+    """The pins in `pins` the LEF gives no rectangle at least MIN_PIN_UM
+    on each side - none at all, or only magic's 10 nm label point."""
+    text = lef.read_text(encoding="utf-8", errors="replace")
+    bad = []
+    for pin in pins:
+        m = re.search(rf"^\s*PIN\s+{re.escape(pin)}\s*$(.*?)^\s*END\s+"
+                      rf"{re.escape(pin)}\s*$", text,
+                      re.MULTILINE | re.DOTALL | re.IGNORECASE)
+        sides = [(float(x1) - float(x0), float(y1) - float(y0))
+                 for x0, y0, x1, y1 in re.findall(
+                     r"RECT\s+(\S+)\s+(\S+)\s+(\S+)\s+(\S+)\s*;",
+                     m.group(1) if m else "")]
+        if not any(min(s) >= MIN_PIN_UM - 1e-6 for s in sides):
+            bad.append(pin)
+    return bad
+
+
+def write_lef(gds_out: Path, cell: str, ports: list[str],
+              pins: dict[str, bool]) -> Path:
     """magic's LEF abstract of `cell` in gds_out, written beside it;
-    ports are the magic lines that set each pin's use and class. The
-    abstract covers what the cell draws: refuses when it comes out more
-    than 1 um short of that."""
+    ports are the magic lines that set each pin's use and class, pins
+    {name: is a supply} the cell's ports. Each pin is the metal under its
+    label (pin_lines) and everything else the cell draws is OBS, so a
+    router lands only where a port's label says. The abstract covers what
+    the cell draws: refuses when it comes out more than 1 um short of that,
+    or when a pin comes out with no rectangle a router can land on."""
     lef_out = gds_out.with_suffix(".lef")
     layoutlib.fresh(lef_out)
     script = "\n".join([
@@ -247,8 +369,11 @@ def write_lef(gds_out: Path, cell: str, ports: list[str]) -> Path:
         # tile's standard-cell rows (PDN-0179, "Unable to repair all
         # channels"). Cleared, the abstract is everything magic reads.
         "property FIXED_BBOX {}",
-        "port makeall", *ports,
-        "property LEFclass BLOCK", f"lef write {lef_out.name}",
+        "port makeall", *pin_lines(gds_out, cell, pins), *ports,
+        # plain `lef write` made each port's whole net its pin, so the
+        # router dropped vias onto internal metal beside geometry the OBS
+        # never named (ece298a's R-2R DAC, 23 DRC and 73 LVS findings)
+        "property LEFclass BLOCK", f"lef write {lef_out.name} -pinonly",
         "quit -noprompt", ""])
     proc = layoutlib.run_eda(["magic", "-noconsole", "-dnull"],
                              cwd=gds_out.parent, timeout=300,
@@ -263,6 +388,11 @@ def write_lef(gds_out: Path, cell: str, ports: list[str]) -> Path:
                          f"smaller than what {gds_out.name} draws ({drawn}); "
                          "LibreLane would place the macro's geometry off its "
                          "abstract")
+    small = lef_pins_too_small(lef_out, list(pins))
+    if small:
+        raise CheckError(f"magic's abstract {lef_out.name} gives {small} no "
+                         f"pin at least {MIN_PIN_UM} um on each side; label "
+                         "each port on the metal the router should reach")
     return lef_out
 
 
