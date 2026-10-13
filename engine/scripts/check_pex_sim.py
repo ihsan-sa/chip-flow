@@ -110,7 +110,7 @@ def reorder_pins(extracted_text: str, cell: str, want: list[str]) -> str:
             f"{want} - a bench bound to the reference's pins would wire "
             "the layout wrong")
     by_lower = {p.lower(): p for p in have}
-    head = re.compile(rf"^(\s*\.subckt\s+{re.escape(cell)})\s.*$",
+    head = re.compile(rf"^(\s*\.subckt\s+{re.escape(cell)})\s.*(?:\n[ \t]*\+.*)*",
                       re.IGNORECASE | re.MULTILINE)
     return head.sub(lambda m: m.group(1) + " " + " ".join(
         by_lower[p.lower()] for p in want), extracted_text, count=1)

@@ -105,6 +105,15 @@ def test_reorder_pins_puts_extracted_pins_in_reference_order():
     assert out.splitlines()[1] == text.splitlines()[1]
 
 
+def test_reorder_pins_consumes_continuation_lines():
+    body = "X0 iout iref_node vss vss nfet_03v3 w=8u l=0.5u\n.ends\n"
+    text = (".subckt current_mirror iref_node iout\n"
+            "+ vss vdd\n" + body)
+    out = check_pex_sim.reorder_pins(
+        text, "current_mirror", ["iref_node", "iout", "vdd", "vss"])
+    assert out == (".subckt current_mirror iref_node iout vdd vss\n" + body)
+
+
 def test_reorder_pins_refuses_a_different_pin_set():
     text = ".subckt blk a b\n.ends\n"
     with pytest.raises(CheckError, match="pins"):
