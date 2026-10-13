@@ -38,7 +38,10 @@ written -pinonly: each port's pin is the rectangle of metal under its label
 (a supply's adds its net's Metal3) and the rest of the macro is OBS, so the
 router never lands on a port's internal wiring. A port label on no metal of
 its own layer, or a port the LEF gives no pin 0.23 um a side, is a refusal;
-a label that names no port is dropped, its metal OBS. The tile's
+a label that names no port is dropped, its metal OBS. The macro's GDS
+is moved so what it draws starts at (0, 0), and a LEF ORIGIN other than
+0 0 is a refusal: the final GDS puts the cell's origin where OpenROAD put
+the abstract's lower-left, so the two must coincide. The tile's
 Metal4 stripes join the macro on Metal3 only, so a supply pin with no
 Metal3 shape is a `macro_power_unreachable` finding (no harden runs).
 
@@ -97,14 +100,25 @@ def nested(ws: Path, side: str, skill: str) -> Path:
     return sub
 
 
-def clean_gds(src: Path, dst: Path) -> None:
-    """Re-write src without klayout's context-info cell. klayout hides that
-    cell, but magic reads it as a real one, so the hardened GDS comes out
-    with two top cells and LibreLane's KLayout.Render step fails
-    (docs/spikes/macro_harden.md)."""
+def clean_gds(src: Path, dst: Path, cell: str) -> None:
+    """Re-write src without klayout's context-info cell, with `cell` moved
+    so what it draws starts at (0, 0). klayout hides the context cell, but
+    magic reads it as a real one, so the hardened GDS comes out with two
+    top cells and LibreLane's KLayout.Render step fails
+    (docs/spikes/macro_harden.md). A cell drawn below or left of its origin
+    makes magic write a LEF ORIGIN: OpenROAD routes to the abstract's
+    lower-left at the DEF point but the final GDS puts the cell's origin
+    there, so every pin lands off its route (ece298a's R-2R DAC, a Metal3
+    vss strap below y=0, 12 LVS errors)."""
     import klayout.db as db
     layout = db.Layout()
     layout.read(str(src))
+    top = layout.cell(cell)
+    if top is None:
+        raise CheckError(f"{src.name} has no cell {cell!r}")
+    box = top.bbox()
+    if not box.empty() and (box.left or box.bottom):
+        top.transform(db.Trans(-box.left, -box.bottom))
     opts = db.SaveLayoutOptions()
     opts.write_context_info = False
     layout.write(str(dst), opts)
@@ -197,7 +211,7 @@ def analog_macro(analog: Path, signals: dict[str, str], out_dir: Path,
 
     out_dir.mkdir(parents=True, exist_ok=True)
     gds_out = out_dir / f"{cell}.gds"
-    clean_gds(gds, gds_out)
+    clean_gds(gds, gds_out, cell)
     spice_out = out_dir / f"{cell}.spice"
     spice_out.write_text(ref_text, encoding="utf-8")
 
@@ -356,7 +370,10 @@ def write_lef(gds_out: Path, cell: str, ports: list[str],
     label (pin_lines) and everything else the cell draws is OBS, so a
     router lands only where a port's label says. The abstract covers what
     the cell draws: refuses when it comes out more than 1 um short of that,
-    or when a pin comes out with no rectangle a router can land on."""
+    or when a pin comes out with no rectangle a router can land on. The
+    cell must draw from (0, 0) (clean_gds): a LEF ORIGIN other than 0 0 is
+    refused, since the final GDS places the cell's origin, not the
+    abstract's lower-left, where OpenROAD routed to it."""
     lef_out = gds_out.with_suffix(".lef")
     layoutlib.fresh(lef_out)
     script = "\n".join([
@@ -388,6 +405,14 @@ def write_lef(gds_out: Path, cell: str, ports: list[str],
                          f"smaller than what {gds_out.name} draws ({drawn}); "
                          "LibreLane would place the macro's geometry off its "
                          "abstract")
+    origin = lef_origin(lef_out)
+    if any(abs(v) > 0.0005 for v in origin):
+        raise CheckError(f"magic's abstract {lef_out.name} has ORIGIN "
+                         f"{origin[0]:.3f} {origin[1]:.3f}, so the routes "
+                         f"OpenROAD draws to its pins would miss {cell}'s "
+                         "pins in the final GDS; move what the cell draws "
+                         "to start at (0, 0) (clean_gds does this for the "
+                         "assembled top)")
     small = lef_pins_too_small(lef_out, list(pins))
     if small:
         raise CheckError(f"magic's abstract {lef_out.name} gives {small} no "
@@ -420,6 +445,13 @@ def lef_size(lef: Path) -> tuple[float, float]:
     if not m:
         raise CheckError(f"{lef} carries no SIZE")
     return float(m.group(1)), float(m.group(2))
+
+
+def lef_origin(lef: Path) -> tuple[float, float]:
+    """The LEF macro's ORIGIN; (0, 0) when it gives none."""
+    m = re.search(r"^\s*ORIGIN\s+(\S+)\s+(\S+)\s*;", lef.read_text(),
+                  re.MULTILINE)
+    return (float(m.group(1)), float(m.group(2))) if m else (0.0, 0.0)
 
 
 def gds_extent(gds: Path, cell: str) -> tuple[float, float]:
