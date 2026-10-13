@@ -28,16 +28,23 @@ no property error anywhere: the PDK setup drops the extraction-only
 properties, so a property error left is a real W/L/nf difference.
 Anything else is a `netlist_mismatch` finding. The run refuses (exit 2)
 when netgen gives no verdict, when it reports errors reading the setup
-file, and when the macro's cell in the extraction holds fewer
-transistors (counted down its own hierarchy, never the standard cells')
-than its .subckt has - the macro went in as a blackbox, and a match on
-that would be hollow. The recipe is docs/spikes/macro_harden.md's.
+file, and when the macro holds no PDK device at all on the schematic
+side, or its cell in the extraction holds fewer devices of some kind
+than its .subckt has - the macro went in as a blackbox (or empty), and a
+match on that would be hollow. Devices are the PDK's primitives of every
+kind (fets, resistors, caps, diodes, bjts), counted with their m= down
+the macro's own hierarchy; a standard cell inside the macro is expanded
+through the standard-cell spice on the schematic side and through its
+extracted body (or that same spice, if magic left it abstract) on the
+layout side, so both sides are counted alike. The recipe is
+docs/spikes/macro_harden.md's.
 """
 from __future__ import annotations
 
 import argparse
 import re
 import sys
+from collections import Counter
 from pathlib import Path
 
 SCRIPTS = Path(__file__).resolve().parent
@@ -52,29 +59,90 @@ import ttlib  # noqa: E402
 from checklib import CheckError  # noqa: E402
 
 SCRIPT = "check_top_lvs"
-FET_RE = re.compile(r"^[Xx]\S*\s.*\b[np]fet_\w+", re.MULTILINE)
+# PDK primitive models by kind, matched against the lowercased model name;
+# the first that matches wins, so cap_nmos is a cap, not a fet
+DEVICE_KINDS = (
+    ("cap", re.compile(r"^cap_|mim|varactor")),
+    ("diode", re.compile(r"diode")),
+    ("bjt", re.compile(r"(?:^|__)(?:npn|pnp)")),
+    ("fet", re.compile(r"[np]fet")),
+    ("res", re.compile(r"(?:^|__)(?:[np]plus_|[np]polyf_|rm\d|tm\d+k|nwell$"
+                       r"|efuse|res_)")),
+)
 FINAL_RE = re.compile(r"^Final result:\s*(.*)$", re.MULTILINE)
 SETUP_ERR = "errors reading the setup file"
 SUBCKT_RE = re.compile(r"^\.subckt\s+(\S+)(.*?)^\.ends\b", re.I | re.M | re.S)
 
 
-def macro_fets(text: str, name: str) -> int:
-    """Transistors under `.subckt name` in a spice text, counted down
-    through any subcells it instantiates - 0 when it holds none or is not
-    defined, which is what a blackboxed macro looks like."""
-    bodies = {m.group(1): m.group(2) for m in SUBCKT_RE.finditer(text)}
+def device_kind(model: str) -> str | None:
+    """'fet', 'res', 'cap', 'diode' or 'bjt' for a PDK primitive model,
+    None for anything else (a subcell, an ideal element)."""
+    low = model.lower()
+    return next((k for k, rx in DEVICE_KINDS if rx.search(low)), None)
 
-    def count(cell: str, seen: frozenset) -> int:
-        body = bodies.get(cell)
+
+def subckt_bodies(text: str) -> dict:
+    """{cell: body} for every .subckt in a spice text, the cell name
+    lowercased as spice reads it, with continuation lines joined onto the
+    line they continue."""
+    text = re.sub(r"\n\+", " ", text)
+    return {m.group(1).lower(): m.group(2) for m in SUBCKT_RE.finditer(text)}
+
+
+def macro_devices(text: str, name: str, lib: dict | None = None) -> Counter:
+    """PDK devices by kind under `.subckt name` in a spice text, each
+    weighted by its m=, counted down through the subcells it instantiates.
+    A subcell the text does not define is looked up in `lib` (the
+    standard-cell bodies, subckt_bodies of the library spice); one found in
+    neither counts nothing. Empty when the macro holds no device or is not
+    defined, which is what a blackboxed macro looks like."""
+    bodies, lib = subckt_bodies(text), lib or {}
+
+    def count(cell: str, seen: frozenset) -> Counter:
+        cell = cell.lower()
+        body = bodies.get(cell, lib.get(cell))
         if body is None or cell in seen:
-            return 0
-        n = len(FET_RE.findall(body))
+            return Counter()
+        n = Counter()
         for line in body.splitlines():
-            if line[:1] in "Xx" and not FET_RE.match(line):
-                words = [w for w in line.split()[1:] if "=" not in w]
-                n += count(words[-1], seen | {cell}) if words else 0
+            words = line.split()
+            if not words or words[0][:1].upper() not in "XMRCDQ":
+                continue
+            m = 1
+            for w in words[1:]:
+                if w.lower().startswith("m="):
+                    try:
+                        m = max(int(float(w[2:])), 1)
+                    except ValueError:
+                        pass
+            plain = [w for w in words[1:] if "=" not in w]
+            model = plain[-1] if plain else ""
+            kind = device_kind(model)
+            if kind:
+                n[kind] += m
+            elif words[0][:1] in "Xx" and model:
+                for k, v in count(model, seen | {cell}).items():
+                    n[k] += v * m
         return n
     return count(name, frozenset())
+
+
+def macro_guard(sources: list, layout: str, lib: dict) -> tuple:
+    """(got, want): the devices by kind the extraction holds under each
+    .subckt the macro spice texts define, and the devices those .subckts
+    hold. Refuses when the macro holds no device at all, or when the
+    extraction holds fewer of any kind - a blackboxed or empty macro."""
+    want, got = Counter(), Counter()
+    for src in sources:
+        for name in {m.group(1) for m in SUBCKT_RE.finditer(src)}:
+            want += macro_devices(src, name, lib)
+            got += macro_devices(layout, name, lib)
+    if not want or any(got[k] < n for k, n in want.items()):
+        raise CheckError(f"the extracted macro cell holds {dict(got)} "
+                         f"device(s) but its .subckt has {dict(want)} - the "
+                         "macro went in as a blackbox (or its .subckt is "
+                         "empty), so no LVS verdict on it is possible")
+    return got, want
 
 
 def netgen_setup(pdk_root: Path) -> Path:
@@ -160,17 +228,9 @@ def run(argv=None):
         raise CheckError(str(exc)) from exc
 
     layout = extracted.read_text(errors="replace")
-    want = got = 0
-    for sp in macro_spice:
-        src = sp.read_text(errors="replace")
-        for name in {m.group(1) for m in SUBCKT_RE.finditer(src)}:
-            want += macro_fets(src, name)
-            got += macro_fets(layout, name)
-    if want == 0 or got < want:
-        raise CheckError(f"the extracted macro cell holds {got} transistor(s) "
-                         f"but its .subckt has {want} - the macro went in as "
-                         "a blackbox (or its .subckt is empty), so no LVS "
-                         "verdict on it is possible")
+    got, want = macro_guard(
+        [sp.read_text(errors="replace") for sp in macro_spice], layout,
+        subckt_bodies(models[0].read_text(errors="replace")))
 
     report = work / "top_lvs.rpt"
     script = work / "top_lvs.tcl"
@@ -198,7 +258,8 @@ def run(argv=None):
             f"netlist with the analog macro: {final}\n{excerpt}", "netgen"))
     payload = checklib.report(SCRIPT, final_dir / "gds", violations, top=top,
                               matched=matched, final=final,
-                              macro_fets_extracted=got, macro_fets_wanted=want,
+                              macro_devices_extracted=dict(got),
+                              macro_devices_wanted=dict(want),
                               report=str(report.relative_to(ws)))
     return payload, args.out
 

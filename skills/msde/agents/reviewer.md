@@ -33,7 +33,7 @@ JSON out, exit 0/1/2. Keep output ASCII. **No web tools.**
    sides (polarity, reset state, which edge)? Do the cosim bounds come
    from the brief, or from what the design produced? Does the top's
    `macros:` entry bind every interface signal, and did `top_lvs` compare
-   the macro device by device (`macro_fets_extracted`)?
+   the macro device by device (`macro_devices_extracted`)?
 3. `attest.py disposition --workspace <ws>`.
 4. Write the digest. You fix nothing and dispatch nothing.
 

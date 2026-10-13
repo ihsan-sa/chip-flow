@@ -331,8 +331,10 @@ def gate_numbers(r: dict) -> str:
     elif g in ("lvs", "top_lvs"):
         if "matched" in f:
             parts.append("match" if f["matched"] else "mismatch")
-        if "macro_fets_extracted" in f:
-            parts.append(f"{f['macro_fets_extracted']}/{f.get('macro_fets_wanted')} macro FETs")
+        if isinstance(f.get("macro_devices_extracted"), dict):
+            got, want = f["macro_devices_extracted"], f.get("macro_devices_wanted") or {}
+            parts.append("macro devices " + ", ".join(
+                f"{got.get(k, 0)}/{n} {k}" for k, n in sorted(want.items())))
     elif g == "precheck" and "checks_run" in f:
         parts.append(f"{f['checks_run']} checks run")
     elif g in ("sim_tt", "sim_pvt", "pex_sim") and f.get("corners"):
