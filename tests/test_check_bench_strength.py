@@ -1121,3 +1121,21 @@ def test_a_sensitivity_on_a_tt_pss_bound_is_refused(tmp_path, monkeypatch, capsy
     scoped_bounds(ws, ["tt_pss"], sensitivity=0.03)
     code, out = run_gate(ws, capsys)
     assert code == 2 and "not scored at tt" in out["error"], out
+
+
+@pytest.mark.parametrize("spec_add, flag, want", [
+    ("", [], 60.0),
+    ("sim_timeout_s: {bench_strength: 400}\n", [], 400.0),
+    ("sim_timeout_s: {bench_strength: 400}\n", ["--timeout", "90"], 90.0),
+])
+def test_bench_strength_timeout_comes_from_spec_then_flag(
+        tmp_path, monkeypatch, capsys, ngspice_timeouts, spec_add, flag, want):
+    ws = make_ws(tmp_path)
+    with (ws / "spec" / "spec.yaml").open("a", encoding="utf-8") as f:
+        f.write(spec_add)
+    monkeypatch.setattr(sim_run, "EDA_BIN",
+                        make_reference_check_fake_eda(tmp_path))
+    code = check_bench_strength.main(["--workspace", str(ws), *flag])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0, out
+    assert ngspice_timeouts and set(ngspice_timeouts) == {want}

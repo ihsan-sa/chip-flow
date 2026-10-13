@@ -170,3 +170,19 @@ def test_dry_run_engine_error_caught_even_with_clean_measures(tmp_path, monkeypa
     assert code == 1, out
     kinds = {v["kind"] for v in out["violations"]}
     assert "sim_engine_error_singular_matrix" in kinds
+
+
+@pytest.mark.parametrize("spec_add, flag, want", [
+    ("", [], 30.0),
+    ("sim_timeout_s: {netlist_lint: 400}\n", [], 400.0),
+    ("sim_timeout_s: {netlist_lint: 400}\n", ["--timeout", "90"], 90.0),
+])
+def test_netlist_lint_timeout_comes_from_spec_then_flag(
+        tmp_path, monkeypatch, ngspice_timeouts, spec_add, flag, want):
+    ws = make_ws(tmp_path)
+    with (ws / "spec" / "spec.yaml").open("a", encoding="utf-8") as f:
+        f.write(spec_add)
+    monkeypatch.setattr(sim_run, "EDA_BIN", make_fake_eda(tmp_path, CLEAN_STDOUT))
+    code = check_netlist_lint.main(["--workspace", str(ws), *flag])
+    assert code == 0, ws
+    assert ngspice_timeouts == [want]
