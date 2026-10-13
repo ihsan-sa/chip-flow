@@ -54,6 +54,7 @@ sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(ENGINE / "lib"))
 import checklib  # noqa: E402
 import sim_run  # noqa: E402
+import speclib  # noqa: E402
 
 SCRIPT = "check_sim_pvt"
 DEFAULT_TIMEOUT = 60.0
@@ -62,15 +63,20 @@ DEFAULT_TIMEOUT = 60.0
 def run(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--workspace", required=True, help="block workspace")
-    ap.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
+    ap.add_argument("--timeout", type=float, default=None,
+                    help="ngspice limit per run, s (default: the spec's "
+                    f"sim_timeout_s.sim_pvt, else {DEFAULT_TIMEOUT:g} s)")
     ap.add_argument("--out", help="write result JSON here instead of stdout")
     args = ap.parse_args(argv)
 
     ws = Path(args.workspace)
     corner_list, scoped_out = sim_run.spec_sweep(ws)
+    timeout = speclib.sim_timeout(
+        speclib.load_spec(ws / "spec" / "spec.yaml"), "sim_pvt", args.timeout,
+        DEFAULT_TIMEOUT)
 
     result = sim_run.run_workspace_benches(
-        ws, corners=corner_list, timeout=args.timeout, check="sim_pvt",
+        ws, corners=corner_list, timeout=timeout, check="sim_pvt",
         refuse_unswept=True)
     top, corner_list = result["top"], result["corners"]
     results, violations = result["results"], result["violations"]

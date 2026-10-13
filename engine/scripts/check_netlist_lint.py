@@ -109,18 +109,22 @@ def run(argv=None):
     import argparse
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--workspace", required=True, help="block workspace")
-    ap.add_argument("--timeout", type=float, default=DRY_RUN_TIMEOUT)
+    ap.add_argument("--timeout", type=float, default=None,
+                    help="ngspice limit per run, s (default: the spec's "
+                    f"sim_timeout_s.netlist_lint, else {DRY_RUN_TIMEOUT:g} s)")
     ap.add_argument("--out", help="write result JSON here instead of stdout")
     args = ap.parse_args(argv)
 
     ws = Path(args.workspace)
     spec = speclib.load_spec(ws / "spec" / "spec.yaml")
+    timeout = speclib.sim_timeout(spec, "netlist_lint", args.timeout,
+                                  DRY_RUN_TIMEOUT)
     netlist_path = sim_run.find_netlist(ws)
     t_root = sim_run.toolchain_root()
     pdk_root = sim_run.pdk_root(t_root)
 
     violations = static_violations(ws, spec, netlist_path, pdk_root)
-    violations += dry_run_violations(ws, timeout=args.timeout)
+    violations += dry_run_violations(ws, timeout=timeout)
 
     # stamp() hashes exactly this path as input_digest; gate.py's own
     # record_gate cross-checks that against invalidation.yaml's gate_inputs

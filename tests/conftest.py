@@ -74,3 +74,27 @@ def unlaunchable_eda(tmp_path, monkeypatch):
     monkeypatch.setattr(layout_gen, "build",
                         lambda ws_, block=None: (gds, "blk", None, {}))
     return ws
+
+
+@pytest.fixture
+def ngspice_timeouts(monkeypatch):
+    """Every time limit simlib.run_ngspice is called with, in call order -
+    the real run still happens (on the test's own fake eda), so a check's
+    result is unchanged; only the limit it passed is recorded."""
+    import sys
+    from pathlib import Path
+
+    lib = Path(__file__).resolve().parents[1] / "engine" / "lib"
+    if str(lib) not in sys.path:
+        sys.path.insert(0, str(lib))
+    import simlib
+
+    seen: list[float] = []
+    real = simlib.run_ngspice
+
+    def recording(eda_bin, deck_path, cwd, timeout):
+        seen.append(timeout)
+        return real(eda_bin, deck_path, cwd, timeout)
+
+    monkeypatch.setattr(simlib, "run_ngspice", recording)
+    return seen

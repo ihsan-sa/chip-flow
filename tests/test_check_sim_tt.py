@@ -243,3 +243,55 @@ def test_real_floating_gate_node_fails_despite_exit_0_and_clean_prints(tmp_path,
     assert code == 1, out
     kinds = {v["kind"] for v in out["violations"]}
     assert any(k.startswith("sim_engine_error") for k in kinds), out
+
+
+# the spec's sim_timeout_s.sim_tt sets the limit, --timeout overrides it,
+# and with neither the old 60 s default holds
+@pytest.mark.parametrize("spec_add, flag, want", [
+    ("", [], 60.0),
+    ("sim_timeout_s: {sim_tt: 400}\n", [], 400.0),
+    ("sim_timeout_s: {sim_pvt: 400}\n", [], 60.0),
+    ("sim_timeout_s: {sim_tt: 400}\n", ["--timeout", "90"], 90.0),
+])
+def test_sim_tt_timeout_comes_from_spec_then_flag(
+        tmp_path, monkeypatch, capsys, ngspice_timeouts, spec_add, flag, want):
+    ws = make_ws(tmp_path)
+    with (ws / "spec" / "spec.yaml").open("a", encoding="utf-8") as f:
+        f.write(spec_add)
+    eda = make_fake_eda(tmp_path, "\n  Measurements for Transient Analysis\n"
+                                  "iout_ratio            =  2.00000e+00\n")
+    monkeypatch.setattr(sim_run, "EDA_BIN", eda)
+    code = check_sim_tt.main(["--workspace", str(ws), *flag])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0, out
+    assert ngspice_timeouts == [want]
+
+
+def test_sim_tt_timeout_is_a_finding_naming_the_spec_knob(tmp_path, monkeypatch,
+                                                         capsys):
+    # a synthetic slow bench: the fake ngspice outlives the spec's limit
+    ws = make_ws(tmp_path)
+    with (ws / "spec" / "spec.yaml").open("a", encoding="utf-8") as f:
+        f.write("sim_timeout_s: {sim_tt: 0.3}\n")
+    eda = make_fake_eda(tmp_path, "")
+    eda.write_text(eda.read_text(encoding="utf-8").replace(
+        "cat <<", "exec sleep 5\ncat <<"), encoding="utf-8")
+    monkeypatch.setattr(sim_run, "EDA_BIN", eda)
+    code = check_sim_tt.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 1, out
+    hit = [v for v in out["violations"]
+           if v["kind"] == "sim_engine_error_sim_timeout"]
+    assert hit, out
+    assert "sim_timeout_s: {sim_tt: <seconds>}" in hit[0]["msg"]
+
+
+def test_sim_tt_refuses_a_bad_spec_timeout(tmp_path, monkeypatch, capsys):
+    ws = make_ws(tmp_path)
+    with (ws / "spec" / "spec.yaml").open("a", encoding="utf-8") as f:
+        f.write("sim_timeout_s: {sim_tt: 0}\n")
+    monkeypatch.setattr(sim_run, "EDA_BIN", make_fake_eda(tmp_path, ""))
+    code = check_sim_tt.main(["--workspace", str(ws)])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 2, out
+    assert "sim_timeout_s" in out["remediation"]

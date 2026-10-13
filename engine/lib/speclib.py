@@ -87,8 +87,19 @@ CHECK_KINDS = {"sim", "formal", "both", "measure"}
 #                        largest allowed top-cell bounding box, in um,
 #                        both positive. check_analog_drc.py measures the
 #                        regenerated GDS against it (absent: not checked)
+#     sim_timeout_s: {<check>: float, ...}   optional; the ngspice time
+#                        limit, in seconds, of each named gate's every run -
+#                        <check> one of SIM_TIMEOUT_CHECKS, each value in
+#                        (0, MAX_SIM_TIMEOUT_S]. A check left out keeps its
+#                        own default; the check's --timeout flag overrides
+#                        it (sim_timeout()). A run past it is still a
+#                        refusal or a finding, never a pass
 
 ADE_MEASURE_CORNER_KINDS = {"default", "all"}
+# the gates that run ngspice, each with a --timeout and a default of its own
+SIM_TIMEOUT_CHECKS = ("netlist_lint", "sim_tt", "sim_pvt", "mc",
+                      "bench_strength", "pex_sim")
+MAX_SIM_TIMEOUT_S = 3600.0
 STD_CELL_PATTERN = r"^gf180mcu_fd_sc_mcu(7t|9t)5v0__[a-z0-9_]+$"
 
 
@@ -212,7 +223,64 @@ def lint_spec_ade(spec: dict, rel_path: str = "spec/spec.yaml") -> list[dict]:
         bad("bad_footprint", "spec.yaml 'footprint_um' must be exactly "
                              "{width, height}, each a positive number of um")
 
+    if "sim_timeout_s" in spec:
+        problem = sim_timeout_problem(spec["sim_timeout_s"])
+        if problem:
+            bad("bad_sim_timeout", problem)
+
     return out
+
+
+def _timeout_ok(v) -> bool:
+    return (not isinstance(v, bool) and isinstance(v, (int, float))
+            and 0 < v <= MAX_SIM_TIMEOUT_S)
+
+
+def sim_timeout_problem(field) -> str | None:
+    """What is wrong with a spec's `sim_timeout_s` field, or None."""
+    if not isinstance(field, dict) or not field:
+        return ("spec.yaml 'sim_timeout_s' must be a non-empty mapping "
+                f"{{check: seconds}}, check one of {list(SIM_TIMEOUT_CHECKS)}")
+    unknown = sorted(str(k) for k in field if k not in SIM_TIMEOUT_CHECKS)
+    if unknown:
+        return (f"spec.yaml 'sim_timeout_s' names {unknown}, which run no "
+                f"ngspice; the checks it may name: {list(SIM_TIMEOUT_CHECKS)}")
+    bad = sorted(k for k, v in field.items() if not _timeout_ok(v))
+    if bad:
+        return (f"spec.yaml 'sim_timeout_s' for {bad} must be a number of "
+                f"seconds in (0, {MAX_SIM_TIMEOUT_S:g}]")
+    return None
+
+
+def sim_timeout(spec: dict | None, check: str, override: float | None,
+                default: float) -> float:
+    """The ngspice time limit `check` runs with: the CLI's --timeout
+    (`override`) when given, else the spec's `sim_timeout_s[check]`, else
+    `default`. A bad spec field or a bad override is a CheckError, so a
+    gate never runs on a limit nobody asked for."""
+    from checklib import CheckError
+
+    if override is not None:
+        if not _timeout_ok(override):
+            raise CheckError(f"--timeout {override:g} must be a number of "
+                             f"seconds in (0, {MAX_SIM_TIMEOUT_S:g}]")
+        return float(override)
+    field = (spec or {}).get("sim_timeout_s")
+    if field is None:
+        return default
+    problem = sim_timeout_problem(field)
+    if problem:
+        raise CheckError(problem + " - run spec_lint")
+    return float(field.get(check, default))
+
+
+def timeout_hint(check: str, seconds: float) -> str:
+    """The remediation a timed-out run carries: the knob that raises it."""
+    return (f"{check}'s ngspice run hit its {seconds:g} s limit. If the "
+            f"bench is just slow, raise it in spec/spec.yaml with "
+            f"'sim_timeout_s: {{{check}: <seconds>}}' (at most "
+            f"{MAX_SIM_TIMEOUT_S:g}), or pass --timeout; if it should not "
+            "take that long, it hangs - fix the bench or the netlist")
 
 
 def footprint_um(spec: dict) -> dict | None:

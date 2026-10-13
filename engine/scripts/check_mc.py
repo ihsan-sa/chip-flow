@@ -120,12 +120,15 @@ def mc_applicable(spec: dict) -> bool:
 def run(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--workspace", required=True, help="block workspace")
-    ap.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
+    ap.add_argument("--timeout", type=float, default=None,
+                    help="ngspice limit per run, s (default: the spec's "
+                    f"sim_timeout_s.mc, else {DEFAULT_TIMEOUT:g} s)")
     ap.add_argument("--out", help="write result JSON here instead of stdout")
     args = ap.parse_args(argv)
 
     ws = Path(args.workspace)
     spec = speclib.load_spec(ws / "spec" / "spec.yaml")
+    timeout = speclib.sim_timeout(spec, "mc", args.timeout, DEFAULT_TIMEOUT)
     top = spec.get("top")
 
     # Not applicable: a real answer, but NOT a recordable pass in a
@@ -182,7 +185,7 @@ def run(argv=None):
             bench_name = f"{bench_path.stem}__mc{i}"
             result = sim_run.run_bench_at_corner(
                 eda_bin, bench_name, mc_text, bounds, subs, tt_corner,
-                out_dir, args.timeout, check="mc")
+                out_dir, timeout, check="mc")
             passed = not result["violations"]
             outcomes.append({"bench": bench_path.name, "run": i,
                             "seed": seed, "passed": passed,

@@ -2,7 +2,7 @@
 """check_pex_sim.py - the ade `pex_sim` gate (docs/design.md 1.5, 5,
 "### M9.").
 
-    check_pex_sim.py --workspace DIR [--block NAME] [--out FILE]
+    check_pex_sim.py --workspace DIR [--block NAME] [--timeout SEC] [--out FILE]
 
 Regenerates the GDS fresh (layout_gen.build(), same discipline as
 check_analog_drc.py/check_analog_lvs.py), extracts it with magic including
@@ -52,6 +52,11 @@ finding for the layout generator, one per net, and no bench is run. A
 probe of a net the reference does not have either is a bench bug, not a
 layout one, and is left to ngspice to refuse.
 
+The bench run has a time limit: --timeout when given, else the spec's
+`sim_timeout_s: {pex_sim: N}` (speclib.sim_timeout; a large RC netlist can
+take minutes), else 120 s. A run past it is a refusal whose remediation
+names that knob, never a pass.
+
 "the worst corner" (docs/design.md 1.5) is not run here - M9's own
 boundary is proving the extract-then-resim path on typical; the full
 corner sweep is `/ade`'s `sim_pvt`-style job, out of scope until the skill
@@ -61,6 +66,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -72,9 +78,11 @@ import checklib  # noqa: E402
 import layoutlib  # noqa: E402
 import layout_gen  # noqa: E402
 import netlistlib  # noqa: E402
+import speclib  # noqa: E402
 from checklib import CheckError  # noqa: E402
 
 SCRIPT = "check_pex_sim"
+DEFAULT_TIMEOUT = 120.0
 
 
 def find_bench(ws: Path, block: str) -> tuple[Path, Path]:
@@ -110,7 +118,7 @@ def reorder_pins(extracted_text: str, cell: str, want: list[str]) -> str:
             f"{want} - a bench bound to the reference's pins would wire "
             "the layout wrong")
     by_lower = {p.lower(): p for p in have}
-    head = re.compile(rf"^(\s*\.subckt\s+{re.escape(cell)})\s.*$",
+    head = re.compile(rf"^(\s*\.subckt\s+{re.escape(cell)})\s.*(?:\n[ \t]*\+.*)*",
                       re.IGNORECASE | re.MULTILINE)
     return head.sub(lambda m: m.group(1) + " " + " ".join(
         by_lower[p.lower()] for p in want), extracted_text, count=1)
@@ -227,10 +235,17 @@ def run(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--workspace", required=True, help="block workspace")
     ap.add_argument("--block", help="override state.json's 'block'")
+    ap.add_argument("--timeout", type=float, default=None,
+                    help="ngspice limit, s (default: the spec's "
+                    f"sim_timeout_s.pex_sim, else {DEFAULT_TIMEOUT:g} s)")
     ap.add_argument("--out", help="write result JSON here instead of stdout")
     args = ap.parse_args(argv)
 
     ws = Path(args.workspace).resolve()  # tools run with cwd=log/
+    spec_path = ws / "spec" / "spec.yaml"
+    timeout = speclib.sim_timeout(
+        speclib.load_spec(spec_path) if spec_path.is_file() else None,
+        "pex_sim", args.timeout, DEFAULT_TIMEOUT)
     block = layout_gen.block_of(ws, args.block)
     bench_tpl, bounds_path = find_bench(ws, block)
     bounds = checklib.load_json(bounds_path, "pex_sim bounds")
@@ -286,8 +301,14 @@ def run(argv=None):
     # wrong way never lets outn fall) comes back by name and is a finding
     # below; any other ngspice error still refuses the gate
     never_met: set[str] = set()
-    sim_out = layoutlib.run_ngspice(bench_path, cwd=work_dir, timeout=120.0,
-                                    failed_measures=never_met)
+    try:
+        sim_out = layoutlib.run_ngspice(bench_path, cwd=work_dir,
+                                        timeout=timeout,
+                                        failed_measures=never_met)
+    except layoutlib.LayoutError as exc:
+        if isinstance(exc.__cause__, subprocess.TimeoutExpired):
+            raise CheckError(speclib.timeout_hint("pex_sim", timeout)) from exc
+        raise
     values = layoutlib.parse_ngspice_prints(sim_out)
     if not values:
         raise CheckError(

@@ -105,6 +105,15 @@ def test_reorder_pins_puts_extracted_pins_in_reference_order():
     assert out.splitlines()[1] == text.splitlines()[1]
 
 
+def test_reorder_pins_consumes_continuation_lines():
+    body = "X0 iout iref_node vss vss nfet_03v3 w=8u l=0.5u\n.ends\n"
+    text = (".subckt current_mirror iref_node iout\n"
+            "+ vss vdd\n" + body)
+    out = check_pex_sim.reorder_pins(
+        text, "current_mirror", ["iref_node", "iout", "vdd", "vss"])
+    assert out == (".subckt current_mirror iref_node iout vdd vss\n" + body)
+
+
 def test_reorder_pins_refuses_a_different_pin_set():
     text = ".subckt blk a b\n.ends\n"
     with pytest.raises(CheckError, match="pins"):
@@ -375,3 +384,84 @@ def test_long_output_line_fails_pex_sim(tmp_path):
     assert bad == {"f3db"}
     gate_result = gate.evaluate("pex_sim", _pex_sim_gate_row(), out)
     assert gate_result["status"] == "fail"
+
+
+def _rc_extract(monkeypatch):
+    import layoutlib
+
+    def extracted(work_dir, gds, cell, parasitics):
+        p = work_dir / f"{cell}.pex.spice"
+        p.write_text(".subckt blk a b\nR0 a b 12.5\nC0 a b 0.1f\n.ends\n",
+                     encoding="utf-8")
+        return p, ""
+
+    monkeypatch.setattr(layoutlib, "run_magic_extract", extracted)
+
+
+# brief: "let a block's spec set the simulation time limit in a place the
+# gate reads ... the CLI --timeout flag overrides it. Keep the current
+# defaults when the spec says nothing."
+@pytest.mark.parametrize("spec, flag, want", [
+    (None, [], 120.0),
+    ("top: blk\n", [], 120.0),
+    ("top: blk\nsim_timeout_s: {pex_sim: 900}\n", [], 900.0),
+    ("top: blk\nsim_timeout_s: {sim_tt: 900}\n", [], 120.0),
+    ("top: blk\nsim_timeout_s: {pex_sim: 900}\n", ["--timeout", "30"], 30.0),
+    (None, ["--timeout", "30"], 30.0),
+])
+def test_pex_sim_timeout_comes_from_spec_then_flag(unlaunchable_eda, tmp_path,
+                                                   monkeypatch, spec, flag,
+                                                   want):
+    import layoutlib
+    ws = unlaunchable_eda
+    if spec is not None:
+        (ws / "spec").mkdir()
+        (ws / "spec" / "spec.yaml").write_text(spec, encoding="utf-8")
+    _rc_extract(monkeypatch)
+    seen = []
+
+    class Proc:
+        returncode = 0
+        stderr = ""
+        stdout = "x = 5.0e-01\n"
+
+    def fake_eda(args, cwd=None, timeout=0.0, stdin_text=None):
+        seen.append(timeout)
+        return Proc()
+
+    monkeypatch.setattr(layoutlib, "run_eda", fake_eda)
+    code, out = run_json(["--workspace", str(ws), *flag], tmp_path)
+    assert code == 0, out
+    assert seen == [want]
+
+
+def test_pex_sim_timeout_is_a_refusal_naming_the_spec_knob(unlaunchable_eda,
+                                                           monkeypatch,
+                                                           capsys):
+    # a synthetic slow bench: a stand-in ngspice that outlives the spec's
+    # limit, run through the real subprocess timeout
+    import layoutlib
+    ws = unlaunchable_eda
+    (ws / "spec").mkdir()
+    (ws / "spec" / "spec.yaml").write_text(
+        "top: blk\nsim_timeout_s: {pex_sim: 0.3}\n", encoding="utf-8")
+    _rc_extract(monkeypatch)
+    slow = ws.parent / "slow_eda"
+    slow.write_text("#!/usr/bin/env bash\nexec sleep 5\n", encoding="utf-8")
+    slow.chmod(0o755)
+    monkeypatch.setattr(layoutlib, "EDA_BIN", slow)
+    code, out = run_err(["--workspace", str(ws)], capsys)
+    assert code == 2, out
+    assert "0.3 s limit" in out["remediation"]
+    assert "sim_timeout_s: {pex_sim: <seconds>}" in out["remediation"]
+
+
+def test_pex_sim_refuses_a_bad_spec_timeout(unlaunchable_eda, monkeypatch,
+                                            capsys):
+    ws = unlaunchable_eda
+    (ws / "spec").mkdir()
+    (ws / "spec" / "spec.yaml").write_text(
+        "top: blk\nsim_timeout_s: {pex_sim: 9000}\n", encoding="utf-8")
+    code, out = run_err(["--workspace", str(ws)], capsys)
+    assert code == 2, out
+    assert "sim_timeout_s" in out["remediation"]

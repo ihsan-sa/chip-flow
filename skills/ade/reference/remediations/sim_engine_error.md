@@ -19,10 +19,11 @@ trusted, whatever the exit code said. Routes to `netlist`.
   say so in OPEN - the bench-writer owns `tb/`.
 - `{{...}}` left in a deck: a token `simlib.materialize` does not know.
 - *Timeout* (`sim_timeout`): the run hit its time limit (60 s unless the
-  bench asks for more), so nothing it printed is scored. A long sweep (a
-  256-code DAC bench) needs a `* sim_timeout_s: <seconds>` line in its
-  tb/*.cir, up to 3600; that is the bench-writer's to add, so say so in
-  OPEN. A small bench that times out is hanging, and the cause is usually
+  spec or the bench asks for more), so nothing it printed is scored. A long
+  sweep (a 256-code DAC bench) needs a `* sim_timeout_s: <seconds>` line in
+  its tb/*.cir, up to 3600; that is the bench-writer's to add, so say so in
+  OPEN. A limit for every bench of one gate goes in spec.yaml as
+  `sim_timeout_s: {<gate>: <seconds>}` (bad_sim_timeout.md). A small bench that times out is hanging, and the cause is usually
   a convergence one above.
 
 **Trap:** a `uic` cold start hides a bad operating point (docs/spikes/

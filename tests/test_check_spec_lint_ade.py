@@ -203,3 +203,28 @@ def test_spec_grid_with_extra_passes_and_bad_extra_is_bad_corners(tmp_path, caps
         assert check_spec_lint_ade.main(["--workspace", str(ws)]) == 1
         out = json.loads(capsys.readouterr().out)
         assert [v["kind"] for v in out["violations"]] == ["bad_corners"]
+
+
+def test_sim_timeout_within_the_cap_passes(tmp_path, capsys):
+    ws = make_ws(tmp_path, GOOD_YAML + "sim_timeout_s: {pex_sim: 900, "
+                 "sim_tt: 120.5, sim_pvt: 3600}\n")
+    code = check_spec_lint_ade.main(["--workspace", str(ws)])
+    assert code == 0, capsys.readouterr().out
+
+
+@pytest.mark.parametrize("field", [
+    "{pex_sim: 0}",                      # not positive
+    "{pex_sim: -10}",
+    "{pex_sim: 3601}",                   # past the cap
+    "{pex_sim: '600'}",                  # not a number
+    "{pex_sim: true}",
+    "{analog_drc: 600}",                 # runs no ngspice
+    "{}",                                # empty
+    "600",                               # not a mapping
+])
+def test_bad_sim_timeout_is_refused(tmp_path, capsys, field):
+    ws = make_ws(tmp_path, GOOD_YAML + f"sim_timeout_s: {field}\n")
+    code = check_spec_lint_ade.main(["--workspace", str(ws)])
+    assert code == 1
+    out = json.loads(capsys.readouterr().out)
+    assert [v["kind"] for v in out["violations"]] == ["bad_sim_timeout"]

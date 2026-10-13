@@ -44,8 +44,9 @@ directly, IN-PROCESS - the same shape check_sim.py uses for cocotblib
 subprocess of this script. The CLI below is for standalone smoke use and
 parity with /hwde's own sim_run.py entry point.
 
-Timeout: each bench run gets the caller's --timeout (default 60 s), or
-longer when the bench asks for it with a comment line in its tb/*.cir -
+Timeout: each bench run gets the caller's limit - the gate's --timeout,
+else the spec's `sim_timeout_s: {<gate>: N}` (speclib.sim_timeout), else
+60 s - or longer when the bench asks for it with a comment line in its tb/*.cir -
 `* sim_timeout_s: 600` - which the bench-writer sets for a long sweep (a
 256-code DAC bench). The larger of the two wins, capped at
 MAX_BENCH_TIMEOUT. A run that times out is a `sim_engine_error_sim_timeout`
@@ -222,6 +223,8 @@ def run_bench_at_corner(eda_bin: Path, bench_name: str,
     if err_kinds:
         tail_lines = [ln for ln in (stderr or stdout).strip().splitlines() if ln.strip()]
         detail = tail_lines[-1][:300] if tail_lines else "(no output)"
+        if "sim_timeout" in err_kinds and check in speclib.SIM_TIMEOUT_CHECKS:
+            detail += " - " + speclib.timeout_hint(check, timeout)
         violations += simlib.engine_error_violations(
             check, bench_name, corner["name"], err_kinds, detail)
     names = corners_mod.names_of(corner)
