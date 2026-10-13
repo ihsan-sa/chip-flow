@@ -244,13 +244,14 @@ def test_clean_gds_moves_a_cell_drawn_below_its_origin_to_it(tmp_path):
 
 
 def _dcf1a(region_of, box) -> "db.Region":
-    """The PDK's DCF.1a (dummy_comp.rb) on one cell: 20 um or more with no
-    COMP, COMP_Dummy or keep-out, 10 um in from the extent."""
+    """The PDK's DCF.1a (dummy_comp.rb) on one cell placed in a tile: 20 um
+    or more with no COMP, COMP_Dummy or keep-out, counting LibreLane's 10
+    um halo around the cell as bare and what lies past it as filled."""
     def ring(r, d):
         return r.sized(d * 1000) - r.sized(-d * 1000)
     keep = (region_of(110, 5) + ring(region_of(21, 0), 1)
             + ring(region_of(12, 0), 2))
-    return (db.Region(box).sized(-10000) - region_of(22, 0)
+    return (db.Region(box).sized(10000) - region_of(22, 0)
             - region_of(22, 4) - keep).sized(-10000).sized(10000)
 
 
@@ -259,7 +260,8 @@ def test_fill_macro_fills_the_comp_gap_and_keeps_off_the_circuit(tmp_path):
     DAC's left an unfilled COMP gap (breakage 37): fill_macro puts
     COMP_Dummy in the gap, so DCF.1a finds nothing, and keeps it off the
     COMP, poly, well edge and resistor marker by the PDK's own spaces and
-    off the macro's edge; it adds no other layer and moves no extent."""
+    inside the macro's extent; it adds no other layer and moves no
+    extent."""
     layout = db.Layout()
     layout.dbu = 0.001
     cell = layout.create_cell("mac")
@@ -306,8 +308,7 @@ def test_fill_macro_fills_the_comp_gap_and_keeps_off_the_circuit(tmp_path):
     assert fill.separation_check(region_of(30, 0), 1500).is_empty()  # DCF.5
     assert fill.separation_check(region_of(21, 0), 1300).is_empty()  # 6a
     assert fill.separation_check(region_of(110, 5), 3500).is_empty()  # 8a
-    inner = db.Region(box).sized(-round(check_top_harden.FILL_EDGE * 1000))
-    assert (fill - inner).is_empty()
+    assert (fill - db.Region(box)).is_empty()
     with pytest.raises(CheckError, match="no cell 'nope'"):
         check_top_harden.fill_macro(gds, "nope")
 

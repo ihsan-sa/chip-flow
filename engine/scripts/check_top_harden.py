@@ -151,10 +151,11 @@ FILL_RING = {             # well edges, filled neither side (DCF.6abcd)
     (55, 0): 1.3,         # Dualgate
 }
 # fill_comp.rb keeps 26 um off a die's edge for the scribe line (DCF.7a); a
-# macro's edge is inside the die, so the fill stops only as far in as the
-# widest space above but the pad's (a pad is never beside a macro): DNWELL's
-# 4 um, so no COMP, well edge or fill the top puts outside can come too close.
-FILL_EDGE = 4.0
+# macro's edge is inside the die, so the fill runs right up to it. Nothing
+# the top draws comes near: LibreLane keeps its 10 um macro halo free of
+# standard cells, past DCF.4's 3.5 um and every well space above, and that
+# halo is bare COMP, so a strip the fill left bare inside the macro's edge
+# would add to it towards DCF.1a's 20 um.
 
 
 def fill_macro(gds: Path, cell: str) -> int:
@@ -185,7 +186,7 @@ def fill_macro(gds: Path, cell: str) -> int:
             return db.Region()
         return db.Region(top.begin_shapes_rec(idx)).merged()
 
-    frame = db.Region(top.bbox()).sized(round(-FILL_EDGE * um))
+    frame = db.Region(top.bbox())
     keep_out = db.Region()
     for spec, space in FILL_KEEPOUT.items():
         keep_out += shapes(spec).sized(round(space * um))
