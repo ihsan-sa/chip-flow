@@ -243,6 +243,76 @@ def test_clean_gds_moves_a_cell_drawn_below_its_origin_to_it(tmp_path):
         check_top_harden.clean_gds(src, dst, "nope")
 
 
+def _dcf1a(region_of, box) -> "db.Region":
+    """The PDK's DCF.1a (dummy_comp.rb) on one cell placed in a tile: 20 um
+    or more with no COMP, COMP_Dummy or keep-out, counting LibreLane's 10
+    um halo around the cell as bare and what lies past it as filled."""
+    def ring(r, d):
+        return r.sized(d * 1000) - r.sized(-d * 1000)
+    keep = (region_of(110, 5) + ring(region_of(21, 0), 1)
+            + ring(region_of(12, 0), 2))
+    return (db.Region(box).sized(10000) - region_of(22, 0)
+            - region_of(22, 4) - keep).sized(-10000).sized(10000)
+
+
+def test_fill_macro_fills_the_comp_gap_and_keeps_off_the_circuit(tmp_path):
+    """A macro whose devices sit at one end of a 120 um extent, as the R-2R
+    DAC's left an unfilled COMP gap (breakage 37): fill_macro puts
+    COMP_Dummy in the gap, so DCF.1a finds nothing, and keeps it off the
+    COMP, poly, well edge and resistor marker by the PDK's own spaces and
+    inside the macro's extent; it adds no other layer and moves no
+    extent."""
+    layout = db.Layout()
+    layout.dbu = 0.001
+    cell = layout.create_cell("mac")
+    for spec, box in [((22, 0), (0, 0, 10, 4)), ((30, 0), (4, -1, 5, 5)),
+                      ((21, 0), (-2, 10, 12, 20)), ((22, 0), (0, 12, 10, 16)),
+                      ((110, 5), (60, 20, 70, 30)),
+                      ((34, 0), (0, 0, 120, 1)), ((34, 0), (0, 59, 120, 60))]:
+        cell.shapes(layout.layer(*spec)).insert(db.DBox(*box))
+    cell.shapes(layout.layer(34, 10)).insert(db.DText("a", 1, 0.5))
+    gds = tmp_path / "mac.gds"
+    layout.write(str(gds))
+
+    def regions(path):
+        ly = db.Layout()
+        ly.read(str(path))
+        top = ly.cell("mac")
+
+        def region_of(l, d):
+            idx = ly.find_layer(l, d)
+            return (db.Region() if idx is None
+                    else db.Region(top.begin_shapes_rec(idx)).merged())
+        return ly, top, region_of
+
+    _ly, before, region_of = regions(gds)
+    box = before.bbox()
+    assert not _dcf1a(region_of, box).is_empty()  # the gap is there
+    kept = {(i.layer, i.datatype): region_of(i.layer, i.datatype)
+            for i in _ly.layer_infos()}
+
+    squares = check_top_harden.fill_macro(gds, "mac")
+    assert squares > 0
+    ly, top, region_of = regions(gds)
+    assert [c.name for c in ly.top_cells()] == ["mac"]
+    assert top.bbox() == box
+    assert _dcf1a(region_of, box).is_empty()
+    fill = region_of(22, 4)
+    assert fill.count() == squares
+    assert {(i.layer, i.datatype) for i in ly.layer_infos()} == {
+        *kept, (22, 4)}
+    for spec, region in kept.items():
+        assert (region_of(*spec) ^ region).is_empty(), spec
+    assert fill.space_check(1900).is_empty()                      # DCF.2b
+    assert fill.separation_check(region_of(22, 0), 3500).is_empty()  # DCF.4
+    assert fill.separation_check(region_of(30, 0), 1500).is_empty()  # DCF.5
+    assert fill.separation_check(region_of(21, 0), 1300).is_empty()  # 6a
+    assert fill.separation_check(region_of(110, 5), 3500).is_empty()  # 8a
+    assert (fill - db.Region(box)).is_empty()
+    with pytest.raises(CheckError, match="no cell 'nope'"):
+        check_top_harden.fill_macro(gds, "nope")
+
+
 def test_lef_origin_reads_the_macro_origin(tmp_path):
     lef = tmp_path / "mac.lef"
     lef.write_text("MACRO mac\n  ORIGIN 2.040 3.200 ;\n"
@@ -505,3 +575,62 @@ def test_a_macro_drawn_off_its_origin_hardens_with_pins_on_their_routes(
     assert (box.left, box.bottom) == (0.0, 0.0)
     payload, _ = check_top_lvs.run(["--workspace", str(ws)])
     assert payload["status"] == "pass", payload.get("violations")
+
+
+@pytest.mark.slow
+def test_a_macro_with_an_unfilled_comp_gap_passes_the_dummy_decks_at_top(
+        tmp_path):
+    """corpus/msde/dac_tile with its vdd and vss rails run 60 um further
+    right and a vdd strap 40 um up from there, so the macro draws a COMP gap
+    no fill reaches, as ece298a's R-2R DAC did (breakage 37: top_drc and the precheck each
+    failed DCF.1a inside the macro, since the top's fill skips it and the
+    block's DRC leaves the dummy decks off). Now top_harden fills the
+    macro's gap with dummy COMP, and top_drc - dummy decks included -
+    top_lvs and the precheck pass, with the LEF still the drawn extent at
+    origin 0 0."""
+    import check_precheck
+    import check_top_drc
+    import check_top_lvs
+    import faults
+    import layout_gen
+
+    rung = faults.CORPUS / "msde" / "dac_tile"
+    ws = faults.make_scratch_workspace(tmp_path, rung, "msde", "dac_tile")
+    gen = ws / "analog" / "layout" / "gen_dac_tile_analog.py"
+    src = gen.read_text(encoding="utf-8")
+    old = ("        layoutlib.rect(top, 0.0, y0, x_right, y1, M1)\n"
+           "        layoutlib.rect(top, 0.0, y0, x_right, y1, M3)\n")
+    assert src.count(old) == 1
+    gen.write_text(src.replace(old, (
+        "        layoutlib.rect(top, 0.0, y0, x_right + 60.0, y1, M1)\n"
+        "        layoutlib.rect(top, 0.0, y0, x_right + 60.0, y1, M3)\n"
+        "        if net == \"vdd\":\n"
+        "            layoutlib.rect(top, x_right + 60.0 - RAIL, y0, "
+        "x_right + 60.0, y1 + 40.0, M3)\n")), encoding="utf-8")
+
+    raw, cell, _abs, _abstract = layout_gen.build(ws / "analog")
+
+    def gap(path: Path) -> "db.Region":
+        ly = db.Layout()
+        ly.read(str(path))
+        top = ly.cell(cell)
+
+        def region_of(l, d):
+            idx = ly.find_layer(l, d)
+            return (db.Region() if idx is None
+                    else db.Region(top.begin_shapes_rec(idx)).merged())
+        return _dcf1a(region_of, top.bbox())
+    assert not gap(raw).is_empty()  # the gap the top's fill never reaches
+
+    payload, _ = check_top_harden.run(["--workspace", str(ws)])
+    assert payload["status"] == "pass", payload.get("violations")
+    macros = ws / "top" / "macros"
+    assert gap(macros / f"{cell}.gds").is_empty()
+    assert check_top_harden.lef_origin(macros / f"{cell}.lef") == (0.0, 0.0)
+    assert check_top_harden.lef_size(macros / f"{cell}.lef") == \
+        pytest.approx(check_top_harden.gds_extent(
+            macros / f"{cell}.gds", cell), abs=1.0)
+    for gate in (check_top_drc, check_top_lvs, check_precheck):
+        payload, _ = gate.run(["--workspace", str(ws)])
+        assert payload["status"] == "pass", (gate.__name__,
+                                             payload.get("violations"))
