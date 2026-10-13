@@ -75,8 +75,9 @@ DRC_SKIPPED = {
                "puts on the block's pins",
     "dummy": "the dummy-fill decks (DCF/DPF/DMF, e.g. DCF.1a: the space "
              "between COMP must be filled) check fill a lone block does not "
-             "have yet; the chip's fill step adds it, for the same reason "
-             "density is off",
+             "have yet; the chip's fill step adds it (msde's top_harden "
+             "fills an analog macro, which the chip's fill skips), for the "
+             "same reason density is off",
 }
 DRC_DECKS = ",".join(["all", *(f"-{d}" for d in DRC_SKIPPED)])
 

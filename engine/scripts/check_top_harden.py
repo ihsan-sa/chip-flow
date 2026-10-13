@@ -41,7 +41,10 @@ its own layer, or a port the LEF gives no pin 0.23 um a side, is a refusal;
 a label that names no port is dropped, its metal OBS. The macro's GDS
 is moved so what it draws starts at (0, 0), and a LEF ORIGIN other than
 0 0 is a refusal: the final GDS puts the cell's origin where OpenROAD put
-the abstract's lower-left, so the two must coincide. The tile's
+the abstract's lower-left, so the two must coincide. Before the LEF is
+written the macro gets the PDK's dummy-COMP fill (fill_macro, the rules of
+the PDK's fill_comp.rb), since the top's fill skips a macro and DCF.1a
+judges the macro's inside at top_drc and the precheck. The tile's
 Metal4 stripes join the macro on Metal3 only, so a supply pin with no
 Metal3 shape is a `macro_power_unreachable` finding (no harden runs).
 
@@ -122,6 +125,100 @@ def clean_gds(src: Path, dst: Path, cell: str) -> None:
     opts = db.SaveLayoutOptions()
     opts.write_context_info = False
     layout.write(str(dst), opts)
+
+
+# Dummy-COMP fill, as the PDK's own libs.tech/klayout/tech/scripts/
+# fill_comp.rb draws it: 5 um squares on COMP_Dummy, 3 um apart (DCF.2a),
+# each row stepped 1.6 um (DCF.3), kept off every layer that script keeps
+# it off, by the same distance (um).
+COMP_DUMMY = (22, 4)
+FILL_SQUARE = 5.0
+FILL_SPACE = 3.0
+FILL_SKEW = 1.6
+FILL_KEEPOUT = {          # (layer, datatype): space, the rule that sets it
+    (22, 0): 3.5,         # COMP, DCF.4
+    (22, 4): FILL_SPACE,  # COMP_Dummy already there, DCF.2a
+    (30, 0): 1.5,         # Poly2, DCF.5
+    (110, 5): 3.5,        # RES_MK, DCF.8a
+    (37, 0): 7.0,         # Pad, DCF.9
+    (111, 5): 3.5,        # NDMY, DCF.11a
+    (151, 5): 3.0,        # IND_MK, DCF.12
+}
+FILL_RING = {             # well edges, filled neither side (DCF.6abcd)
+    (21, 0): 1.3,         # Nwell
+    (12, 0): 4.0,         # DNWELL
+    (204, 0): 1.3,        # LVPWELL
+    (55, 0): 1.3,         # Dualgate
+}
+# fill_comp.rb keeps 26 um off a die's edge for the scribe line (DCF.7a); a
+# macro's edge is inside the die, so the fill stops only as far in as the
+# widest space above but the pad's (a pad is never beside a macro): DNWELL's
+# 4 um, so no COMP, well edge or fill the top puts outside can come too close.
+FILL_EDGE = 4.0
+
+
+def fill_macro(gds: Path, cell: str) -> int:
+    """Draw dummy COMP into `cell` of gds, in place, and return how many
+    squares went in. The top's fill treats the macro as a blockage, and the
+    block's own DRC leaves the dummy decks off (layoutlib.DRC_SKIPPED), so
+    without this nothing fills it and top_drc and the precheck each fail
+    DCF.1a on any 20 um of the macro with no COMP (ece298a's R-2R DAC,
+    breakage 37). COMP_Dummy is the only fill the decks demand - the dummy
+    poly and metal decks only space fill that exists, and density is off.
+    It lies under every metal, and magic reads it as filldiff, which makes
+    no device and connects to nothing, so LVS and the LEF's pins and OBS
+    are as they were. The squares go in as plain shapes, inside the
+    drawn extent, so the extent the LEF and macro_size read is unchanged."""
+    import klayout.db as db
+    layout = db.Layout()
+    layout.read(str(gds))
+    top = layout.cell(cell)
+    if top is None:
+        raise CheckError(f"{gds.name} has no cell {cell!r}")
+    if top.bbox().empty():
+        return 0
+    um = 1 / layout.dbu
+
+    def shapes(spec) -> "db.Region":
+        idx = layout.find_layer(*spec)
+        if idx is None:
+            return db.Region()
+        return db.Region(top.begin_shapes_rec(idx)).merged()
+
+    frame = db.Region(top.bbox()).sized(round(-FILL_EDGE * um))
+    keep_out = db.Region()
+    for spec, space in FILL_KEEPOUT.items():
+        keep_out += shapes(spec).sized(round(space * um))
+    for spec, space in FILL_RING.items():
+        well = shapes(spec)
+        keep_out += (well.sized(round(space * um))
+                     - well.sized(round(-space * um)))
+    region = frame - keep_out
+    if region.is_empty():
+        return 0
+
+    scratch = layout.create_cell(f"{cell}__fill")
+    square = layout.create_cell(f"{cell}__fill_square")
+    box = db.Box(0, 0, round(FILL_SQUARE * um), round(FILL_SQUARE * um))
+    dummy = layout.layer(*COMP_DUMMY)
+    square.shapes(dummy).insert(box)
+    pitch = round((FILL_SQUARE + FILL_SPACE) * um)
+    skew = round(FILL_SKEW * um)
+    scratch.fill_region(region, square.cell_index(), box,
+                        db.Vector(pitch, skew), db.Vector(skew, pitch),
+                        db.Point(), None, db.Vector(), None)
+    scratch.flatten(True)
+    # a skewed fill_region can place one square more than once; merged,
+    # each is drawn once (none touch another: they are 3 um apart)
+    fill = db.Region(scratch.shapes(dummy)).merged()
+    top.shapes(dummy).insert(fill)
+    for tmp in (scratch, layout.cell(f"{cell}__fill_square")):
+        if tmp is not None:
+            layout.delete_cell(tmp.cell_index())
+    opts = db.SaveLayoutOptions()
+    opts.write_context_info = False
+    layout.write(str(gds), opts)
+    return fill.count()
 
 
 def signal_pins(signals: dict[str, str],
@@ -212,6 +309,7 @@ def analog_macro(analog: Path, signals: dict[str, str], out_dir: Path,
     out_dir.mkdir(parents=True, exist_ok=True)
     gds_out = out_dir / f"{cell}.gds"
     clean_gds(gds, gds_out, cell)
+    fill_macro(gds_out, cell)
     spice_out = out_dir / f"{cell}.spice"
     spice_out.write_text(ref_text, encoding="utf-8")
 
