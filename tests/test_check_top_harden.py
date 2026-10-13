@@ -214,6 +214,44 @@ def test_pin_lines_refuse_a_port_label_on_no_metal(tmp_path):
         check_top_harden.pin_lines(gds, "mac", PINNED)
 
 
+def test_clean_gds_moves_a_cell_drawn_below_its_origin_to_it(tmp_path):
+    """The R-2R DAC's vss strap below y=0 (breakage 35): the cleaned cell
+    draws from (0, 0), its labels moved with its metal; a cell already
+    there is left where it is."""
+    layout = db.Layout()
+    layout.dbu = 0.001
+    cell = layout.create_cell("mac")
+    cell.shapes(layout.layer(42, 0)).insert(db.DBox(-2.04, -3.2, 40, -1))
+    cell.shapes(layout.layer(34, 0)).insert(db.DBox(0, 0, 10, 136.36))
+    cell.shapes(layout.layer(34, 10)).insert(db.DText("a", 5, 5))
+    src, dst = tmp_path / "src.gds", tmp_path / "dst.gds"
+    layout.write(str(src))
+    check_top_harden.clean_gds(src, dst, "mac")
+    out = db.Layout()
+    out.read(str(dst))
+    top = out.cell("mac")
+    assert top.dbbox() == db.DBox(0, 0, 42.04, 139.56)
+    texts = [s.dtext for s in top.shapes(out.find_layer(34, 10)).each()]
+    assert [(t.string, t.x, t.y) for t in texts] == [("a", 7.04, 8.2)]
+
+    at_origin = tmp_path / "ok.gds"
+    check_top_harden.clean_gds(dst, at_origin, "mac")
+    again = db.Layout()
+    again.read(str(at_origin))
+    assert again.cell("mac").dbbox() == db.DBox(0, 0, 42.04, 139.56)
+    with pytest.raises(CheckError, match="no cell 'nope'"):
+        check_top_harden.clean_gds(src, dst, "nope")
+
+
+def test_lef_origin_reads_the_macro_origin(tmp_path):
+    lef = tmp_path / "mac.lef"
+    lef.write_text("MACRO mac\n  ORIGIN 2.040 3.200 ;\n"
+                   "  SIZE 210.520 BY 139.560 ;\nEND mac\n")
+    assert check_top_harden.lef_origin(lef) == (2.04, 3.2)
+    lef.write_text("MACRO mac\n  SIZE 1.000 BY 1.000 ;\nEND mac\n")
+    assert check_top_harden.lef_origin(lef) == (0.0, 0.0)
+
+
 def test_lef_pins_too_small_names_point_and_missing_pins(tmp_path):
     lef = tmp_path / "mac.lef"
     lef.write_text("\n".join([
@@ -330,9 +368,14 @@ def test_lef_covers_a_macro_whose_boundary_is_one_flattened_cell(tmp_path):
     gds = tmp_path / "mac.gds"
     layout.write(str(gds))
 
+    # drawn below and left of (0, 0), magic writes ORIGIN 2.040 3.200,
+    # which the final GDS would not honour (breakage 35): refused
+    with pytest.raises(CheckError, match="ORIGIN 2.040 3.200"):
+        check_top_harden.write_lef(gds, "mac", [], {})
+    check_top_harden.clean_gds(gds, gds, "mac")
     lef = check_top_harden.write_lef(gds, "mac", [], {})
     assert check_top_harden.lef_size(lef) == (207.82, 139.56)
-    assert "ORIGIN 2.040 3.200 ;" in lef.read_text()
+    assert check_top_harden.lef_origin(lef) == (0.0, 0.0)
 
     with pytest.raises(check_top_harden.CheckError, match="smaller than"):
         check_top_harden.write_lef(
@@ -420,3 +463,45 @@ def test_a_macro_bounded_like_the_r2r_dac_goes_through_pdn(tmp_path):
         payload, _ = gate.run(["--workspace", str(ws)])
         assert payload["status"] == "pass", (gate.__name__,
                                              payload.get("violations"))
+
+
+@pytest.mark.slow
+def test_a_macro_drawn_off_its_origin_hardens_with_pins_on_their_routes(
+        tmp_path):
+    """corpus/msde/dac_tile with its whole layout moved 2.04 um left and
+    3.2 um down, as the R-2R DAC's vss strap below y=0 left it (breakage
+    35). Magic wrote LEF ORIGIN 2.040 3.200, OpenROAD routed to the
+    abstract placed at the DEF point, and the final GDS put the cell's
+    origin there, so every pin missed its route and top_lvs failed. Now
+    the macro is moved to draw from (0, 0) first, and top_lvs passes."""
+    import check_top_lvs
+    import faults
+
+    rung = faults.CORPUS / "msde" / "dac_tile"
+    ws = faults.make_scratch_workspace(tmp_path, rung, "msde", "dac_tile")
+    gen = ws / "analog" / "layout" / "gen_dac_tile_analog.py"
+    src = gen.read_text(encoding="utf-8")
+    old = ("    dx, dy = -bb.left, -bb.bottom\n"
+           "    shifted = gf.Component()\n"
+           "    shifted.add_ref(top).move((dx, dy))\n"
+           "    layoutlib.rect(shifted, 0.0, 0.0, bb.width(), bb.height(), "
+           "PR_BNDRY)\n")
+    assert src.count(old) == 1
+    gen.write_text(src.replace(old, (
+        "    dx, dy = -bb.left - 2.04, -bb.bottom - 3.2\n"
+        "    shifted = gf.Component()\n"
+        "    shifted.add_ref(top).move((dx, dy))\n"
+        "    layoutlib.rect(shifted, -2.04, -3.2, bb.width() - 2.04, "
+        "bb.height() - 3.2, PR_BNDRY)\n")), encoding="utf-8")
+
+    payload, _ = check_top_harden.run(["--workspace", str(ws)])
+    assert payload["status"] == "pass", payload.get("violations")
+    macros = ws / "top" / "macros"
+    assert check_top_harden.lef_origin(macros / "dac_tile_analog.lef") == (
+        0.0, 0.0)
+    layout = db.Layout()
+    layout.read(str(macros / "dac_tile_analog.gds"))
+    box = layout.cell("dac_tile_analog").dbbox()
+    assert (box.left, box.bottom) == (0.0, 0.0)
+    payload, _ = check_top_lvs.run(["--workspace", str(ws)])
+    assert payload["status"] == "pass", payload.get("violations")
