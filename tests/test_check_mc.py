@@ -286,3 +286,20 @@ def test_design_ngspice_include_is_injected_too():
                                      ".option seed=7"]
     with pytest.raises(CheckError, match="design.ngspice"):
         check_mc.inject_mc_params(".lib 'x/sm141064.spice' typical\n", 7, False)
+
+
+@pytest.mark.parametrize("spec_add, flag, want", [
+    ("", [], 60.0),
+    ("sim_timeout_s: {mc: 400}\n", [], 400.0),
+    ("sim_timeout_s: {mc: 400}\n", ["--timeout", "90"], 90.0),
+])
+def test_mc_timeout_comes_from_spec_then_flag(
+        tmp_path, monkeypatch, capsys, ngspice_timeouts, spec_add, flag, want):
+    ws = make_ws(tmp_path, "mc: {enabled: true, runs: 4, yield_min: 0.75}\n"
+                 + spec_add)
+    monkeypatch.setattr(sim_run, "EDA_BIN",
+                        make_fake_eda(tmp_path, ["2.0", "2.0", "2.0", "9.0"]))
+    code = check_mc.main(["--workspace", str(ws), *flag])
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0, out
+    assert ngspice_timeouts and set(ngspice_timeouts) == {want}

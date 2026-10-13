@@ -435,3 +435,21 @@ def test_a_bound_scoped_to_an_unswept_corner_is_refused(tmp_path, monkeypatch,
     assert "tt_pff" not in out["corners"]
     assert [(v["kind"], v["refs"]) for v in out["violations"]] == [
         ("sim_bound_not_swept", ["iout_ratio"])], out
+
+
+@pytest.mark.parametrize("spec_add, flag, want", [
+    ("", [], 60.0),
+    ("sim_timeout_s: {sim_pvt: 400}\n", [], 400.0),
+    ("sim_timeout_s: {sim_tt: 400}\n", [], 60.0),
+    ("sim_timeout_s: {sim_pvt: 400}\n", ["--timeout", "90"], 90.0),
+])
+def test_sim_pvt_timeout_comes_from_spec_then_flag(
+        tmp_path, monkeypatch, capsys, ngspice_timeouts, spec_add, flag, want):
+    ws = make_ws(tmp_path)
+    with (ws / "spec" / "spec.yaml").open("a", encoding="utf-8") as f:
+        f.write(spec_add)
+    monkeypatch.setattr(sim_run, "EDA_BIN",
+                        make_corner_sensitive_fake_eda(tmp_path))
+    check_sim_pvt.main(["--workspace", str(ws), *flag])
+    capsys.readouterr()
+    assert ngspice_timeouts and set(ngspice_timeouts) == {want}

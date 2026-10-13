@@ -741,7 +741,9 @@ def score_all(state: dict, ids: list[str], jobs: int | None) -> dict:
 def run(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--workspace", required=True, help="block workspace")
-    ap.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
+    ap.add_argument("--timeout", type=float, default=None,
+                    help="ngspice limit per run, s (default: the spec's "
+                    f"sim_timeout_s.bench_strength, else {DEFAULT_TIMEOUT:g} s)")
     ap.add_argument("--jobs", default=os.environ.get(JOBS_ENV, "auto"),
                     help="mutants simulated at once: 'auto' (default; "
                     "max(1, cores - 1-minute load), re-read as it goes) or "
@@ -752,7 +754,10 @@ def run(argv=None):
 
     ws = Path(args.workspace)
     rulings = rulingslib.load(ws, "bench_strength")
-    state = prepare(ws, args.timeout)
+    timeout = speclib.sim_timeout(
+        speclib.load_spec(ws / "spec" / "spec.yaml"), "bench_strength",
+        args.timeout, DEFAULT_TIMEOUT)
+    state = prepare(ws, timeout)
     spec, devices = state["spec"], state["devices"]
     netlist_text = state["netlist_text"]
     baselines, tt_names = state["baselines"], state["tt_names"]

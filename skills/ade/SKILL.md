@@ -127,6 +127,11 @@ P6 -> done and never visits P7/P8.
 | release | P6 | every gate above fresh-pass on the current inputs (`mc` may be declared not applicable) | state.json |
 
 drc, lvs and pex_sim each rebuild the GDS from the generator on every run.
+Every gate that runs ngspice cuts a run off at its default limit (60 s;
+30 s for netlist_lint, 120 s for pex_sim). A block whose benches are slow, such
+as a pex bench on a large RC netlist, sets `sim_timeout_s: {<gate>: <seconds>}`
+in spec.yaml, up to 3600; spec_lint checks it and the gate reads it. A run past
+the limit is never a pass.
 
 ## Run start / resume
 
