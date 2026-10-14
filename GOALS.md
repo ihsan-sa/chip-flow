@@ -1,5 +1,9 @@
 # chip-flow goals
 
+## Standing goals
+
+### Skills that design chips past hard gates
+
 Claude Code skills for designing chips with open tools: `/vde` for digital blocks in Verilog, `/ade` for analog blocks, and `/msde` for a mixed-signal task that drives the other two. Every result has to pass gates that are hard to fool: lint, simulation, formal proof, hardening, timing, DRC, LVS, SPICE at every corner, and planted faults that each gate must catch.
 
 ## Proposed goals
