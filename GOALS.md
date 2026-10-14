@@ -15,6 +15,7 @@ Filed by runs. Each says what done looks like as something a run can check, and 
 ### Land the analog LVS number check
 
 - **Status:** open
+- **Pull requests:** #72 (the branch's commit, carried over by hand; done once it merges)
 - **What:** The branch `track/sensor-counted-rebuild` has one commit for `engine/scripts/check_analog_lvs.py`. `sized_reference()` writes each `sizing.yaml` value into the reference netlist with the `:.6g` format, but YAML reads a value written like `1e-06` (no decimal point) as a string, and formatting a string that way raises. The commit adds `_number()`, which takes a numeric string as its number and refuses anything else, such as `2*w_in`, with a `CheckError` that names the parameter, because netgen can't evaluate an expression. `tests/test_check_analog_lvs.py` gains two tests: one for an exponent string and one for a refused expression. The branch merges onto main without conflicts. Open a PR from it and land it.
 - **Done when:** a PR with this change is merged into main, and `tests/test_check_analog_lvs.py` (including both new tests) and `tests/check.sh` pass on it.
 
