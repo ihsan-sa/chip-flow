@@ -12,13 +12,6 @@ Filed by runs. Each says what done looks like as something a run can check, and 
 - **What:** The branch `track/evals-counter8-round` holds the first round that compares a bare Claude Code run with one using the chip-flow skill. It's built for the counter8 rung and isn't merged yet. `evals/round/round.py` runs 18 headless design runs, one at a time: two arms (bare and skill), three brief levels (`corpus/vde/counter8/spec.terse.md`, `spec.md`, `spec.full.md`) and three repeats. A second invocation resumes where the first stopped. Each run happens in a bubblewrap sandbox (`evals/round/sandbox.py`) that can't read `corpus/`, behind a proxy that lets through only allowed hosts (`proxy.py`). An isolation probe (`probe.py`) has to pass in that exact sandbox before each run starts. The spend limits are in code: $500 across every round, booked in one ledger, and $70 a run. A usage limit in force, or a change to the agent's own config directory during a run, stops the round. It never waits a usage limit out, but it does pause while the machine's load is high. `evals/ladder.py --deliverables` scores both arms through the same code from the files that `evals/arms/footer.md` asks for, and `evals/scorecard.py --round` reports the paired differences. The branch is nine checkpoint commits on top of #56. The last of them were a review fix pass, which added the shared ledger and lock and the live watch on the config directory, so the whole branch needs a fresh review before it lands. Rebase it onto main, review it, fix what the review finds, and open a PR. Running the 18 paid runs isn't part of this goal.
 - **Done when:** a PR with this work is merged into main, and on that PR `tests/test_eval_round.py`, `tests/test_evals_ladder.py`, `tests/test_evals_scorecard.py`, `tests/test_counter8_briefs.py` and `tests/check.sh` all pass. `docs/design-evals.md` must also say which parts of the round are built and which sandbox gaps are still open.
 
-### Land the analog LVS number check
-
-- **Status:** open
-- **Pull requests:** #72 (the branch's commit, carried over by hand; done once it merges)
-- **What:** The branch `track/sensor-counted-rebuild` has one commit for `engine/scripts/check_analog_lvs.py`. `sized_reference()` writes each `sizing.yaml` value into the reference netlist with the `:.6g` format, but YAML reads a value written like `1e-06` (no decimal point) as a string, and formatting a string that way raises. The commit adds `_number()`, which takes a numeric string as its number and refuses anything else, such as `2*w_in`, with a `CheckError` that names the parameter, because netgen can't evaluate an expression. `tests/test_check_analog_lvs.py` gains two tests: one for an exponent string and one for a refused expression. The branch merges onto main without conflicts. Open a PR from it and land it.
-- **Done when:** a PR with this change is merged into main, and `tests/test_check_analog_lvs.py` (including both new tests) and `tests/check.sh` pass on it.
-
 ## Later
 
 Goals waiting for an open slot. When a proposed goal closes, the run that closed it moves the top one here up into Proposed goals as open.
@@ -27,6 +20,7 @@ Goals waiting for an open slot. When a proposed goal closes, the run that closed
 
 What has landed, from the git history (a line per PR).
 
+- Land the analog LVS number check: **Status:** done. `check_analog_lvs` reads exponent strings and refuses expressions ([#73](https://github.com/ihsan-sa/chip-flow/pull/73)). Its two new tests aren't marked slow, so `tests/check.sh` runs them, and it passed on main at 1531ab9.
 - Fill the analog macro so top DRC and precheck pass DCF.1a ([#70](https://github.com/ihsan-sa/chip-flow/pull/70))
 - top_lvs blackbox guard counts every device, not just FETs ([#69](https://github.com/ihsan-sa/chip-flow/pull/69))
 - Harden places a macro at its LEF origin, not its GDS origin ([#68](https://github.com/ihsan-sa/chip-flow/pull/68))
