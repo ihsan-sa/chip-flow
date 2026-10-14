@@ -9,6 +9,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
@@ -23,6 +24,15 @@ CRED_TEXT = '{"claudeAiOauth": {"refreshToken": "FIXTURE-SECRET-xyz"}}'
 
 
 # ------------------------------------------------------------- fixtures
+@pytest.fixture(autouse=True)
+def _global_dir(tmp_path, monkeypatch):
+    """Every Round in these tests books into a temp global lock and ledger,
+    never the box's real one."""
+    g = tmp_path / "global"
+    monkeypatch.setattr(rnd, "default_global_dir", lambda: g)
+    return g
+
+
 def _claude_dir(root: Path) -> Path:
     """A stand-in ~/.claude holding one of each kind of entry."""
     cd = root / ".claude"
@@ -137,10 +147,12 @@ class Fake:
             if raise_on == cid:
                 raise sb.SandboxError("planted failure")
             cost = costs.get(cid, 1.0)
+            known = cost is not None
+            cost = 70.0 if cost is None else cost
             self.r.ledger.reserve(cid, budget)
             self.r.ledger.settle(cid, cost)
             return {"cell": cid, "arm": arm, "probe": {"ok": True},
-                    "cost_usd": cost, "wall_s": 1.0,
+                    "cost_usd": cost, "cost_known": known, "wall_s": 1.0,
                     "credentials": {"ok": True}}
         self.r.run_cell = run_cell
         self.r.export = lambda: tmp / "export"
@@ -197,6 +209,15 @@ def test_round_stops_on_a_per_run_overrun(tmp_path):
     assert "overrun" in out["state"] and len(f.notices) == 1
 
 
+def test_round_stops_on_an_unknown_cost(tmp_path):
+    f = Fake(tmp_path, costs={"skill-terse-r1": None})
+    out = f.r.run()
+    assert [c for c, _ in f.calls] == ["bare-terse-r1", "skill-terse-r1"]
+    assert "cost unknown" in out["state"] and len(f.notices) == 1
+    assert not rnd.overrun_decision(1.0, cost_known=False)["ok"]
+    assert rnd.overrun_decision(1.0, cost_known=True)["ok"]
+
+
 @pytest.mark.parametrize("status", [(0, "usage limit until 12:00Z"),
                                     (3, "weird")])
 def test_round_stops_on_a_usage_limit_without_waiting(tmp_path, status):
@@ -230,6 +251,7 @@ def test_dry_run_sends_no_notice(tmp_path):
     out = f.r.run(only="skill/terse/1")
     assert out["state"] == "dry-run" and f.notices == []
     assert not (f.r.dir / "ledger.json").exists()
+    assert not f.r.ledger.path.exists()
 
 
 def test_only_rejects_a_bad_cell():
@@ -578,7 +600,7 @@ def test_open_checkpoints_reads_only_regular_files(tmp_path):
     assert rnd.open_checkpoints(work2) == []
 
 
-def test_a_new_host_claude_entry_stops_the_round_and_is_kept(cell_env):
+def test_a_new_host_claude_entry_stops_the_round_and_is_quarantined(cell_env):
     home = sb.real_home()
 
     def invoke(layout, cmd, n):
@@ -594,7 +616,13 @@ def test_a_new_host_claude_entry_stops_the_round_and_is_kept(cell_env):
     assert res["invocations"][0]["host_claude_dir_new"] == ["settings.local.json"]
     assert len(res["invocations"]) == 1 and res["stand_in_approvals"] == []
     assert not scored and res["score"]["scored"] is False
-    assert (home / ".claude" / "settings.local.json").is_file()  # not deleted
+    # moved out of the host dir into the run's quarantine, never deleted
+    assert not (home / ".claude" / "settings.local.json").exists()
+    q = Path(res["run_dir"]) / "quarantine" / "inv-0" / "settings.local.json"
+    assert q.read_text() == '{"x": 1}'
+    assert res["quarantined"] == [{"name": "settings.local.json", "to": str(q)}]
+    assert "CREATE" in res["invocations"][0]["host_claude_dir_watch"][
+        "violations"][0]["events"]
 
 
 def test_no_new_host_claude_entry_lets_the_run_finish(cell_env):
@@ -651,3 +679,409 @@ def test_in_sandbox_scripts_are_bound_from_the_run_dir_not_the_repo(tmp_path):
     (lay.opt / "forward.py").unlink()
     with pytest.raises(sb.SandboxError, match="forward.py"):
         sb.build_argv(lay, ["true"])
+
+
+# ------------------------------------------- limits added in the fix pass
+def test_claude_cmd_disallows_the_web_tools_and_caps_the_budget():
+    cmd = rnd.claude_cmd("go", 12.345)
+    i = cmd.index("--disallowedTools")
+    assert cmd[i + 1:i + 3] == ["WebFetch", "WebSearch"]
+    assert cmd[cmd.index("--max-budget-usd") + 1] == "12.35"
+    assert "--resume" not in cmd
+    assert rnd.claude_cmd("ok", 1.0, resume="s")[3:5] == ["--resume", "s"]
+
+
+def test_a_second_round_on_the_same_dir_is_refused_without_a_notice(tmp_path):
+    f = Fake(tmp_path)
+    f.r.dir.mkdir(parents=True)
+    held = f.r.lock()
+    try:
+        with pytest.raises(rnd.RoundError, match="one run at a time"):
+            f.r.run()
+        assert f.calls == [] and f.notices == []
+    finally:
+        held.close()
+    f.r.run(only="bare/terse/1")  # released: the round runs
+    assert len(f.calls) == 1
+
+
+@pytest.mark.parametrize("rc,timed_out", [(137, False), (-9, True), (2, False)])
+def test_a_killed_claude_has_no_cost_even_with_one_clean_object(
+        tmp_path, monkeypatch, rc, timed_out):
+    lay = _layout(tmp_path, "bare")
+
+    def fake_group(argv, stdin, out, err, wall, on_start=None):
+        out.write_text('{"type": "result", "total_cost_usd": 0.01, '
+                       '"session_id": "s"}')
+        err.write_text("")
+        return {"rc": rc, "timed_out": timed_out, "wall_s": 1.0}
+    monkeypatch.setattr(rnd, "run_group", fake_group)
+    r = rnd.Round(tmp_path / "round", log=lambda m: None)
+    rec = r.invoke(lay, ["claude"], 0)
+    assert rec["json"] is False and "total_cost_usd" not in rec
+    assert rnd.known_cost(rec.get("total_cost_usd")) is None
+    monkeypatch.setattr(rnd, "run_group", lambda *a, **k: fake_group(*a) and
+                        {"rc": 1, "timed_out": False, "wall_s": 1.0})
+    assert r.invoke(lay, ["claude"], 1)["total_cost_usd"] == 0.01
+
+
+def test_an_unknown_cost_is_booked_at_budget_and_stops_the_round(cell_env):
+    """A run whose cost is unknown is booked at its whole $70 budget
+    against the $500 cap, and the round stops after it."""
+    calls = []
+
+    def invoke(layout, cmd, n):
+        calls.append(cmd)
+        return {"n": n}
+    cell_env.invoke = invoke
+    cell_env.scorecard = lambda: {"ran": False}
+    out = cell_env.run()
+    assert len(calls) == 1 and cell_env.ledger.spent() == 70.0
+    assert "cost unknown" in out["state"]
+
+
+def test_a_long_challenge_is_capped_in_the_reply(tmp_path):
+    work = tmp_path / "work"
+    _state(work, "presented", "H1-" + "x" * 100_000)
+    [cp] = rnd.open_checkpoints(work)
+    assert len(cp["challenge"]) == rnd.MAX_CHALLENGE_CHARS
+
+
+# ------------------------------------- the live ~/.claude watch (fix pass 2)
+def _watch(cd: Path, kills: list | None = None) -> sb.ClaudeDirWatch:
+    return sb.ClaudeDirWatch(cd, kill=(kills.append if kills is not None
+                                       else lambda pgid: None)).start()
+
+
+def _cred_write(cd: Path, tmp_hex: str = "0123abcd") -> None:
+    """What claude's own credential refresh does in ~/.claude."""
+    lock = cd / sb.WRITE_LOCK
+    lock.mkdir()
+    os.utime(lock)
+    tmp = cd / f"{sb.CREDENTIALS}.tmp.{tmp_hex}"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    os.write(fd, b'{"claudeAiOauth": {}}')
+    os.close(fd)
+    os.chmod(tmp, 0o600)
+    os.rename(tmp, cd / sb.CREDENTIALS)
+    os.chmod(cd / sb.CREDENTIALS, 0o600)
+    lock.rmdir()
+
+
+def test_watch_passes_claude_own_credentials_write(tmp_path):
+    cd = _claude_dir(tmp_path)
+    kills = []
+    w = _watch(cd, kills)
+    w.attach(4242)
+    _cred_write(cd)
+    (cd / "history.jsonl.lock").mkdir()     # a host session's history lock
+    (cd / "history.jsonl.lock").rmdir()
+    (cd / "projects" / "inside.jsonl").write_text("{}")  # not watched
+    rec = w.stop()
+    assert rec["ok"] and rec["violations"] == [] and kills == []
+    assert rec["events_total"] >= 8 and all(e["allowed"] for e in rec["events"])
+    assert rec["mode_before"] == rec["mode_after"]
+
+
+def test_watch_catches_create_then_delete_and_kills_once(tmp_path):
+    cd = _claude_dir(tmp_path)
+    kills = []
+    w = _watch(cd, kills)
+    (cd / "CLAUDE2.md").write_text("load me\n")
+    (cd / "CLAUDE2.md").unlink()
+    deadline = time.time() + 5
+    while not w.violations and time.time() < deadline:
+        time.sleep(0.01)
+    assert w.violations                  # seen live, before stop()
+    w.attach(4242)                       # a trip before the attach kills here
+    rec = w.stop()
+    assert kills == [4242] and rec["killed"]
+    kinds = [(v["name"], v["events"]) for v in rec["violations"]]
+    assert ("CLAUDE2.md", ["CREATE"]) in kinds
+    assert ("CLAUDE2.md", ["DELETE"]) in kinds
+    assert not (cd / "CLAUDE2.md").exists()
+
+
+def test_watch_kills_an_attached_group_on_the_first_violation(tmp_path):
+    cd = _claude_dir(tmp_path)
+    w = sb.ClaudeDirWatch(cd).start()          # the real os.killpg
+    p = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    w.attach(p.pid)
+    t0 = time.monotonic()
+    (cd / "agents2").mkdir()
+    p.wait(timeout=10)
+    rec = w.stop()
+    assert p.returncode == -9 and time.monotonic() - t0 < 5
+    assert rec["killed"] and rec["violations"][0]["name"] == "agents2"
+
+
+@pytest.mark.parametrize("act,want", [
+    ("chmod", ("", "ATTRIB")), ("rm_cred", (sb.CREDENTIALS, "DELETE")),
+    ("move_cred", (sb.CREDENTIALS, "MOVED_FROM")),
+    ("touch_settings", ("settings.json", "ATTRIB")),
+    ("file_named_lock", (sb.WRITE_LOCK, "CREATE")),
+    ("bad_tmp_name", (f"{sb.CREDENTIALS}.tmp.xyz", "CREATE"))])
+def test_watch_catches_what_claude_does_not_do(tmp_path, act, want):
+    cd = _claude_dir(tmp_path)
+    w = _watch(cd)
+    if act == "chmod":
+        cd.chmod(0o777)
+    elif act == "rm_cred":
+        (cd / sb.CREDENTIALS).unlink()
+    elif act == "move_cred":
+        (cd / sb.CREDENTIALS).rename(tmp_path / "stolen")
+    elif act == "touch_settings":
+        os.utime(cd / "settings.json")
+    else:
+        (cd / want[0]).write_text("x")
+    rec = w.stop()
+    assert not rec["ok"]
+    assert any(v["name"] == want[0] and want[1] in v["events"]
+               for v in rec["violations"]), rec["violations"]
+    if act == "chmod":
+        assert rec["mode_before"] != rec["mode_after"]
+        assert any("MODE_CHANGED" in v["events"] for v in rec["violations"])
+
+
+def test_watch_that_cannot_be_set_up_is_a_refusal(tmp_path):
+    with pytest.raises(sb.SandboxError):
+        sb.ClaudeDirWatch(tmp_path / "missing").start()
+    f = tmp_path / "file"
+    f.write_text("")
+    with pytest.raises(sb.SandboxError):
+        sb.ClaudeDirWatch(f).start()
+
+
+def test_allowed_event_is_only_claude_own_credential_write():
+    a = sb.allowed_event
+    tmpn = f"{sb.CREDENTIALS}.tmp.deadbeef"
+    assert a(sb.CREDENTIALS, sb.IN_MOVED_TO) and a(sb.CREDENTIALS, sb.IN_ATTRIB)
+    assert not a(sb.CREDENTIALS, sb.IN_CREATE)
+    assert not a(sb.CREDENTIALS, sb.IN_DELETE)
+    assert a(tmpn, sb.IN_CREATE) and a(tmpn, sb.IN_MOVED_FROM)
+    assert not a(tmpn, sb.IN_MOVED_TO) and not a(tmpn, sb.IN_CREATE | sb.IN_ISDIR)
+    assert a(sb.WRITE_LOCK, sb.IN_CREATE | sb.IN_ISDIR)
+    assert not a(sb.WRITE_LOCK, sb.IN_CREATE)
+    for bad in (sb.IN_Q_OVERFLOW, sb.IN_IGNORED, sb.IN_DELETE_SELF,
+                sb.IN_MOVE_SELF, sb.IN_ATTRIB | sb.IN_ISDIR):
+        assert not a("", bad)
+    assert not a("CLAUDE.md", sb.IN_CREATE)
+
+
+def test_create_then_delete_in_a_run_stops_the_round(cell_env):
+    home = sb.real_home()
+
+    def invoke(layout, cmd, n):
+        (home / ".claude" / "CLAUDE2.md").write_text("be evil\n")
+        (home / ".claude" / "CLAUDE2.md").unlink()
+        return {"n": n, "total_cost_usd": 1.0}
+    cell_env.invoke = invoke
+    cell_env.scorecard = lambda: {"ran": False}
+    out = cell_env.run("bare/terse/1")
+    assert out["status"] == "violations" and "CLAUDE2.md" in out["state"]
+    saved = json.loads((cell_env.results_dir / "bare-terse-r1.json").read_text())
+    assert saved["host_claude_dir_new"] == []          # the listing alone missed it
+    assert not saved["invocations"][0]["host_claude_dir_watch"]["ok"]
+    rd = Path(saved["run_dir"])
+    assert json.loads((rd / "claude-dir-watch-0.json").read_text())["stop"]
+
+
+def test_a_planted_claude_md_is_quarantined_and_a_chmod_stops(cell_env):
+    home = sb.real_home()
+    cd = home / ".claude"
+    (cd / "CLAUDE.md").unlink()              # so a planted one is new
+
+    def invoke(layout, cmd, n):
+        (cd / "CLAUDE.md").write_text("planted memory\n")
+        cd.chmod(0o777)
+        return {"n": n, "total_cost_usd": 1.0}
+    cell_env.invoke = invoke
+    res = cell_env.run_cell("bare", "terse", 1, 70.0, None)
+    assert not (cd / "CLAUDE.md").exists()
+    q = Path(res["run_dir"]) / "quarantine" / "inv-0" / "CLAUDE.md"
+    assert q.read_text() == "planted memory\n"
+    assert "CLAUDE.md" in res["stop"] and "MODE_CHANGED" in res["stop"]
+    w = res["invocations"][0]["host_claude_dir_watch"]
+    assert w["mode_before"] != w["mode_after"] == "0o777"
+
+
+def test_an_allowed_credentials_write_in_a_run_passes(cell_env):
+    cd = sb.real_home() / ".claude"
+
+    def invoke(layout, cmd, n):
+        _cred_write(cd)
+        return {"n": n, "total_cost_usd": 1.0}
+    cell_env.invoke = invoke
+    res = cell_env.run_cell("bare", "terse", 1, 70.0, None)
+    assert "stop" not in res and res["quarantined"] == []
+    assert res["invocations"][0]["host_claude_dir_watch"]["ok"]
+    assert res["score"] == {"scored": True}
+
+
+def test_a_failed_quarantine_move_is_named_loudly(tmp_path):
+    cd = _claude_dir(tmp_path)
+    before = set(os.listdir(cd))
+    (cd / "planted.md").write_text("x")
+    blocker = tmp_path / "blocker"
+    blocker.write_text("")                    # dest under a file: mkdir fails
+    q = sb.quarantine_new(cd, before, blocker / "q")
+    assert q["moved"] == [] and q["failed"][0]["name"] == "planted.md"
+    assert (cd / "planted.md").is_file()      # left, never deleted
+    why = rnd.host_claude_dir_stop(before, set(os.listdir(cd)),
+                                   {"ok": True}, None, q)
+    assert why.startswith("QUARANTINE FAILED") and "planted.md" in why
+
+
+def test_quarantine_leaves_claude_own_temp_and_lock(tmp_path):
+    cd = _claude_dir(tmp_path)
+    before = set(os.listdir(cd))
+    (cd / f"{sb.CREDENTIALS}.tmp.0123abcd").write_text("secret")
+    (cd / sb.WRITE_LOCK).mkdir()
+    q = sb.quarantine_new(cd, before, tmp_path / "q")
+    assert sorted(q["left"]) == sorted([f"{sb.CREDENTIALS}.tmp.0123abcd",
+                                        sb.WRITE_LOCK])
+    assert not (tmp_path / "q").exists()
+
+
+def test_a_watch_that_cannot_start_refuses_the_run(cell_env, monkeypatch):
+    def broken(self):
+        raise sb.SandboxError("inotify unavailable: planted")
+    monkeypatch.setattr(sb.ClaudeDirWatch, "start", broken)
+    calls = []
+    cell_env.invoke = lambda layout, cmd, n: calls.append(n) or {}
+    cell_env.scorecard = lambda: {"ran": False}
+    out = cell_env.run("bare/terse/1")
+    assert calls == [] and out["status"] == "violations"
+    assert "inotify unavailable" in out["state"]
+
+
+@pytest.mark.skipif(shutil.which("bwrap") is None, reason="no bwrap")
+def test_the_watch_sees_a_write_from_inside_the_real_bwrap_layout(tmp_path):
+    """The real sandbox argv (build_argv, a shell instead of claude) over a
+    TEMP copy-layout claude dir: a write from inside trips the watch, which
+    kills the sandbox; claude's own credentials write from inside passes."""
+    lay = _layout(tmp_path, "bare")
+    cd = lay.real_claude_dir
+    keep = []
+
+    def connect(host, port):
+        a, b = socket.socketpair()
+        keep.append(b)
+        return a
+
+    def run(script, name):
+        w = sb.ClaudeDirWatch(cd).start()
+        argv = sb.build_argv(lay, ["/bin/sh", "-c", script])
+        with rnd.proxymod.ConnectProxy(lay.proxy_sock, lay.run_dir / "p.log",
+                                       connect=connect):
+            res = rnd.run_group(argv, None, lay.run_dir / f"{name}.out",
+                                lay.run_dir / f"{name}.err", 60,
+                                on_start=w.attach)
+        return res, w.stop()
+
+    res, rec = run("echo planted > $HOME/.claude/CLAUDE2.md; sleep 30", "bad")
+    assert not rec["ok"] and rec["killed"]
+    assert rec["violations"][0]["name"] == "CLAUDE2.md"
+    assert res["rc"] != 0 and res["wall_s"] < 20
+    assert (cd / "CLAUDE2.md").is_file()      # it did land in the host dir
+    q = sb.quarantine_new(cd, set(os.listdir(cd)) - {"CLAUDE2.md"},
+                          lay.run_dir / "quarantine")
+    assert [m["name"] for m in q["moved"]] == ["CLAUDE2.md"]
+
+    c = "$HOME/.claude"
+    res, rec = run(f"mkdir {c}/{sb.WRITE_LOCK} && "
+                   f"(umask 077; echo '{{}}' > {c}/{sb.CREDENTIALS}.tmp.0a1b2c3d)"
+                   f" && mv {c}/{sb.CREDENTIALS}.tmp.0a1b2c3d {c}/{sb.CREDENTIALS}"
+                   f" && chmod 600 {c}/{sb.CREDENTIALS} && rmdir {c}/{sb.WRITE_LOCK}",
+                   "good")
+    err = (lay.run_dir / "good.err").read_text()
+    assert res["rc"] == 0, err
+    assert rec["ok"], rec["violations"]
+    assert (cd / sb.CREDENTIALS).read_text() == "{}\n"
+
+
+# ----------------------------------- global lock and ledger (fix pass 2)
+def test_a_second_round_dir_is_refused_while_the_global_lock_is_held(tmp_path):
+    a = Fake(tmp_path / "a")
+    b = Fake(tmp_path / "b")
+    assert a.r.global_dir == b.r.global_dir and a.r.dir != b.r.dir
+    held = a.r.lock()
+    try:
+        with pytest.raises(rnd.RoundError, match="one run at a time"):
+            b.r.run(only="bare/terse/1")
+        assert b.calls == [] and b.notices == []
+    finally:
+        held.close()
+
+
+def test_spend_in_one_round_dir_counts_against_another(tmp_path):
+    a = Fake(tmp_path / "a", costs={rnd.cell_id(x, d, r): 60.0 for x in rnd.ARMS
+                                    for d in rnd.DETAILS for r in rnd.REPEATS})
+    a.r.run()
+    assert a.r.ledger.spent() == 480.0
+    b = Fake(tmp_path / "b")
+    out = b.r.run()
+    assert b.calls == [] and "budget" in out["state"]
+    assert b.r.ledger.spent() == 480.0 and b.r.ledger.spent_here() == 0.0
+    assert not (a.r.dir / "ledger.json").exists()
+
+
+def test_a_round_dir_with_its_own_old_ledger_is_refused(tmp_path):
+    f = Fake(tmp_path)
+    f.r.dir.mkdir(parents=True)
+    (f.r.dir / "ledger.json").write_text('{"entries": []}')
+    with pytest.raises(rnd.RoundError, match="before the global one"):
+        f.r.run(only="bare/terse/1")
+    assert f.calls == []
+
+
+def test_main_has_no_option_for_the_global_dir():
+    with pytest.raises(SystemExit):
+        rnd.main(["--global-dir", "/tmp/x", "--dry-run"])
+
+
+# ------------------------------- the one notice, however it ends (fix pass 2)
+def test_a_type_error_from_a_cell_still_sends_one_notice(tmp_path):
+    f = Fake(tmp_path)
+
+    def run_cell(*a):
+        raise TypeError("a bug in a cell")
+    f.r.run_cell = run_cell
+    with pytest.raises(TypeError):
+        f.r.run(only="bare/terse/1")
+    assert len(f.notices) == 1 and f.notices[0][0] == "stopped"
+    assert "TypeError: a bug in a cell" in f.notices[0][1]
+
+
+@pytest.mark.parametrize("after_notice", [False, True])
+def test_a_type_error_from_summarize_still_sends_one_notice(tmp_path,
+                                                            after_notice):
+    f = Fake(tmp_path)
+
+    def summarize(state, reason):
+        if after_notice:
+            f.r.notice(state, "summary notice")
+        raise TypeError("a bug in summarize")
+    f.r.summarize = summarize
+    with pytest.raises(TypeError):
+        f.r.run(only="bare/terse/1")
+    assert len(f.notices) == 1
+    if after_notice:
+        assert f.notices[0] == ("finished", "summary notice")
+    else:
+        assert f.notices[0][0] == "stopped"
+        assert "summary failed: TypeError" in f.notices[0][1]
+
+
+def test_main_reports_an_unexpected_error_as_json(tmp_path, monkeypatch,
+                                                  capsys):
+    class Boom:
+        def __init__(self, *a, **k):
+            pass
+
+        def run(self, only):
+            raise TypeError("bug")
+    monkeypatch.setattr(rnd, "Round", Boom)
+    assert rnd.main(["--round-dir", str(tmp_path / "r")]) == 2
+    out = json.loads(capsys.readouterr().out)
+    assert out["status"] == "error" and "TypeError" in out["error"]

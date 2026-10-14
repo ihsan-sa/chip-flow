@@ -66,9 +66,13 @@ is read by the tools (an `include of an absolute path would read whatever
 the path names) and its tb/ is code that runs: --unshare-all (no network),
 --die-with-parent, --new-session, --clearenv with an explicit env;
 /usr, /etc and /bin, /lib* read-only; the EDA tree read-only; the repo
-read-only at its own path with corpus/, evals/, tests/ and docs/ masked by
-an empty tmpfs (engine/ and bin/ stay visible); the scoring workspace
-read-write; the gate's own result directory read-write at /score-out;
+read-only at its own path with corpus/, evals/, tests/, docs/ and a .git
+directory masked by an empty tmpfs (engine/ and bin/ stay visible); the
+scoring workspace read-write, but its copied corpus graders (spec/,
+formal/, holdout/) read-only over it, so the holdout and spec gates get
+the corpus files from the trusted side and nothing the arm's RTL or tb
+runs can rewrite them; the gate's own result directory read-write at
+/score-out;
 tmpfs /tmp and HOME (plus, read-only, the host's precheck python-deps
 cache when there is one: there is no network to install it). The sandbox
 is mandatory: no bwrap, or a bwrap that cannot start, is exit 2 before any
@@ -539,10 +543,18 @@ def gate_sandbox_argv(ws: Path, gate_out: Path, command: list[str],
         argv += ["--ro-bind", str(pydeps), f"{SB_SCORE_HOME}/.local/state/"
                  f"chip-flow/{pydeps.name}"]
     argv += ["--ro-bind", str(tree), str(tree), "--ro-bind", str(REPO), str(REPO)]
-    for m in SANDBOX_MASKED:
-        if (REPO / m).exists():
+    for m in SANDBOX_MASKED + (".git",):
+        # a directory only: a worktree's .git is a file naming a gitdir
+        # outside the repo, which the sandbox does not bind
+        if _is_link_or_missing(REPO / m) is None:
             argv += ["--tmpfs", str(REPO / m)]
-    argv += ["--bind", str(ws), str(ws), "--bind", str(gate_out), SB_GATE_OUT,
+    argv += ["--bind", str(ws), str(ws)]
+    # the corpus graders copied in (CORPUS_PARTS) are read-only in every
+    # gate, so code the arm's RTL or tb runs cannot rewrite them
+    for part in CORPUS_PARTS:
+        if _is_link_or_missing(ws / part) is None:
+            argv += ["--ro-bind", str(ws / part), str(ws / part)]
+    argv += ["--bind", str(gate_out), SB_GATE_OUT,
              "--chdir", str(ws), "--", *command]
     return argv
 

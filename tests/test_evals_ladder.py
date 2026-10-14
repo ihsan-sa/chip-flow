@@ -502,6 +502,7 @@ def _sandbox_run(ws: Path, out: Path, script: str) -> subprocess.CompletedProces
 
 def test_the_gate_sandbox_argv_hides_the_corpus_and_shares_nothing(tmp_path):
     (tmp_path / "tree").mkdir()
+    (tmp_path / "ws" / "holdout").mkdir(parents=True)
     argv = ladder.gate_sandbox_argv(tmp_path / "ws", tmp_path / "out", ["true"],
                                     tree=tmp_path / "tree")
     head = argv[:argv.index("--")]
@@ -513,7 +514,12 @@ def test_the_gate_sandbox_argv_hides_the_corpus_and_shares_nothing(tmp_path):
         assert ("--tmpfs", str(ladder.REPO / m)) in pairs
     i = head.index(str(ladder.REPO))
     assert head[i - 1] == "--ro-bind"  # the repo is read-only
+    if (ladder.REPO / ".git").is_dir():
+        assert ("--tmpfs", str(ladder.REPO / ".git")) in pairs
     assert ("--bind", str(tmp_path / "ws")) in pairs
+    # the corpus graders: read-only over the writable ws, in every gate
+    assert ("--ro-bind", str(tmp_path / "ws" / "holdout")) in pairs
+    assert head.index(str(tmp_path / "ws" / "holdout")) > head.index(str(tmp_path / "ws"))
     assert ("--ro-bind", str(tmp_path / "tree")) in pairs
     envs = {head[i + 1]: head[i + 2] for i in range(len(head)) if head[i] == "--setenv"}
     assert envs["HOME"] == ladder.SB_SCORE_HOME and envs["EDA_TOOLCHAIN"] == str(
@@ -543,6 +549,7 @@ def test_the_gate_sandbox_blocks_the_reference_and_the_host(tmp_path):
     out.mkdir()
     (ws / "rtl").mkdir()
     (ws / "rtl" / "mine.v").write_text("module mine; endmodule\n")
+    (ws / "holdout").mkdir()
     assert ladder.sandbox_preflight(ws, tmp_path / "score")["masked"]
     outside = tmp_path / "outside"
     outside.mkdir()
@@ -555,11 +562,15 @@ def test_the_gate_sandbox_blocks_the_reference_and_the_host(tmp_path):
         echo x > /score-out/r && echo OUT-WRITTEN
         find {ladder.REPO}/corpus {ladder.REPO}/tests -mindepth 1 | grep -q . && echo MASK-LEAK
         test -d {ladder.REPO}/engine && echo ENGINE-SEEN
+        echo x > {ws}/holdout/planted 2>/dev/null && echo HOLDOUT-WRITTEN
+        test -e {Path.home()}/.claude && echo HOME-SEEN
+        grep -v -e '^ *lo:' -e '|' /proc/net/dev | grep -q . && echo NET-SEEN
         exit 0""")
     words = set(p.stdout.split())
     assert p.returncode == 0, p.stderr
     assert {"WS-READ", "WS-WRITTEN", "OUT-WRITTEN", "ENGINE-SEEN"} <= words
-    assert not words & {"REF-READ", "OUTSIDE-WRITTEN", "REPO-WRITTEN", "MASK-LEAK"}
+    assert not words & {"REF-READ", "OUTSIDE-WRITTEN", "REPO-WRITTEN", "MASK-LEAK",
+                        "HOLDOUT-WRITTEN", "HOME-SEEN", "NET-SEEN"}
     assert not (outside / "escape").exists()
     assert not (ladder.REPO / "engine" / "escape").exists()
     assert (ws / "written").is_file() and (out / "r").is_file()
@@ -583,6 +594,14 @@ async def test_escape(dut):
             tried.append(f"BLOCKED {target}: {exc.strerror}")
     with open(_os.path.join(WS, "tb-escape.log"), "w") as fh:
         fh.write("\\n".join(tried))
+    try:
+        with open(_os.path.join(WS, "holdout", "planted.py"), "w") as fh:
+            fh.write("planted")
+        msg = "WROTE"
+    except OSError as exc:
+        msg = f"BLOCKED {exc.strerror}"
+    with open(_os.path.join(WS, "tb-holdout.log"), "w") as fh:
+        fh.write(msg)
 """
 
 
@@ -634,6 +653,12 @@ def test_an_arm_testbench_cannot_write_outside_the_scoring_ws(tmp_path):
     r = ladder.run_gate(ws, "sim", outdir)
     assert r["status"] == "pass", r
     log = (ws / "tb-escape.log").read_text()
-    for t in targets:
+    for t in targets[:2]:
         assert f"BLOCKED {t}" in log, log
-        assert not Path(t).exists()
+    # the home path: bwrap makes the parents of the scoring ws's path (under
+    # $TMPDIR, which may sit in $HOME) as empty dirs on the sandbox's own
+    # root tmpfs, so a write there can succeed; it must never reach the host
+    for t in targets:
+        assert not Path(t).exists(), t
+    # the corpus graders are read-only inside every gate
+    assert "BLOCKED" in (ws / "tb-holdout.log").read_text()

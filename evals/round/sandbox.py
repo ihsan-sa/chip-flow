@@ -41,12 +41,16 @@ inside the argv `build_argv` returns. What the sandbox holds, and only that:
     directory lets claude's atomic rename land in the real file.
     RESIDUAL RISK of that read-write bind: a NEW top-level entry created
     in it from inside the sandbox (CLAUDE.md, settings.local.json, agents/,
-    ...) has no mask and lands in the host's real ~/.claude, where every
-    later host session would read it. The sandbox cannot prevent that;
-    round.py detects it: it lists the real directory's top-level entries
-    before and after every claude invocation, and any new entry stops the
-    round (nothing is deleted; a person decides), as does a credentials
-    file that is no longer a regular, non-empty file owned by the user. A symlink
+    ...) has no mask and lands in the host's real ~/.claude, where a host
+    session would read it; so can a chmod of the directory, or a delete.
+    The sandbox cannot prevent that. `ClaudeDirWatch` is a live inotify
+    watch on the real directory that round.py starts before each claude
+    invocation: the first event outside `allowed_event` (what claude's own
+    credential write makes: the `.storage-write.lock` lock directory,
+    `.credentials.json.tmp.<8 hex>` and its rename onto .credentials.json,
+    a chmod of either; plus the host's `history.jsonl.lock` directory)
+    kills the sandbox's process group, and `quarantine_new` then moves any
+    new entry out to the run dir. A symlink
     or anything not a file/dir at the top of ~/.claude is refused (it cannot
     be masked safely), and so is a missing `projects` or `skills` (bwrap
     would create the mount point in the real directory).
@@ -71,13 +75,22 @@ run's invocations and are bound into no other run's sandbox.
 from __future__ import annotations
 
 import argparse
+import ctypes
+import ctypes.util
+import errno
 import hashlib
 import json
 import os
+import re
+import select
 import shutil
+import signal
 import stat
+import struct
 import subprocess
 import sys
+import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -261,6 +274,269 @@ def claude_dir_masks(real_claude_dir: Path, arm: str, projects_host: Path,
         else:
             raise SandboxError(f"{p} is neither a file nor a directory")
     return args
+
+
+# ------------------------------------------------- the live ~/.claude watch
+# inotify(7) constants (linux/inotify.h).
+IN_ATTRIB = 0x00000004
+IN_MOVED_FROM = 0x00000040
+IN_MOVED_TO = 0x00000080
+IN_CREATE = 0x00000100
+IN_DELETE = 0x00000200
+IN_DELETE_SELF = 0x00000400
+IN_MOVE_SELF = 0x00000800
+IN_UNMOUNT = 0x00002000
+IN_Q_OVERFLOW = 0x00004000
+IN_IGNORED = 0x00008000
+IN_ONLYDIR = 0x01000000
+IN_DONT_FOLLOW = 0x02000000
+IN_ISDIR = 0x40000000
+IN_NONBLOCK = os.O_NONBLOCK
+IN_CLOEXEC = os.O_CLOEXEC
+WATCH_MASK = (IN_ATTRIB | IN_MOVED_FROM | IN_MOVED_TO | IN_CREATE | IN_DELETE
+              | IN_DELETE_SELF | IN_MOVE_SELF | IN_ONLYDIR | IN_DONT_FOLLOW)
+_EVENT_NAMES = ((IN_ATTRIB, "ATTRIB"), (IN_MOVED_FROM, "MOVED_FROM"),
+                (IN_MOVED_TO, "MOVED_TO"), (IN_CREATE, "CREATE"),
+                (IN_DELETE, "DELETE"), (IN_DELETE_SELF, "DELETE_SELF"),
+                (IN_MOVE_SELF, "MOVE_SELF"), (IN_UNMOUNT, "UNMOUNT"),
+                (IN_Q_OVERFLOW, "Q_OVERFLOW"), (IN_IGNORED, "IGNORED"),
+                (IN_ISDIR, "ISDIR"))
+# What claude's own credential write makes in ~/.claude (read from the
+# claude 2.1.x binary's plaintext secure-storage code): it takes a
+# proper-lockfile lock, a DIRECTORY `.storage-write.lock` (mkdir, utimes
+# while held, rmdir), writes `.credentials.json.tmp.<8 hex>` (O_EXCL, 0600;
+# chmod; unlinked if the write fails), renames it onto .credentials.json
+# and chmods that 0600.
+CRED_TMP_RE = re.compile(r"\A\.credentials\.json\.tmp\.[0-9a-f]{8}\Z")
+WRITE_LOCK = ".storage-write.lock"
+# The one other name allowed, also a proper-lockfile lock DIRECTORY: every
+# host claude session takes it on each prompt it adds to history.jsonl,
+# so a multi-hour invocation always sees it; an empty directory of that
+# name is not anything claude loads.
+HOST_LOCK_DIRS = (WRITE_LOCK, "history.jsonl.lock")
+WATCH_MAX_EVENTS = 1000     # events kept in the record; the count is total
+
+
+def event_names(mask: int) -> list[str]:
+    return [n for bit, n in _EVENT_NAMES if mask & bit]
+
+
+def allowed_event(name: str, mask: int) -> bool:
+    """True only for an event claude's own credential write produces, or
+    a host session's history lock (HOST_LOCK_DIRS)."""
+    kind = mask & ~IN_ISDIR
+    isdir = bool(mask & IN_ISDIR)
+    if not name:
+        return False                   # the directory itself, or overflow
+    if name == CREDENTIALS:
+        return not isdir and kind in (IN_MOVED_TO, IN_ATTRIB)
+    if CRED_TMP_RE.match(name):
+        return not isdir and kind in (IN_CREATE, IN_ATTRIB, IN_MOVED_FROM,
+                                      IN_DELETE)
+    if name in HOST_LOCK_DIRS:
+        return isdir and kind in (IN_CREATE, IN_ATTRIB, IN_DELETE)
+    return False
+
+
+class ClaudeDirWatch:
+    """A live inotify watch on one directory (the real ~/.claude), set up
+    BEFORE the sandbox starts and read by a thread until stop().
+
+    Every event but `allowed_event`'s trips the watch: the first one calls
+    kill() on the attached process group (attach(pid); a trip before the
+    attach kills at the attach). The directory's mode is lstat-ed at start
+    and at stop; a change is a violation too. Raises SandboxError when the
+    watch cannot be set up: a check that does not run refuses the run."""
+
+    def __init__(self, path: Path, kill=None):
+        self.path = Path(path)
+        self.kill = kill or (lambda pgid: os.killpg(pgid, signal.SIGKILL))
+        self.events: list[dict] = []
+        self.n_events = 0
+        self.violations: list[dict] = []
+        self.mode_before: int | None = None
+        self.mode_after: int | None = None
+        self.killed = False
+        self._pgid: int | None = None
+        self._lock = threading.Lock()
+        self._fd: int | None = None
+        self._stop_r = self._stop_w = None
+        self._thread: threading.Thread | None = None
+        self._buf = b""
+
+    # -- set up -----------------------------------------------------------
+    def start(self) -> "ClaudeDirWatch":
+        try:
+            libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6",
+                               use_errno=True)
+            init1, add = libc.inotify_init1, libc.inotify_add_watch
+        except (OSError, AttributeError) as exc:
+            raise SandboxError(f"inotify unavailable: {exc}") from exc
+        add.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_uint32]
+        fd = init1(IN_NONBLOCK | IN_CLOEXEC)
+        if fd < 0:
+            raise SandboxError("inotify_init1 failed: "
+                               f"{os.strerror(ctypes.get_errno())}")
+        try:
+            st = os.lstat(self.path)
+            if not stat.S_ISDIR(st.st_mode):
+                raise SandboxError(f"{self.path} is not a directory")
+            self.mode_before = stat.S_IMODE(st.st_mode)
+            if add(fd, os.fsencode(self.path), WATCH_MASK) < 0:
+                raise SandboxError(
+                    f"inotify_add_watch on {self.path} failed: "
+                    f"{os.strerror(ctypes.get_errno())}")
+        except (OSError, SandboxError) as exc:
+            os.close(fd)
+            if isinstance(exc, SandboxError):
+                raise
+            raise SandboxError(f"cannot watch {self.path}: {exc}") from exc
+        self._fd = fd
+        self._stop_r, self._stop_w = os.pipe()
+        self._thread = threading.Thread(target=self._loop, daemon=True,
+                                        name="claude-dir-watch")
+        self._thread.start()
+        return self
+
+    def attach(self, pgid: int) -> None:
+        """The sandbox's process group; killed at once if already tripped."""
+        with self._lock:
+            self._pgid = pgid
+            if self.violations:
+                self._kill_locked()
+
+    # -- reading ----------------------------------------------------------
+    def _loop(self) -> None:
+        while True:
+            r, _, _ = select.select([self._fd, self._stop_r], [], [])
+            if self._stop_r in r:
+                return
+            self._drain()
+
+    def _drain(self) -> None:
+        while True:
+            try:
+                data = os.read(self._fd, 65536)
+            except BlockingIOError:
+                return
+            except OSError as exc:
+                self._trip({"name": "", "events": ["READ_ERROR"],
+                            "error": str(exc)})
+                return
+            if not data:
+                return
+            self._parse(data)
+
+    def _parse(self, data: bytes) -> None:
+        buf = self._buf + data
+        off = 0
+        while len(buf) - off >= 16:
+            _wd, mask, _cookie, ln = struct.unpack_from("iIII", buf, off)
+            if len(buf) - off < 16 + ln:
+                break
+            raw = buf[off + 16:off + 16 + ln].split(b"\0", 1)[0]
+            off += 16 + ln
+            self._event(os.fsdecode(raw), mask)
+        self._buf = buf[off:]
+
+    def _event(self, name: str, mask: int) -> None:
+        ev = {"name": name, "events": event_names(mask), "at": time.time()}
+        ok = allowed_event(name, mask)
+        ev["allowed"] = ok
+        with self._lock:
+            self.n_events += 1
+            if len(self.events) < WATCH_MAX_EVENTS:
+                self.events.append(ev)
+        if not ok:
+            self._trip(ev)
+
+    def _trip(self, ev: dict) -> None:
+        with self._lock:
+            self.violations.append(ev)
+            self._kill_locked()
+
+    def _kill_locked(self) -> None:
+        if self.killed or self._pgid is None:
+            return
+        self.killed = True
+        try:
+            self.kill(self._pgid)
+        except OSError:
+            pass
+
+    # -- tear down --------------------------------------------------------
+    def stop(self) -> dict:
+        """Stop the reader, read what the kernel still queues, lstat the
+        mode again, and return the record."""
+        if self._thread is not None:
+            os.write(self._stop_w, b"x")
+            self._thread.join()
+            self._thread = None
+        if self._fd is not None:
+            self._drain()
+            os.close(self._fd)
+            for f in (self._stop_r, self._stop_w):
+                os.close(f)
+            self._fd = None
+        try:
+            self.mode_after = stat.S_IMODE(os.lstat(self.path).st_mode)
+        except OSError as exc:
+            self.mode_after = None
+            self._trip({"name": "", "events": ["LSTAT_FAILED"],
+                        "error": str(exc)})
+        if self.mode_after is not None and self.mode_after != self.mode_before:
+            self._trip({"name": "", "events": ["MODE_CHANGED"],
+                        "before": oct(self.mode_before or 0),
+                        "after": oct(self.mode_after)})
+        return self.record()
+
+    def record(self) -> dict:
+        with self._lock:
+            return {"path": str(self.path), "events_total": self.n_events,
+                    "events": list(self.events),
+                    "violations": list(self.violations),
+                    "mode_before": None if self.mode_before is None
+                    else oct(self.mode_before),
+                    "mode_after": None if self.mode_after is None
+                    else oct(self.mode_after),
+                    "killed": self.killed, "ok": not self.violations}
+
+
+def quarantine_new(claude_dir: Path, before: set[str], dest: Path) -> dict:
+    """Move every top-level entry of claude_dir that is not in `before`
+    into dest (rename; a copy-and-remove only across file systems), never
+    deleting one. Claude's own credential temp file and the lock
+    directories (HOST_LOCK_DIRS) are left in place (listed): moving them
+    would copy a credential or break a held lock. A move that fails is
+    listed under "failed"."""
+    claude_dir = Path(claude_dir)
+    out = {"moved": [], "left": [], "failed": []}
+    try:
+        now_names = set(os.listdir(claude_dir))
+    except OSError as exc:
+        out["failed"].append({"name": "*", "error": str(exc)})
+        return out
+    for name in sorted(now_names - before):
+        if CRED_TMP_RE.match(name) or name in HOST_LOCK_DIRS:
+            out["left"].append(name)
+            continue
+        try:
+            dest.mkdir(parents=True, exist_ok=True)
+            tgt = dest / name
+            n = 1
+            while os.path.lexists(tgt):
+                tgt = dest / f"{name}.{n}"
+                n += 1
+            try:
+                os.rename(claude_dir / name, tgt)
+            except OSError as exc:
+                if exc.errno != errno.EXDEV:
+                    raise
+                shutil.move(str(claude_dir / name), str(tgt))
+            out["moved"].append({"name": name, "to": str(tgt)})
+        except OSError as exc:
+            out["failed"].append({"name": name, "error": str(exc)})
+    return out
 
 
 def sandbox_env(layout: Layout) -> dict:
