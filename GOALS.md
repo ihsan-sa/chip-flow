@@ -2,6 +2,16 @@
 
 Claude Code skills for designing chips with open tools: `/vde` for digital blocks in Verilog, `/ade` for analog blocks, and `/msde` for a mixed-signal task that drives the other two. Every result has to pass gates that are hard to fool: lint, simulation, formal proof, hardening, timing, DRC, LVS, SPICE at every corner, and planted faults that each gate must catch.
 
+## Standing goals
+
+### Skills that design chips with open tools
+
+`/vde` designs digital blocks in Verilog, `/ade` designs analog blocks, and `/msde` takes a mixed-signal task and drives the other two.
+
+### Gates that are hard to fool
+
+Every result passes lint, simulation, formal proof, hardening, timing, DRC, LVS and SPICE at every corner, and each gate has to catch the faults planted for it.
+
 ## Proposed goals
 
 Filed by runs. Each says what done looks like as something a run can check, and keeps its status (open, done, failed, dropped) with the pull requests that moved it. At most three are open at once.
