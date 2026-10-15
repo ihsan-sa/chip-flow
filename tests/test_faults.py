@@ -2,7 +2,8 @@
 plant-script import and expect-matching (docs/design.md section 3, "###
 M2."). Fast/hermetic pieces only - the real corpus end-to-end run (every
 gate, including the slow mcy-driven mutate gate, twice per rung) is tests/
-smoke-faults.sh, not part of this suite."""
+smoke-faults.sh for vde and the slow tests/test_corpus_faults.py for ade
+and msde, not part of this suite."""
 from __future__ import annotations
 
 import os
