@@ -190,7 +190,7 @@ def applicable_gates(skill: str, imap: dict | None = None) -> list[str]:
 
 
 def _mc_not_applicable(ws: Path) -> str | None:
-    """/ade's `mc` (gates.yaml: fault "not applicable by default").
+    """/ade's `mc`, not applicable when spec.yaml asks for no Monte Carlo.
 
     The decision: release accepts a DECLARED
     not-applicable, read from the block's current spec.yaml on every

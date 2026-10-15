@@ -222,7 +222,9 @@ gates:
       tool: mc
       fail_severities: [error]
       max_count: 0
-      fault: "not applicable by default"
+      # Not applicable when spec.yaml asks for no MC (check_mc.py); the
+      # corpus mirror rung asks, and plants this fault.
+      fault: "a window typical meets but mismatch misses"
       description: "Yield at or above the spec."
     drc:
       # M9 (docs/design.md, "### M9."): klayout's real GF180 signoff deck

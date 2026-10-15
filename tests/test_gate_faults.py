@@ -16,11 +16,7 @@ REPO = Path(__file__).resolve().parents[1]
 GATES = REPO / "engine" / "reference" / "gates.yaml"
 CORPUS = REPO / "corpus"
 
-UNPLANTED = {
-    ("ade", "mc"): "no ade rung's spec.yaml asks for Monte Carlo, so "
-                   "check_mc has nothing to score (gates.yaml: \"not "
-                   "applicable by default\")",
-}
+UNPLANTED: dict[tuple[str, str], str] = {}
 
 
 def _gates() -> dict[str, set[str]]:

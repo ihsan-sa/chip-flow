@@ -28,8 +28,11 @@ pulls through it), `vdd`/`vss` are the supply rails.
   the absolute current directly, with bounds set from this design's own
   real simulated range, is exactly as sensitive to the faults this corpus
   rung plants and needs no such chaining.
+- Device mismatch doesn't push `iout` out of that window: at least 95% of 20
+  Monte Carlo samples at typical (`mc` in spec.yaml) stay inside it.
 
 Real simulated values on this box (typical/ss/ff/sf/fs, gf180mcuD): 24.04,
 22.24, 26.82, 22.30, 26.64 uA - all comfortably inside `tb/mirror_tb.
 bounds.json`'s [18, 32] uA window; the planted "W and L swapped" fault
-measures 0.106 uA, nowhere close.
+measures 0.106 uA, nowhere close. Twenty Monte Carlo samples at typical
+(seeds 1-20) span 21.9 to 26.9 uA (mean 23.7, sigma 1.39 uA), so all 20 pass.

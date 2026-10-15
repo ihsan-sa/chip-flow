@@ -447,6 +447,17 @@ def test_set_phase_passes_once_every_owed_gate_is_recorded(tmp_path):
     assert st.data["phase"] == "P4"
 
 
+def mirror_spec_without_mc() -> str:
+    """corpus/ade/mirror's spec.yaml with its one-line `mc:` block dropped,
+    so a test can choose whether the spec asks for Monte Carlo."""
+    spec = (REPO / "corpus" / "ade" / "mirror" / "spec.yaml").read_text(
+        encoding="utf-8")
+    spec = "".join(line for line in spec.splitlines(keepends=True)
+                   if not line.startswith("mc:"))
+    assert "mc:" not in spec
+    return spec
+
+
 @pytest.mark.parametrize("mc_on", [False, True])
 def test_set_phase_skips_mc_only_when_the_spec_declares_it_not_applicable(
         tmp_path, mc_on):
@@ -454,9 +465,7 @@ def test_set_phase_skips_mc_only_when_the_spec_declares_it_not_applicable(
     # record when the spec asks for no Monte Carlo.
     ws = ws_empty(tmp_path)
     state_mod.State.init(ws, "ade", "mirror", phase="P4")
-    spec = (REPO / "corpus" / "ade" / "mirror" / "spec.yaml").read_text(
-        encoding="utf-8")
-    assert "\nmc:" not in spec
+    spec = mirror_spec_without_mc()
     if mc_on:
         spec += "\nmc:\n  enabled: true\n"
     (ws / "spec").mkdir(exist_ok=True)
@@ -485,8 +494,7 @@ def test_resume_next_gate_skips_mc_only_when_the_spec_declares_it_not_applicable
     # asks for no Monte Carlo, and resume still named mc as the next gate.
     ws = ws_empty(tmp_path)
     state_mod.State.init(ws, "ade", "mirror", phase="P4")
-    spec = (REPO / "corpus" / "ade" / "mirror" / "spec.yaml").read_text(
-        encoding="utf-8")
+    spec = mirror_spec_without_mc()
     if mc_on:
         spec += "\nmc:\n  enabled: true\n"
     (ws / "spec").mkdir(exist_ok=True)
