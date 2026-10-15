@@ -14,11 +14,16 @@ one of three things, never a plain pass/fail:
 - **bounded** - no counterexample within the spec's own `formal: {depth}`,
   but induction did not converge. Recorded, never reported as proven -
   read the depth before trusting it for anything beyond "nothing broke in
-  the first N cycles."
+  the first N cycles." Also bounded, with an info
+  `unchecked_past_counterexample`: a property smtbmc didn't flag in a run
+  where another property has a basecase counterexample. It was checked only
+  up to that failing step, and pdr's FAIL is the other property's - fix
+  that one and re-run, don't touch this one.
 - **failed** - a real counterexample (smtbmc), OR pdr disagrees with a
   smtbmc pass (`engine_disagreement` - PDR is sound for a safety property,
   so its own counterexample is trusted even when k-induction did not also
-  find one).
+  find one). Raised only when no property in the run has a basecase
+  counterexample to explain pdr's FAIL.
 
 ## Where a failure routes
 
