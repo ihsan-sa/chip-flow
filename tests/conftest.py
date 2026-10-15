@@ -16,6 +16,12 @@ def pytest_configure(config) -> None:
         "slow: a real-tool test that needs the eda image - excluded from "
         "tests/check-engine.sh's own run, covered by tests/check-slow.sh",
     )
+    config.addinivalue_line(
+        "markers",
+        "harden_faults: a slow test that runs full LibreLane top hardens - "
+        "excluded from tests/check-slow.sh, covered by "
+        "tests/check-harden-faults.sh",
+    )
 
 
 import pytest  # noqa: E402

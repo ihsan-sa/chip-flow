@@ -21,10 +21,10 @@ Filed by runs. Each says what done looks like as something a run can check, and 
 ### Run every ade and msde rung's planted faults on CI
 
 - **Serves:** Skills that design chips past hard gates
-- **Done when:** `EDA_TOOLCHAIN=/opt/eda-toolchain/iic-osic-tools-2026.09 bash tests/check.sh` passes with `HELD_BACK` in `tests/test_corpus_faults.py` empty, and the PR that empties it passes its `tests/check-slow.sh` CI job.
+- **Done when:** `EDA_TOOLCHAIN=/opt/eda-toolchain/iic-osic-tools-2026.09 bash tests/check.sh` passes with `HELD_BACK` in `tests/test_corpus_faults.py` empty, and a PR with it empty passes both its `tests/check-slow.sh` CI job and its `tests/check-harden-faults.sh` CI jobs (one per rung in `HARDEN_RUNGS`).
 - **Status:** open
-- **Pull requests:** this run's (issue #85) adds `tests/test_corpus_faults.py`. It runs faults.py's `run_rung` on every ade and msde rung as a slow test, so check-slow.sh's CI job runs it. Seven rungs run now. `HELD_BACK` still holds msde `dac_tile` and `sensor_counted`, whose top_harden faults each need a full LibreLane harden.
-- **What:** Until now only `tests/smoke-faults.sh` (vde only, run by hand) ran a manifest end to end, so no script showed that the untouched ade and msde rungs pass their gates and that each planted fault is caught. Next step: run the two held-back rungs in the slow lane, either within its 1800 s cap or as their own CI step, then empty `HELD_BACK`.
+- **Pull requests:** [#86](https://github.com/ihsan-sa/chip-flow/pull/86) added `tests/test_corpus_faults.py`, which runs faults.py's `run_rung` on seven ade and msde rungs in check-slow.sh's CI job. This run's PR (issue #87) moves msde `dac_tile` and `sensor_counted` from `HELD_BACK` to `HARDEN_RUNGS`, marked `harden_faults`. `tests/check-harden-faults.sh` runs them, and a new `harden-faults` CI job runs it once per rung, outside check-slow's 1800 s cap. `HELD_BACK` is now empty.
+- **What:** Until now only `tests/smoke-faults.sh` (vde only, run by hand) ran a manifest end to end, so no script showed that the untouched ade and msde rungs pass their gates and that each planted fault is caught. Next step: read the `harden-faults` jobs' result and time on #87's PR. If both pass along with check-slow, close this goal. If a rung fails, fix what it finds (or put it back in `HELD_BACK` with the reason). Then set the script's 3000 s cap from the measured time.
 
 ## Later
 
