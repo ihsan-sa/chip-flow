@@ -3,10 +3,10 @@
 # own manifests - faults.py copies the rung into a scratch workspace,
 # imports plant.py's `plant(ws)` and runs it, then runs `gate` and checks
 # the result against `expect` (`status` is gate.py's own pass|fail
-# vocabulary, `kind` is a kind from the failing findings list). `mc` has no
-# entry here - gates.yaml's own fault for it is "not applicable by default"
-# (this rung's spec.yaml has no `mc` block). M8 and M9's builders ran in
-# parallel with no shared base; this list is the two reconciled into one.
+# vocabulary, `kind` is a kind from the failing findings list). This rung's
+# spec.yaml turns `mc` on, so the yield gate has a fault to catch too. M8
+# and M9's builders ran in parallel with no shared base; this list is the
+# two reconciled into one.
 version: 1
 faults:
   - name: spec_lint_measure_no_bounds
@@ -29,6 +29,10 @@ faults:
     gate: bench_strength
     plant: plant_bench_strength.py
     expect: {status: fail, kind: survivor_size_doubled}
+  - name: mc_window_typical_meets_mismatch_misses
+    gate: mc
+    plant: plant_mc.py
+    expect: {status: fail, kind: yield_below_spec}
   - name: metal_spacing
     gate: drc
     plant: plant_drc_metal_spacing.py

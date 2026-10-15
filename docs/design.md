@@ -120,7 +120,7 @@ Analog (`/ade`):
 | sim_tt | sim_run at typical | every `.measure` inside its bound | W and L swapped on a mirror's output device |
 | sim_pvt | sim_run over the corner set | every measure inside its bound at every corner | meets at typical, loses headroom at slow and hot |
 | bench_strength | faults.py device mutants (size doubled, connection removed, type flipped, bias halved; a B source output stuck, gain halved) | every mutant pushes a measure out of bounds, bar a survivor the owner rules on one by one in `spec/mutant_rulings.yaml` (equivalent, or a checked below-spread effect), and every declared device gets at least one mutant | bounds wide enough to pass anything |
-| mc | ngspice Monte Carlo, only when the spec asks | yield at or above the spec | not applicable by default |
+| mc | ngspice Monte Carlo, only when the spec asks | yield at or above the spec | a window typical meets but mismatch misses (not applicable when the spec asks for no MC) |
 | drc | magic and klayout | 0 | a planted spacing violation |
 | lvs | netgen, extracted layout versus the sized netlist | match | a device sized differently in the generator than in the netlist |
 | pex_sim | magic ext2spice with parasitics (klayout_pex second), then the bench at typical and the worst corner | every measure inside `post_layout_bounds` | an output routed on a long minimum-width metal1 line |

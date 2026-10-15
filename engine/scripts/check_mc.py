@@ -10,9 +10,9 @@ applicable by default" - a block whose spec.yaml carries no `mc` block, or
 and reports `applicable: false` with zero violations, a real pass on a real
 question ("does this spec ask for MC?"), never a skip. gate.py's own rule
 ("a gate whose tool could not run is exit 2, never a pass") is about a tool
-that never ran at all - this one ran and answered "not applicable", which is
-why no corpus rung needs to carry an `mc` fault (gates.yaml's own `fault:
-"not applicable by default"` for this row already says so).
+that never ran at all - this one ran and answered "not applicable". The
+corpus mirror rung's spec.yaml turns MC on, and its faults/plant_mc.py is
+this gate's planted fault: an iout window typical meets but mismatch misses.
 
 When `mc.enabled: true`: this box's own gf180mcuD design.spice does NOT
 default both switches on the way the PDK's own comment block claims ("

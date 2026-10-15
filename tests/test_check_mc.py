@@ -221,9 +221,8 @@ def test_real_mirror_mc_yields_a_spread(tmp_path):
     ws = tmp_path / "ws"
     for sub in ("spec", "netlist", "tb"):
         (ws / sub).mkdir(parents=True)
-    spec_text = (CORPUS_MIRROR / "spec.yaml").read_text(encoding="utf-8")
-    spec_text += "mc: {enabled: true, runs: 8, yield_min: 0.0}\n"
-    (ws / "spec" / "spec.yaml").write_text(spec_text, encoding="utf-8")
+    # the rung's own spec.yaml asks for Monte Carlo (20 runs)
+    shutil.copy2(CORPUS_MIRROR / "spec.yaml", ws / "spec" / "spec.yaml")
     shutil.copy2(CORPUS_MIRROR / "netlist" / "mirror.cir",
                 ws / "netlist" / "mirror.cir")
     for f in (CORPUS_MIRROR / "tb").iterdir():
@@ -231,12 +230,40 @@ def test_real_mirror_mc_yields_a_spread(tmp_path):
 
     payload, _ = check_mc.run(["--workspace", str(ws)])
     assert payload["applicable"] is True
-    assert payload["runs"] == 8
+    assert payload["runs"] == 20
     values = [r["measures"]["iout_raw"] for r in payload["results"]]
     assert len(set(values)) > 1, values  # never one sample repeated
     mean = sum(values) / len(values)
     stddev = (sum((v - mean) ** 2 for v in values) / len(values)) ** 0.5
     assert stddev > 0, values
+
+
+@pytest.mark.slow
+def test_real_mirror_rung_passes_mc_and_its_planted_fault_fails_it(tmp_path):
+    # The corpus rung's own mc fault, run the way faults.py runs it: the
+    # untouched mirror yields 20/20, and the planted window that typical
+    # still meets (sim_tt passes) drops yield below the spec's 95%.
+    import faults
+    import gate as gate_mod
+
+    gates = gate_mod.load_gates(gate_mod.DEFAULT_GATES)
+    clean = faults.make_scratch_workspace(tmp_path / "clean", CORPUS_MIRROR,
+                                          "ade", "mirror")
+    report, result = faults.run_gate(clean, "mc", gates, "ade")
+    assert result["status"] == "pass", report
+    assert report["hits"] == report["runs"] == 20, report
+
+    entry = next(f for f in faults.load_manifest(CORPUS_MIRROR)["faults"]
+                 if f["gate"] == "mc")
+    ws = faults.make_scratch_workspace(tmp_path / "planted", CORPUS_MIRROR,
+                                       "ade", "mirror")
+    faults.import_plant(CORPUS_MIRROR, entry["plant"])(ws)
+    report, result = faults.run_gate(ws, "mc", gates, "ade")
+    assert not faults.check_expect(entry["name"], result, entry["expect"]), \
+        report
+    assert 0 < report["hits"] < 19, report
+    _, tt = faults.run_gate(ws, "sim_tt", gates, "ade")
+    assert tt["status"] == "pass", tt
 
 
 def test_not_applicable_answer_cannot_be_recorded_as_a_pass(
