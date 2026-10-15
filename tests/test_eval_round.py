@@ -22,6 +22,7 @@ import sandbox as sb  # noqa: E402
 from conftest import needs_bwrap  # noqa: E402
 
 CRED_TEXT = '{"claudeAiOauth": {"refreshToken": "FIXTURE-SECRET-xyz"}}'
+REAL_GLOBAL_DIR = rnd.default_global_dir   # before the autouse fixture swaps it
 
 
 # ------------------------------------------------------------- fixtures
@@ -177,10 +178,27 @@ def test_round_skips_cells_that_have_a_result(tmp_path):
     f.r.results_dir.mkdir(parents=True)
     for cid in ("bare-terse-r1", "skill-terse-r1"):
         (f.r.results_dir / f"{cid}.json").write_text(json.dumps(
-            {"cell": cid, "arm": cid.split("-")[0], "cost_usd": 1.0}))
+            {"cell": cid, "arm": cid.split("-")[0], "cost_usd": 1.0,
+             "score": {"scored": True}}))
     f.r.run()
     order = [c for c, _ in f.calls]
     assert len(order) == 16 and order[0] == "bare-typical-r1"
+
+
+def test_round_reruns_a_cell_whose_result_was_not_scored(tmp_path):
+    """A run that stopped the round (or went unscored) is no data point:
+    the next invocation runs that cell again, and the old record is moved
+    to <round>/stopped/, never deleted."""
+    f = Fake(tmp_path)
+    f.r.results_dir.mkdir(parents=True)
+    stopped = {"cell": "bare-terse-r1", "arm": "bare", "cost_usd": 1.0,
+               "stop": "watch tripped",
+               "score": {"scored": False, "why": "not scored: the round stopped"}}
+    (f.r.results_dir / "bare-terse-r1.json").write_text(json.dumps(stopped))
+    f.r.run(only="bare/terse/1")
+    assert [c for c, _ in f.calls] == ["bare-terse-r1"]
+    [kept] = (f.r.dir / "stopped").glob("bare-terse-r1-*.json")
+    assert json.loads(kept.read_text()) == stopped
 
 
 def test_round_stops_at_the_total_budget(tmp_path):
@@ -226,6 +244,21 @@ def test_round_stops_on_a_usage_limit_without_waiting(tmp_path, status):
     out = f.r.run()
     assert f.calls == [] and f.slept == []
     assert "usage limit" in out["state"] and len(f.notices) == 1
+
+
+def test_the_usage_limit_is_read_after_the_load_wait(tmp_path):
+    """The load wait can sleep for hours; a limit that arrives during it
+    stops the round before claude starts."""
+    f = Fake(tmp_path, loads=[20.0, 3.0] + [1.0] * 50)
+    seen = []
+
+    def status():
+        seen.append(len(f.slept))
+        return (0, "usage limit until 12:00Z")
+    f.r.status_fn = status
+    out = f.r.run(only="bare/terse/1")
+    assert f.calls == [] and "usage limit" in out["state"]
+    assert seen == [1]                    # read once, after the one sleep
 
 
 def test_round_waits_out_the_load(tmp_path):
@@ -452,6 +485,36 @@ def test_stand_in_resumes_at_most_max_resumes(cell_env):
     res = cell_env.run_cell("skill", "full", 2, 70.0, Path("/x"))
     assert len(cmds) == 1 + rnd.MAX_RESUMES
     assert len(res["stand_in_approvals"]) == rnd.MAX_RESUMES
+
+
+def test_an_unknown_cost_reaches_the_score_as_no_cost(cell_env):
+    """The ledger books the $70 reservation; the score is told no cost,
+    not that reservation as if it were the run's spend."""
+    seen = []
+    cell_env.invoke = lambda layout, cmd, n: {"n": n}
+    cell_env.score = lambda arm, d, r, work, cost, *a: seen.append(cost) or {
+        "scored": True}
+    cell_env.run_cell("bare", "terse", 1, 70.0, None)
+    assert seen == [None]
+    cell_env.invoke = lambda layout, cmd, n: {"n": n, "total_cost_usd": 2.5}
+    cell_env.run_cell("bare", "terse", 2, 70.0, None)
+    assert seen == [None, 2.5]
+
+
+def test_a_limit_that_arrives_mid_run_stops_it_unscored(cell_env):
+    """A usage limit in force after an invocation: no stand-in resume
+    starts under it, the run is not scored, and the round stops."""
+    cmds = []
+
+    def invoke(layout, cmd, n):
+        cmds.append(cmd)
+        _state(layout.work, "presented")
+        return {"n": n, "session_id": "s", "total_cost_usd": 1.0}
+    cell_env.invoke = invoke
+    cell_env.status_fn = lambda: (0, "usage limit until 12:00Z")
+    res = cell_env.run_cell("skill", "terse", 1, 70.0, Path("/x"))
+    assert len(cmds) == 1 and res["stand_in_approvals"] == []
+    assert "usage limit" in res["stop"] and res["score"]["scored"] is False
 
 
 def test_unknown_cost_books_the_whole_budget(cell_env):
@@ -867,6 +930,53 @@ def test_allowed_event_is_only_claude_own_credential_write():
                 sb.IN_MOVE_SELF, sb.IN_ATTRIB | sb.IN_ISDIR):
         assert not a("", bad)
     assert not a("CLAUDE.md", sb.IN_CREATE)
+    assert not a(sb.CREDENTIALS, sb.IN_MODIFY)
+    assert a(tmpn, sb.IN_MODIFY) and a("history.jsonl", sb.IN_MODIFY)
+
+
+def test_watch_catches_an_in_place_credentials_write(tmp_path):
+    """Truncating and rewriting the real credentials file in place (no
+    create, no rename) trips the watch; a host session appending to
+    history.jsonl does not."""
+    cd = _claude_dir(tmp_path)
+    kills = []
+    w = _watch(cd, kills)
+    w.attach(4242)
+    with open(cd / "history.jsonl", "a") as fh:
+        fh.write('{"display": "host"}\n')
+    rec = w.stop()
+    assert rec["ok"] and kills == []
+    w = _watch(cd, kills)
+    w.attach(4242)
+    (cd / sb.CREDENTIALS).write_text("")
+    (cd / sb.CREDENTIALS).write_text("x")
+    rec = w.stop()
+    assert not rec["ok"] and kills == [4242]
+    assert any(v["name"] == sb.CREDENTIALS and "MODIFY" in v["events"]
+               for v in rec["violations"]), rec["violations"]
+
+
+def test_run_group_kills_the_group_when_the_wait_is_interrupted(tmp_path):
+    """SIGTERM's SystemExit or Ctrl-C during the wait: the group is dead
+    before run_group re-raises, so no sandbox outlives the watch."""
+    pids = []
+
+    def on_start(pid):
+        pids.append(pid)
+        raise KeyboardInterrupt
+    with pytest.raises(KeyboardInterrupt):
+        rnd.run_group(["sleep", "30"], None, tmp_path / "o", tmp_path / "e", 60,
+                      on_start=on_start)
+    with pytest.raises(ProcessLookupError):
+        os.killpg(pids[0], 0)
+
+
+def test_the_global_ledger_ignores_home(monkeypatch, tmp_path):
+    import pwd
+    monkeypatch.setenv("HOME", str(tmp_path))
+    want = Path(pwd.getpwuid(os.getuid()).pw_dir)
+    assert REAL_GLOBAL_DIR().is_relative_to(want)
+    assert not REAL_GLOBAL_DIR().is_relative_to(tmp_path)
 
 
 def test_create_then_delete_in_a_run_stops_the_round(cell_env):

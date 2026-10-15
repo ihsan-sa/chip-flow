@@ -8,9 +8,11 @@ The round is 18 headless Claude Code design runs: arms bare and skill x
 detail levels terse, typical, full (corpus/vde/counter8/spec.terse.md,
 spec.md, spec.full.md) x repeats 1-3. Cells run repeat-major (all six cells
 of repeat 1, then 2, then 3; within a repeat terse, typical, full, and bare
-before skill at each level) so drift spreads evenly. A cell that already
-has <round>/run-results/<cell>.json is skipped, so running the same command
-again resumes where the round stopped. One process, one run at a time on
+before skill at each level) so drift spreads evenly. A cell whose
+<round>/run-results/<cell>.json was scored is skipped, so running the same
+command again resumes where the round stopped; one whose run stopped the
+round or went unscored has that file moved to <round>/stopped/ and runs
+again. One process, one run at a time on
 the whole box: the round holds an exclusive flock on the GLOBAL lock
 ~/.cc/evals/chip-flow-round-global/lock, and a second round.py, on any
 round dir, exits 2 without running anything. The round dir defaults to
@@ -115,8 +117,9 @@ WHAT THE SANDBOX DOES NOT CLOSE (the probe cannot see these):
     (`cc-config set` rewriting settings.json, say) stops the round too, and
     a credentials file replaced through claude's own temp-and-rename
     pattern passes the watch (the stat check still applies). It does not
-    watch inside subdirectories (all masked) or file contents (masked
-    files are read-only binds).
+    watch inside subdirectories (all masked). Of in-place writes it trips
+    only on the credentials file, the one entry that is not masked; masked
+    files are read-only binds, and a host session appends to others.
   * code the agent runs could write one forged JSON object to claude's
     stdout and then make claude exit 0 or 1 without printing its own; the
     whole-stdout and exit-code rules do not catch that, so a cost is what
@@ -135,6 +138,7 @@ import fcntl
 import json
 import math
 import os
+import pwd
 import shutil
 import signal
 import stat
@@ -195,8 +199,11 @@ def default_round_dir() -> Path:
 
 def default_global_dir() -> Path:
     """The box-wide lock and spend ledger, outside every round dir. Fixed:
-    main() has no option for it; only tests point Round elsewhere."""
-    return sb.real_home() / ".cc" / "evals" / "chip-flow-round-global"
+    main() has no option for it, and it is under the passwd home, not
+    $HOME, so a round started with another HOME still books here; only
+    tests point Round elsewhere."""
+    home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+    return home / ".cc" / "evals" / "chip-flow-round-global"
 
 
 def now() -> str:
@@ -322,6 +329,15 @@ def wait_for_load(load_fn, sleep_fn, dry_run: bool = False,
         waited += LOAD_SLEEP_S
 
 
+def scored_result(path: Path) -> bool:
+    """True when a cell's saved result is a data point: run_cell scored it."""
+    try:
+        r = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(r, dict) and (r.get("score") or {}).get("scored") is True
+
+
 def overrun_decision(cost: float, cost_known: bool = True) -> dict:
     # brief: "stop the round if any one run costs over $70"; a cost that
     # could not be read cannot be shown to be under it, so it stops too
@@ -428,6 +444,14 @@ def claude_cmd(prompt: str, budget: float, resume: str | None = None) -> list:
     return cmd
 
 
+def _kill_group(p: subprocess.Popen) -> None:
+    try:
+        os.killpg(p.pid, signal.SIGKILL)
+    except OSError:
+        pass
+    p.wait()
+
+
 def run_group(argv: list[str], stdin_text: str | None, stdout_path: Path,
               stderr_path: Path, wall_s: float, on_start=None) -> dict:
     """Run argv in its own process group; kill the group past wall_s.
@@ -438,19 +462,20 @@ def run_group(argv: list[str], stdin_text: str | None, stdout_path: Path,
         p = subprocess.Popen(argv, stdin=subprocess.PIPE if stdin_text is not None
                              else subprocess.DEVNULL, stdout=out, stderr=err,
                              start_new_session=True)
-        if on_start is not None:
-            on_start(p.pid)
         try:
+            if on_start is not None:
+                on_start(p.pid)
             p.communicate(stdin_text.encode() if stdin_text is not None else None,
                           timeout=wall_s)
             timed_out = False
         except subprocess.TimeoutExpired:
             timed_out = True
-            try:
-                os.killpg(p.pid, signal.SIGKILL)
-            except OSError:
-                pass
-            p.wait()
+            _kill_group(p)
+        except BaseException:
+            # SIGTERM's SystemExit, Ctrl-C: the group dies before the caller's
+            # `finally` stops the ~/.claude watch, never after it
+            _kill_group(p)
+            raise
     return {"rc": p.returncode, "timed_out": timed_out,
             "wall_s": round(time.monotonic() - t0, 1)}
 
@@ -665,15 +690,17 @@ class Round:
 
     # -- one run ----------------------------------------------------------
     def gates(self) -> dict:
-        """The limit decisions taken before every run, in order."""
+        """The limit decisions taken before every run, in order. The usage
+        limit is read after the load wait, which may sleep for hours, so it
+        is fresh when claude starts."""
         b = budget_decision(self.ledger.spent())
         if not b["ok"]:
             return {"ok": False, "reason": b["reason"], "budget": b}
+        ld = wait_for_load(self.load_fn, self.sleep_fn, self.dry_run, self.log)
         u = usage_limit_decision(self.status_fn)
         if not u["ok"]:
             return {"ok": False, "reason": u["reason"], "budget": b,
-                    "usage": u}
-        ld = wait_for_load(self.load_fn, self.sleep_fn, self.dry_run, self.log)
+                    "usage": u, "load": ld}
         return {"ok": True, "budget": b, "usage": u, "load": ld}
 
     def invoke(self, layout: sb.Layout, cmd: list[str], n: int) -> dict:
@@ -784,6 +811,12 @@ class Round:
             else:
                 cost_known = False
             stop = rec.get("stop")
+            if not stop:
+                # a limit that arrived during the invocation may have cut it
+                # short: that is no data point, and no resume starts under it
+                u = usage_limit_decision(self.status_fn)
+                if not u["ok"]:
+                    stop = rec["stop"] = u["reason"]
             if stop or arm != "skill" or len(approvals) >= MAX_RESUMES:
                 break
             cps = open_checkpoints(layout.work)
@@ -827,8 +860,10 @@ class Round:
             result["score"] = {"scored": False,
                                "why": "not scored: the round stopped"}
             return result
-        result["score"] = self.score(arm, detail, repeat, layout.work, cost,
-                                     wall, rd)
+        # an unknown cost is booked at the whole budget in the ledger, but
+        # the score gets no cost: a reservation is not a measured spend
+        result["score"] = self.score(arm, detail, repeat, layout.work,
+                                     cost if cost_known else None, wall, rd)
         return result
 
     def score(self, arm, detail, repeat, work, cost, wall, rd) -> dict:
@@ -839,9 +874,11 @@ class Round:
                 str(REPO / "evals" / "ladder.py"), "--skill", SKILL,
                 "--rung", RUNG, "--arm", arm, "--detail", detail,
                 "--repeat", str(repeat), "--model", MODEL,
-                "--deliverables", str(work), "--hand-edits", "0",
-                "--session-cost-usd", f"{cost:.4f}", "--wall-s", f"{wall:.1f}",
-                "--results-dir", str(res_dir), "--no-regen"]
+                "--deliverables", str(work), "--hand-edits", "0"]
+        if cost is not None:
+            argv += ["--session-cost-usd", f"{cost:.4f}"]
+        argv += ["--wall-s", f"{wall:.1f}",
+                 "--results-dir", str(res_dir), "--no-regen"]
         try:
             res = run_group(argv, None, rd / "score.stdout", rd / "score.stderr",
                             SCORE_WALL_S)
@@ -945,9 +982,16 @@ class Round:
         state, reason = "finished", None
         for arm, detail, repeat in cells:
             cid = cell_id(arm, detail, repeat)
-            if (self.results_dir / f"{cid}.json").is_file():
-                plans.append({"cell": cid, "skipped": "has a result"})
-                continue
+            prev = self.results_dir / f"{cid}.json"
+            if prev.is_file():
+                if scored_result(prev):
+                    plans.append({"cell": cid, "skipped": "has a result"})
+                    continue
+                # a run that stopped the round or went unscored is no data
+                # point: keep its record (moved, never deleted), run it again
+                if not self.dry_run:
+                    (self.dir / "stopped").mkdir(exist_ok=True)
+                    prev.rename(self.dir / "stopped" / f"{cid}-{now()}.json")
             g = self.gates()
             plan = {"cell": cid, "gates": g}
             plans.append(plan)

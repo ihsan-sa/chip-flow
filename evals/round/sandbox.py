@@ -278,6 +278,7 @@ def claude_dir_masks(real_claude_dir: Path, arm: str, projects_host: Path,
 
 # ------------------------------------------------- the live ~/.claude watch
 # inotify(7) constants (linux/inotify.h).
+IN_MODIFY = 0x00000002
 IN_ATTRIB = 0x00000004
 IN_MOVED_FROM = 0x00000040
 IN_MOVED_TO = 0x00000080
@@ -293,9 +294,9 @@ IN_DONT_FOLLOW = 0x02000000
 IN_ISDIR = 0x40000000
 IN_NONBLOCK = os.O_NONBLOCK
 IN_CLOEXEC = os.O_CLOEXEC
-WATCH_MASK = (IN_ATTRIB | IN_MOVED_FROM | IN_MOVED_TO | IN_CREATE | IN_DELETE
+WATCH_MASK = (IN_MODIFY | IN_ATTRIB | IN_MOVED_FROM | IN_MOVED_TO | IN_CREATE | IN_DELETE
               | IN_DELETE_SELF | IN_MOVE_SELF | IN_ONLYDIR | IN_DONT_FOLLOW)
-_EVENT_NAMES = ((IN_ATTRIB, "ATTRIB"), (IN_MOVED_FROM, "MOVED_FROM"),
+_EVENT_NAMES = ((IN_MODIFY, "MODIFY"), (IN_ATTRIB, "ATTRIB"), (IN_MOVED_FROM, "MOVED_FROM"),
                 (IN_MOVED_TO, "MOVED_TO"), (IN_CREATE, "CREATE"),
                 (IN_DELETE, "DELETE"), (IN_DELETE_SELF, "DELETE_SELF"),
                 (IN_MOVE_SELF, "MOVE_SELF"), (IN_UNMOUNT, "UNMOUNT"),
@@ -328,6 +329,11 @@ def allowed_event(name: str, mask: int) -> bool:
     isdir = bool(mask & IN_ISDIR)
     if not name:
         return False                   # the directory itself, or overflow
+    if kind == IN_MODIFY:
+        # an in-place write: inside the sandbox only the credentials file
+        # is the real one (claude_dir_masks), and claude never writes it in
+        # place; a host session appending to history.jsonl is fine
+        return name != CREDENTIALS
     if name == CREDENTIALS:
         return not isdir and kind in (IN_MOVED_TO, IN_ATTRIB)
     if CRED_TMP_RE.match(name):
