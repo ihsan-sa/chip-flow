@@ -267,6 +267,37 @@ def test_classify_property_engine_disagreement():
     assert violation["kind"] == "engine_disagreement"
 
 
+def test_classify_property_pdr_fail_explained_by_basecase_counterexample():
+    # Run 91's riscv plant: smtbmc's basecase breaks one assert, abc pdr
+    # (which checks every assert at once) FAILs on that same one. A healthy
+    # assert smtbmc didn't flag is neither a disagreement nor proven.
+    sub = {"basecase": "FAIL", "induction": None}
+    smt_cases = {"P_BROKEN": {"type": "ASSERT", **CASE_FAILED},
+                 "P_OK": {"type": "ASSERT", **CASE_OK},
+                 "C": {"type": "COVER", **CASE_FAILED}}
+    explained = check_formal.basecase_counterexample(smt_cases, sub)
+    assert explained
+    verdict, violation = check_formal.classify_property(
+        "P_OK", "REQ", CASE_OK, sub, "FAIL", 20,
+        pdr_fail_explained=explained)
+    assert verdict not in ("failed", "proven")
+    assert violation["kind"] != "engine_disagreement"
+    assert violation["kind"] == "unchecked_past_counterexample"
+    assert violation["severity"] == "info"
+    # The broken one still fails as smtbmc's counterexample.
+    verdict, violation = check_formal.classify_property(
+        "P_BROKEN", "REQ", CASE_FAILED, sub, "FAIL", 20,
+        pdr_fail_explained=explained)
+    assert verdict == "failed" and violation["kind"] == "property_failed"
+    # Nothing explains pdr's FAIL when no ASSERT has a basecase failure
+    # (a failed cover or an induction-only trace doesn't count).
+    assert not check_formal.basecase_counterexample(
+        {"P_OK": {"type": "ASSERT", **CASE_OK},
+         "C": {"type": "COVER", **CASE_FAILED}}, sub)
+    assert not check_formal.basecase_counterexample(
+        smt_cases, {"basecase": "pass", "induction": "FAIL"})
+
+
 def test_classify_property_bounded_when_induction_does_not_converge(capsys):
     # docs/design.md section 2: "A property that only reaches a bounded
     # depth is recorded as bounded with its depth, and the gate never

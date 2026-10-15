@@ -8,7 +8,7 @@ Claude Code skills for designing chips with open tools: `/vde` for digital block
 
 ## Proposed goals
 
-Filed by runs. Each says what done looks like as something a run can check, and keeps its status (open, done, failed, dropped) with the pull requests that moved it. At most three are open at once.
+Filed by runs. Each says what done looks like as something a run can check, and keeps its status (open, done, failed, dropped) with the pull requests that moved it. At most three are open at once. A goal that waits only on what a run can't do (a merge, or reading a CI result) doesn't count toward the three, so a run can take a goal from Later while those wait.
 
 ### Finish the round-based eval ladder for counter8
 

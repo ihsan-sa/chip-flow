@@ -3,7 +3,9 @@
 abc pdr found a counterexample that smtbmc's k-induction did not. PDR is a
 sound method for a safety property, so its counterexample is trusted, not
 dismissed as noise - this is treated as a real failure. Routes to
-`formal`.
+`formal`. It is raised only when no other property in the run has a
+basecase counterexample: when one does, pdr's FAIL is that counterexample,
+and the other asserts get `unchecked_past_counterexample` instead.
 
 **Cheapest fix first:** k-induction can fail to converge (report
 "bounded", not "proven") on a property that needs an inductive invariant

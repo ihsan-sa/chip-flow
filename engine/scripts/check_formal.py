@@ -1118,15 +1118,32 @@ def check_cut_model(signal: str, smt_cases: dict[str, dict],
             "brought in line with it")
 
 
+def basecase_counterexample(smt_cases: dict[str, dict],
+                            smt_sub: dict[str, str | None]) -> bool:
+    """True when the smt task's basecase did not pass and some ASSERT in
+    its model is marked failed: a real counterexample to one property.
+    basecase/induction and pdr's status are per sby TASK, not per property,
+    and abc pdr checks every assert at once and stops at the first it can
+    break - so such a counterexample is what a pdr FAIL on the same run is
+    reporting, not a disagreement about every other assert."""
+    return smt_sub["basecase"] != "pass" and any(
+        c["failed"] for c in smt_cases.values() if c.get("type") == "ASSERT")
+
+
 def classify_property(label: str, rid: str, smt_case: dict,
                       smt_sub: dict[str, str | None], pdr_status: str,
-                      depth: int) -> tuple[str, dict | None]:
+                      depth: int, pdr_fail_explained: bool = False,
+                      ) -> tuple[str, dict | None]:
     """One property's verdict - "proven"/"bounded"/"failed" - and the
     violation (if any) to report it with. Pure (no I/O, no sby, no XML
     parsing of its own) so the classification RULES are testable without a
     real solver run - see this module's own header for what each rule
     means; CheckError here is the "sby genuinely never reached a verdict at
-    all" case, never silently folded into any of the three outcomes."""
+    all" case, never silently folded into any of the three outcomes.
+
+    pdr_fail_explained: another property in the same run has a basecase
+    counterexample (basecase_counterexample), so a pdr FAIL is that one,
+    not abc pdr disagreeing with smtbmc about this property."""
     # sby marks the property <failure> for an induction-step trace too
     # (trace_induct.vcd): an arbitrary, possibly unreachable start state,
     # not a counterexample. Only a basecase that did not pass is one.
@@ -1145,6 +1162,17 @@ def classify_property(label: str, rid: str, smt_case: dict,
             f"sby (pdr task) reached no verdict for property {label} "
             f"(requirement {rid}): pdr_status={pdr_status!r} is neither "
             "PASS nor FAIL - never silently folded into bounded/proven")
+    if pdr_status == "FAIL" and pdr_fail_explained:
+        # smtbmc's basecase stops at the first step where any assert fails,
+        # so this one was checked only up to that step, and pdr's FAIL is the
+        # other property's counterexample - neither proven nor disagreement.
+        return "bounded", checklib.violation(
+            "formal", "info", None, None, "unchecked_past_counterexample",
+            [rid],
+            f"requirement {rid} (property {label}): no counterexample, but "
+            "checked only up to the step where another property failed, "
+            "with no pdr corroboration - re-run formal once that property "
+            "is fixed", "sby-smtbmc")
     if pdr_status == "FAIL":
         return "failed", checklib.violation(
             "formal", "error", None, None, "engine_disagreement", [rid],
@@ -1400,9 +1428,11 @@ def run(argv=None):
         "cover_depth") is not None else "depth")
     violations = []
     proven, bounded, failed, vacuous = [], [], [], []
+    pdr_fail_explained = basecase_counterexample(testcases["smt"], smt_sub)
     for label, rid in sorted(props.items()):
         verdict, violation = classify_property(
-            label, rid, smt_cases[label], smt_sub, pdr_status, depth)
+            label, rid, smt_cases[label], smt_sub, pdr_status, depth,
+            pdr_fail_explained=pdr_fail_explained)
         cov_case = cov_cases.get(ids[label])
         if cov_case is None:
             raise CheckError(f"assert {ids[label]} appears in the smt model "
