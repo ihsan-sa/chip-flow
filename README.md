@@ -16,8 +16,8 @@ rung, and `docs/design.md` is the plan.
 Every pull request and every push to main runs the jobs in `.github/workflows/checks.yml`, each on a standard runner that unpacks
 the same pinned IIC-OSIC-TOOLS image the box uses and runs the tools through `bin/eda`. `tests/check.sh`, the landing
 gate, takes about 2 minutes. `tests/check-slow.sh`, the real-tool pytest set, takes about 9 minutes.
-`tests/check-harden-faults.sh` runs once per msde rung whose planted faults need full top hardens (dac_tile,
-sensor_counted); its time isn't measured yet. About 1.5 to 2
+`tests/check-harden-faults.sh` runs once per rung whose planted faults need full hardens (vde counter8, msde
+dac_tile and sensor_counted); its time isn't measured yet. About 1.5 to 2
 minutes of each job goes to pulling the toolchain. To read a run, open it from the Actions tab. The summary page gives
 each job's pull time and gate time, and a red job's log ends with the failing check. A failed slow run also keeps its
 logs as the `check-slow-logs` artifact for 7 days.

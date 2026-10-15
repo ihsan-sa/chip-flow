@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # check-harden-faults.sh [RUNG] - the corpus rungs whose planted faults need
-# full LibreLane top hardens (tests/test_corpus_faults.py's HARDEN_RUNGS,
+# full LibreLane hardens (tests/test_corpus_faults.py's HARDEN_RUNGS,
 # marked `harden_faults`), run end to end through faults.py's run_rung.
-# Split out of tests/check-slow.sh so their hardens (about three per rung)
+# Split out of tests/check-slow.sh so their hardens (several per rung)
 # never push that lane past its 1800 s cap. RUNG, when given, runs only
 # that rung (a pytest -k match on its id, e.g. dac_tile); CI runs one job
 # per rung. The cap catches a hang: not yet measured on CI (2026-10-15).

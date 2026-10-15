@@ -21,10 +21,18 @@ Filed by runs. Each says what done looks like as something a run can check, and 
 ### Run every ade and msde rung's planted faults on CI
 
 - **Serves:** Skills that design chips past hard gates
-- **Done when:** `EDA_TOOLCHAIN=/opt/eda-toolchain/iic-osic-tools-2026.09 bash tests/check.sh` passes with `HELD_BACK` in `tests/test_corpus_faults.py` empty, and a PR with it empty passes both its `tests/check-slow.sh` CI job and its `tests/check-harden-faults.sh` CI jobs (one per rung in `HARDEN_RUNGS`).
+- **Done when:** `EDA_TOOLCHAIN=/opt/eda-toolchain/iic-osic-tools-2026.09 bash tests/check.sh` passes with `HELD_BACK` in `tests/test_corpus_faults.py` naming no ade or msde rung (issue #89 added vde rungs to the same dict), and a PR with none there passes both its `tests/check-slow.sh` CI job and its `tests/check-harden-faults.sh` CI jobs (one per rung in `HARDEN_RUNGS`).
 - **Status:** open
 - **Pull requests:** [#86](https://github.com/ihsan-sa/chip-flow/pull/86) added `tests/test_corpus_faults.py`, which runs faults.py's `run_rung` on seven ade and msde rungs in check-slow.sh's CI job. This run's PR (issue #87) moves msde `dac_tile` and `sensor_counted` from `HELD_BACK` to `HARDEN_RUNGS`, marked `harden_faults`. `tests/check-harden-faults.sh` runs them, and a new `harden-faults` CI job runs it once per rung, outside check-slow's 1800 s cap. `HELD_BACK` is now empty.
 - **What:** Until now only `tests/smoke-faults.sh` (vde only, run by hand) ran a manifest end to end, so no script showed that the untouched ade and msde rungs pass their gates and that each planted fault is caught. Next step: read the `harden-faults` jobs' result and time on #87's PR. If both pass along with check-slow, close this goal. If a rung fails, fix what it finds (or put it back in `HELD_BACK` with the reason). Then set the script's 3000 s cap from the measured time.
+
+### Run every vde rung's planted faults on CI
+
+- **Serves:** Skills that design chips past hard gates
+- **Done when:** `EDA_TOOLCHAIN=/opt/eda-toolchain/iic-osic-tools-2026.09 bash tests/check.sh` passes with `HELD_BACK` in `tests/test_corpus_faults.py` naming no vde rung, and a PR with none there passes its `tests/check-slow.sh` CI job and its `tests/check-harden-faults.sh counter8` CI job.
+- **Status:** open
+- **Pull requests:** this run's PR (issue #89) adds vde to `SKILLS` in `tests/test_corpus_faults.py`: `spi_fifo` and `uart` run in check-slow's lane, `counter8` (whose M4 plants each run a full harden) joins `HARDEN_RUNGS` and the `harden-faults` CI matrix, and `riscv` is in `HELD_BACK`. A new fast test keeps the CI matrix equal to `HARDEN_RUNGS`.
+- **What:** vde's manifests ran end to end only through `tests/smoke-faults.sh`, by hand, so nothing on CI showed that counter8's harden, timing, DRC, LVS, glsim and precheck plants are still caught. Measured 2026-10-15 through check.sh with a trial test: spi_fifo and uart pass (2 s and 25 s of CPU). riscv fails: its formal fault's sby `abc pdr` task crashes (`DONE (ERROR)`, `values[bit] = v` in engine_0), the crash its manifest already calls known red. Next step: read the counter8 `harden-faults` job and check-slow on #89's PR. Then fix riscv's formal fault so formal fails on `property_failed` (for example, run the plant's proof with a BMC or another engine that doesn't hit the pdr crash) and drop it from `HELD_BACK`.
 
 ## Later
 
