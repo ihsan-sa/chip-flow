@@ -135,6 +135,7 @@ FIXER_HINTS: dict[str, str] = {
     "property_failed": "formal",
     "engine_disagreement": "formal",
     "bounded_not_proven": "formal",
+    "unchecked_past_counterexample": "formal",
     "cover_not_reached": "formal",
     # spec.yaml's formal.depth unset: the property-writer's to set
     "formal_depth_missing": "formal",
