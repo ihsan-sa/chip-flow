@@ -27,6 +27,30 @@ def pytest_configure(config) -> None:
 import pytest  # noqa: E402
 
 
+def _bwrap_unusable() -> str:
+    """Why bubblewrap can't start a sandbox here, or "" when it can. bwrap on
+    PATH isn't enough: a kernel or AppArmor that refuses unprivileged user
+    namespaces (Ubuntu 24.04's default) makes every sandbox exit 1 at
+    start. The code under test refuses in that case; only the tests that
+    need a real sandbox skip, saying why."""
+    import shutil
+    import subprocess
+
+    if shutil.which("bwrap") is None:
+        return "no bwrap"
+    p = subprocess.run(["bwrap", "--unshare-all", "--ro-bind", "/", "/", "true"],
+                       stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                       timeout=60)
+    if p.returncode != 0:
+        return f"bwrap can't start a sandbox here: {p.stderr.strip()[:200]}"
+    return ""
+
+
+BWRAP_UNUSABLE = _bwrap_unusable()
+needs_bwrap = pytest.mark.skipif(bool(BWRAP_UNUSABLE),
+                                 reason=BWRAP_UNUSABLE or "bwrap works")
+
+
 @pytest.fixture
 def unlaunchable_eda(tmp_path, monkeypatch):
     """The three ade layout gates, wired to an `eda` launcher that does not

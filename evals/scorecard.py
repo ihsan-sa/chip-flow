@@ -5,6 +5,7 @@ suite (docs/design-evals.md sections 7 and 8).
 
     scorecard.py [--record] [--doc docs/design-evals.md] [--seeds N]
                  [--results-dir DIR] [--out FILE]
+    scorecard.py --round DIR [--results-dir DIR] [--out FILE] [--md FILE]
 
 It runs no design and no gate. It reads what ladder.py and bench.py already
 wrote under evals/results/: the newest ladder result per (skill, rung, kind)
@@ -40,6 +41,24 @@ size: every rung of every skill x 3 brief detail levels x 2 arms (bare
 Claude Code and the skill) x --seeds (default 3), and the same with one
 rung a skill as the smaller first step. Only runs whose ladder
 result carries cost_usd are used, and the estimate says how many those are.
+
+`--round DIR` scores a bare-against-skill round instead
+(docs/design-evals.md section 3): the results under DIR (DIR/ladder/*.json
+and DIR/*.json) that carry an `arm` field, newest per (skill, rung, arm,
+detail, repeat), each made a design card as above (area against the
+--results-dir reference; a result with `hardened: false` scores 0 on
+implementation). Skill and bare results are paired by (skill, rung, detail,
+repeat), and it reports, per detail level and pooled, the mean difference
+skill minus bare in the rate the rung counts, each area score and the
+composite; the detail steps typical-terse and full-typical per arm, paired
+by (rung, repeat); and cost_usd and wall_s per run and per arm (mean,
+total). Every interval is a seeded cluster bootstrap: the cluster is the
+pair (rung, detail, repeat), resampled in two stages (rungs, then that
+rung's pairs), which with one rung is resampling the pairs. A result with
+no partner is listed as unpaired and left out of the differences. It writes
+the JSON to DIR/round-scorecard.json (or --out) and a short markdown summary
+to DIR/round-scorecard.md (or --md). Seeded, so the same results give the
+same report.
 
 `--record` writes the scorecard as a dated JSON under
 evals/results/scorecard/. `--doc` rewrites the text between the
@@ -108,7 +127,13 @@ def gate_findings(skill: str, problems: list[str]) -> list[dict]:
         gate, _, why = p.partition(":")
         gate, why = (gate.strip(), why.strip()) if why else (None, p)
         cmd = f"/{skill} {gate}" if gate else f"/{skill} resume"
-        if "no recorded" in why and "pass" not in why:
+        if why == "not hardened":
+            fix = (f"harden the block (/{skill} harden, LibreLane through eda) into "
+                   "harden/runs/run/final/; a block with no GDS scores 0 on implementation")
+        elif why == "no testbench":
+            fix = ("write a cocotb testbench under tb/test_*.py; a run with no "
+                   "testbench scores 0 on verification")
+        elif "no recorded" in why and "pass" not in why:
             fix = f"run the {gate} gate ({cmd}); a gate that never ran is a refusal"
         elif "open issue" in why:
             fix = f"close the open issue: fix what it names and re-run its gate ({cmd})"
@@ -144,6 +169,8 @@ def design_card(r: dict, ref: dict | None) -> dict:
                   else (1.0 if area and r.get("kind") == "reference" else 0.0))
     areas["implementation"] = _mean([1.0 if slack is not None and slack >= 0 else 0.0,
                                      area_score])
+    if r.get("hardened") is False:  # a --deliverables result with no GDS
+        areas["implementation"] = 0.0
     for a in AREAS:
         if a not in owed:
             areas[a] = None
@@ -259,6 +286,193 @@ def cost_estimate(results: Path, rungs: dict, seeds: int) -> dict:
     }
 
 
+# ---- --round: bare against skill, paired ----------------------------------
+
+ROUND_METRICS = ("counts", "composite") + AREAS
+DETAIL_STEPS = (("typical", "terse"), ("full", "typical"))
+
+
+def load_round(d: Path) -> list[dict]:
+    """The results under d (d/ladder/*.json and d/*.json) that carry an
+    `arm`: the newest per (skill, rung, arm, detail, repeat)."""
+    files = sorted(set((d / "ladder").glob("*.json")) | set(d.glob("*.json"))) \
+        if d.is_dir() else []
+    newest: dict[tuple, tuple[str, dict]] = {}
+    for p in files:
+        try:
+            r = json.loads(p.read_text(encoding="utf-8"))
+        except ValueError:
+            continue
+        if not isinstance(r, dict) or not r.get("arm") or not r.get("skill"):
+            continue
+        key = (r["skill"], r["rung"], r["arm"], r.get("detail"), r.get("repeat"))
+        if key not in newest or p.name >= newest[key][0]:
+            newest[key] = (p.name, r)
+    return [r for _n, r in (newest[k] for k in sorted(newest, key=str))]
+
+
+def metric_values(card: dict) -> dict:
+    """counts as 0/1, the composite and each owed area score."""
+    out = {"counts": 1.0 if card["counts"] else 0.0, "composite": card["composite"]}
+    out.update({a: card["areas"][a] for a in AREAS})
+    return out
+
+
+def cluster_bootstrap(clusters: dict, n: int = BOOT_N, seed: int = BOOT_SEED):
+    """95% interval of the mean of per-cluster values, resampled in two
+    stages: rungs with replacement, then that rung's clusters (here, the
+    pairs (rung, detail, repeat)) with replacement. With one rung that is
+    resampling the pairs. `clusters` maps rung -> [value]."""
+    groups = [v for _k, v in sorted(clusters.items()) if v]
+    if not groups:
+        return None
+    rng = random.Random(seed)
+    means = []
+    for _ in range(n):
+        xs = []
+        for g in rng.choices(groups, k=len(groups)):
+            xs.extend(rng.choices(g, k=len(g)))
+        means.append(statistics.fmean(xs))
+    means.sort()
+    return [round(means[int(0.025 * n)], 4), round(means[int(0.975 * n) - 1], 4)]
+
+
+def _diff_stats(diffs: list[tuple[str, dict]]) -> dict:
+    """diffs: [(rung, {metric: a - b or None})] -> {metric: {mean, ci95, n}}."""
+    out = {}
+    for m in ROUND_METRICS:
+        by_rung: dict[str, list[float]] = {}
+        for rung, d in diffs:
+            if d.get(m) is not None:
+                by_rung.setdefault(rung, []).append(d[m])
+        xs = [x for v in by_rung.values() for x in v]
+        out[m] = {"mean": round(statistics.fmean(xs), 4) if xs else None,
+                  "ci95": cluster_bootstrap(by_rung), "n": len(xs)}
+    return out
+
+
+def _sub(a: dict, b: dict) -> dict:
+    return {m: (a[m] - b[m] if a.get(m) is not None and b.get(m) is not None else None)
+            for m in ROUND_METRICS}
+
+
+def _money(xs: list) -> dict:
+    xs = [x for x in xs if isinstance(x, (int, float))]
+    return {"n": len(xs), "mean": round(statistics.fmean(xs), 2) if xs else None,
+            "total": round(sum(xs), 2) if xs else None}
+
+
+def round_report(results: list[dict], refs: dict) -> dict:
+    """Paired differences skill minus bare per (skill, rung, detail, repeat),
+    per detail level and pooled; detail-level steps per arm; cost and wall
+    time per run and per arm."""
+    cards = [(r, design_card(r, refs.get((r["skill"], r["rung"])))) for r in results]
+    vals = {(r["skill"], r["rung"], r["arm"], r.get("detail"), r.get("repeat")):
+            metric_values(c) for r, c in cards}
+    skills = sorted({k[0] for k in vals})
+    out: dict = {"skills": {}, "unpaired": []}
+    for skill in skills:
+        keys = {(k[1], k[3], k[4]) for k in vals if k[0] == skill}
+        pairs = []
+        for rung, detail, rep in sorted(keys, key=str):
+            s_, b_ = (vals.get((skill, rung, a, detail, rep)) for a in ("skill", "bare"))
+            if s_ is None or b_ is None:
+                out["unpaired"].append({"skill": skill, "rung": rung, "detail": detail,
+                                        "repeat": rep,
+                                        "has": "skill" if s_ is not None else "bare"})
+                continue
+            pairs.append((rung, detail, _sub(s_, b_)))
+        by_detail = {d: _diff_stats([(r, x) for r, dd, x in pairs if dd == d])
+                     for d in DETAIL_LEVELS if any(dd == d for _r, dd, _x in pairs)}
+        steps: dict = {}
+        for arm in ARMS:
+            for hi, lo in DETAIL_STEPS:
+                diffs = []
+                for rung, rep in sorted({(k[1], k[4]) for k in vals
+                                         if k[0] == skill and k[2] == arm}, key=str):
+                    a, b = (vals.get((skill, rung, arm, d, rep)) for d in (hi, lo))
+                    if a is not None and b is not None:
+                        diffs.append((rung, _sub(a, b)))
+                if diffs:
+                    steps.setdefault(arm, {})[f"{hi}-{lo}"] = _diff_stats(diffs)
+        arms = {}
+        for arm in ARMS:
+            mine = [r for r, _c in cards if r["skill"] == skill and r["arm"] == arm]
+            if mine:
+                arms[arm] = {"runs": len(mine),
+                             "counted": sum(1 for r in mine if r.get("counts")),
+                             "cost_usd": _money([r.get("cost_usd") for r in mine]),
+                             "wall_s": _money([r.get("wall_s") for r in mine])}
+        out["skills"][skill] = {
+            "pairs": len(pairs),
+            "skill_minus_bare": {"by_detail": by_detail,
+                                 "pooled": _diff_stats([(r, x) for r, _d, x in pairs])},
+            "detail_steps": steps, "arms": arms}
+    out["runs"] = [{**{k: r.get(k) for k in ("skill", "rung", "arm", "detail", "repeat",
+                                              "model", "counts", "cost_usd", "wall_s")},
+                    "composite": c["composite"], "areas": c["areas"],
+                    "top_finding": c["findings"][0]["what"] if c["findings"] else None}
+                   for r, c in cards]
+    out["bootstrap"] = {"n": BOOT_N, "seed": BOOT_SEED,
+                        "cluster": "the pair (rung, detail, repeat); resampled as "
+                        "rungs, then each rung's pairs, with replacement"}
+    return out
+
+
+def _d(st: dict) -> str:
+    if st["mean"] is None:
+        return "-"
+    return f"{st['mean']:+.2f} {_ci(st['ci95'])}"
+
+
+def render_round(rep: dict) -> str:
+    L = ["# Bare against skill: paired round summary", "",
+         "Generated by `evals/scorecard.py --round`. Each cell is the mean "
+         "difference with a cluster-bootstrap 95% interval "
+         f"({rep['bootstrap']['n']} resamples, seed {rep['bootstrap']['seed']}; "
+         f"cluster: {rep['bootstrap']['cluster']}). `counts` is the rate the rung "
+         "counts; the rest are scorecard areas in [0, 1].", ""]
+    head = "| | pairs | " + " | ".join(ROUND_METRICS) + " |"
+    rule = "|---" * (len(ROUND_METRICS) + 2) + "|"
+    for skill, v in rep["skills"].items():
+        L += [f"## {skill}: skill minus bare", "", head, rule]
+        rows = list(v["skill_minus_bare"]["by_detail"].items()) + [
+            ("pooled", v["skill_minus_bare"]["pooled"])]
+        for name, st in rows:
+            n = max(x["n"] for x in st.values())
+            L.append(f"| {name} | {n} | " + " | ".join(_d(st[m]) for m in ROUND_METRICS)
+                     + " |")
+        if v["detail_steps"]:
+            L += ["", f"## {skill}: detail steps per arm", "",
+                  "| arm | step | n | " + " | ".join(ROUND_METRICS) + " |",
+                  "|---" * (len(ROUND_METRICS) + 3) + "|"]
+            for arm, steps in v["detail_steps"].items():
+                for step, st in steps.items():
+                    n = max(x["n"] for x in st.values())
+                    L.append(f"| {arm} | {step} | {n} | "
+                             + " | ".join(_d(st[m]) for m in ROUND_METRICS) + " |")
+        L += ["", f"## {skill}: cost and wall time per arm", "",
+              "| arm | runs | counted | cost USD mean | cost USD total | wall s mean "
+              "| wall s total |", "|---|---|---|---|---|---|---|"]
+        for arm, a in v["arms"].items():
+            L.append(f"| {arm} | {a['runs']} | {a['counted']} | {_f(a['cost_usd']['mean'])} "
+                     f"| {_f(a['cost_usd']['total'])} | {_f(a['wall_s']['mean'], 0)} "
+                     f"| {_f(a['wall_s']['total'], 0)} |")
+    L += ["", "## Runs", "",
+          "| rung | arm | detail | repeat | counts | composite | cost USD | wall s "
+          "| top finding |", "|---|---|---|---|---|---|---|---|---|"]
+    for r in rep["runs"]:
+        L.append(f"| {r['skill']}/{r['rung']} | {r['arm']} | {r['detail']} | "
+                 f"{_f(r['repeat'])} | {'yes' if r['counts'] else 'no'} | "
+                 f"{_f(r['composite'])} | {_f(r['cost_usd'])} | {_f(r['wall_s'], 0)} | "
+                 f"{r['top_finding'] or '-'} |")
+    if rep["unpaired"]:
+        L += ["", "Unpaired (no partner arm, left out of the differences): "
+              + ", ".join(f"{u['rung']} {u['detail']} r{u['repeat']} ({u['has']} only)"
+                          for u in rep["unpaired"]) + "."]
+    return "\n".join(L) + "\n"
+
+
 # ---- the doc's generated blocks --------------------------------------------
 
 def _f(v, nd=2):
@@ -349,10 +563,26 @@ def run(argv=None):
                     help="write the scorecard under evals/results/scorecard/")
     ap.add_argument("--doc", help="rewrite the generated blocks in this file")
     ap.add_argument("--out", help="write the JSON here instead of stdout")
+    ap.add_argument("--round", metavar="DIR",
+                    help="pair the bare and skill results under DIR (those with an "
+                    "arm field) instead; writes DIR/round-scorecard.json (or --out) "
+                    "and DIR/round-scorecard.md (or --md)")
+    ap.add_argument("--md", help="--round: write the markdown summary here")
     args = ap.parse_args(argv)
     if args.seeds < 1:
         raise CheckError("--seeds must be at least 1")
     results = Path(args.results_dir)
+    if args.round:
+        rdir = Path(args.round)
+        found = load_round(rdir)
+        if not found:
+            raise CheckError(f"no result with an arm field under {rdir} or {rdir}/ladder")
+        rep = {"script": SCRIPT, "status": "pass", "round": str(rdir),
+               **round_report(found, ladder.latest_ladder_results(results, "reference"))}
+        md = Path(args.md) if args.md else rdir / "round-scorecard.md"
+        md.write_text(render_round(rep), encoding="utf-8")
+        rep["md"] = str(md)
+        return rep, args.out or str(rdir / "round-scorecard.json")
     card = build(results, args.seeds)
     if args.record:
         (results / "scorecard").mkdir(parents=True, exist_ok=True)
