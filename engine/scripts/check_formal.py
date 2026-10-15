@@ -82,7 +82,10 @@ Three sby TASKS, same model; smt and pdr at `depth`, cov at `cover_depth`:
        "abc pdr as the second opinion"). PDR gives no per-property
        breakdown at all (proved empirically: its own XML collapses every
        property into one "default" testcase) - only a design-level
-       PASS/FAIL, applied to every property as corroboration.
+       PASS/FAIL, applied to every property as corroboration. A pdr
+       task whose DONE is ERROR only because yosys-witness crashed
+       converting abc's counterexample to a trace still counts as FAIL
+       (pdr_done_status).
   cov  mode cover, engine smtbmc yices   - "every cover reached": a COVER
        testcase with no <failure> in THIS task's XML was reached; one that
        IS present but not reached carries a <failure> here (proved
@@ -239,6 +242,10 @@ ASYNC_CUT_CELL_TYPES = ("$adff",)
 ASYNC_CUT_CHECK_SUFFIX = "$async_cut_matches_clk2fflogic"
 CUT_IL_NAME = "cut.il"
 LOGIC_LOOP_RE = re.compile(r"(?i)found logic loop in module (\S+?)[:!]")
+# abc pdr's own verdict, and the yosys-witness crash that can follow it when
+# sby converts pdr's counterexample to a trace (see pdr_done_status)
+PDR_FAIL_RE = re.compile(r"summary: engine_\d+ \(abc pdr\) returned FAIL\b")
+AIW2YW_CRASH_RE = re.compile(r"yosys-witness\", line \d+, in aiw2yw\b")
 ASYNC_CUT_FIX = (" (spec.yaml formal.async_reset_cuts: [{signal, why}, ...] "
                  "- see check_formal.py's own docstring, 'Async self-reset "
                  "loops')")
@@ -1059,6 +1066,22 @@ def done_status(output: str) -> str:
     return m.group(1) if m else "ERROR"
 
 
+def pdr_done_status(output: str) -> str:
+    """The pdr task's verdict: its DONE status, except that DONE (ERROR) is
+    read as FAIL when abc pdr itself returned FAIL and the only crash is
+    yosys-witness's aiw2yw turning that counterexample into a trace. On
+    corpus/vde/riscv (iic-osic-tools-2026.09) aiw2yw dies on
+    `assert isinstance(key, WitnessSig)` after abc logs "Output 0 ... was
+    asserted in frame 2" - the solver found the counterexample, only the
+    trace was lost, and this gate never reads pdr's trace. Any other ERROR
+    stays ERROR. Pure."""
+    status = done_status(output)
+    if status == "ERROR" and PDR_FAIL_RE.search(output) \
+            and AIW2YW_CRASH_RE.search(output):
+        return "FAIL"
+    return status
+
+
 def task_substatus(output: str) -> dict[str, str | None]:
     """{'basecase': 'pass'|'FAIL'|'UNKNOWN'|None, 'induction': ...} off
     smtbmc's own "Status returned by engine for basecase/induction" lines -
@@ -1293,6 +1316,12 @@ def run(argv=None):
         # that DID reach DONE and reached it as ERROR (a solver crash, an
         # unusable model) is refused here too, before any per-property
         # classification gets a chance to fold it into bounded/proven.
+        # pdr_done_status's one exception (a FAIL whose trace crashed) is
+        # kept, without the XML of a task that never finished writing it.
+        if name == "pdr" and done_status(output) == "ERROR" \
+                and pdr_done_status(output) == "FAIL":
+            outputs[name] = output
+            continue
         if done_status(output) == "ERROR":
             loop = LOGIC_LOOP_RE.search(output)
             if loop is not None:
@@ -1310,7 +1339,7 @@ def run(argv=None):
         xml_path = workdir / f"{name}.xml"
         testcases[name] = parse_testcases(xml_path)
 
-    smt_cases, pdr_status = testcases["smt"], done_status(outputs["pdr"])
+    smt_cases, pdr_status = testcases["smt"], pdr_done_status(outputs["pdr"])
     smt_status = done_status(outputs["smt"])
     smt_sub = task_substatus(outputs["smt"])
     for cut in applied_cuts or []:

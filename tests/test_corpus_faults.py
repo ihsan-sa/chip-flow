@@ -6,7 +6,7 @@ the same for vde by hand; these are marked slow, so tests/check-slow.sh
 (and its CI job) runs them, not tests/check.sh. Measured unmarked on
 2026-10-15: the seven ade and msde rungs run here took about 45 s of CPU
 together (comparator 25 s, mirror 11 s, bandgap 7 s, the rest under 4 s
-each), and vde uart 25 s, spi_fifo 2 s.
+each), and vde riscv 28 s, uart 25 s, spi_fifo 2 s.
 
 HARDEN_RUNGS are the rungs whose run needs full LibreLane hardens (the
 msde rungs about three top hardens each: the clean reference, then each
@@ -46,14 +46,7 @@ HARDEN_RUNGS: dict[tuple[str, str], str] = {
     ("msde", "sensor_counted"): "top_harden, top_drc and top_lvs each need a "
                                 "full LibreLane top harden",
 }
-HELD_BACK: dict[tuple[str, str], str] = {
-    # Measured 2026-10-15 on iic-osic-tools-2026.09: run_rung raised
-    # CheckError "sby (pdr task) reached DONE (ERROR)" (engine_0:
-    # values[bit] = v), the crash riscv's manifest notes as known red.
-    ("vde", "riscv"): "the formal fault's sby abc pdr task crashes writing "
-                      "its counterexample, so formal refuses instead of "
-                      "failing on property_failed",
-}
+HELD_BACK: dict[tuple[str, str], str] = {}
 
 
 def _rungs() -> list[tuple[str, str]]:

@@ -304,6 +304,38 @@ def test_classify_property_pdr_unknown_raises():
             "UNKNOWN", 20)
 
 
+# The tail of corpus/vde/riscv's planted formal fault's pdr log
+# (iic-osic-tools-2026.09): abc finds the counterexample, then
+# yosys-witness crashes converting it to a trace.
+PDR_TRACE_CRASH_LOG = """\
+SBY  3:18:52 [pdr] engine_0: Output 0 of miter "model/design_aiger" was asserted in frame 2.  Time =     0.04 sec
+SBY  3:18:52 [pdr] engine_0: Status returned by engine: FAIL
+SBY  3:18:52 [pdr] engine_0: Converting AIGER witness trace 'engine_0/trace.aiw' to Yosys witness trace 'engine_0/trace_aiw.yw'...
+SBY  3:18:52 [pdr] engine_0: File "/opt/eda/foss/tools/yosys/bin/yosys-witness", line 270, in aiw2yw
+SBY  3:18:52 [pdr] engine_0: values[bit] = v
+SBY  3:18:52 [pdr] engine_0: AssertionError
+SBY  3:18:52 [pdr] engine_0: task failed. ERROR.
+SBY  3:18:52 [pdr] summary: engine_0 (abc pdr) returned FAIL
+SBY  3:18:52 [pdr] summary: engine_0 did not produce any traces
+SBY  3:18:52 [pdr] DONE (ERROR, rc=16)
+"""
+
+
+def test_pdr_done_status_reads_a_fail_whose_trace_crashed_as_fail():
+    assert check_formal.pdr_done_status(PDR_TRACE_CRASH_LOG) == "FAIL"
+
+
+def test_pdr_done_status_keeps_any_other_error():
+    # no abc FAIL before the crash: pdr reached no verdict
+    no_fail = PDR_TRACE_CRASH_LOG.replace("(abc pdr) returned FAIL",
+                                          "(abc pdr) returned ERROR")
+    assert check_formal.pdr_done_status(no_fail) == "ERROR"
+    # abc FAILed but something other than aiw2yw crashed
+    other = PDR_TRACE_CRASH_LOG.replace("in aiw2yw", "in yw2aiw")
+    assert check_formal.pdr_done_status(other) == "ERROR"
+    assert check_formal.pdr_done_status("[pdr] DONE (PASS, rc=0)") == "PASS"
+
+
 def test_wrong_kind_labels_ignores_skipped_asserts():
     # M5, docs/design.md-cited: a skipped ASSERT is still an ASSERT - it
     # falls back to classify_property's task-level basecase/induction
