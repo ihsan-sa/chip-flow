@@ -38,6 +38,13 @@ Filed by runs. Each says what done looks like as something a run can check, and 
 
 Goals waiting for an open slot. When a proposed goal closes, the run that closed it moves the top one here up into Proposed goals as open.
 
+### Formal stops blaming healthy asserts for another assert's counterexample
+
+- **Serves:** Skills that design chips past hard gates
+- **Done when:** `EDA_TOOLCHAIN=/opt/eda-toolchain/iic-osic-tools-2026.09 bash tests/check.sh` passes with a fast test in `tests/test_check_formal.py` named `test_classify_property_pdr_fail_explained_by_basecase_counterexample`. The test checks that, when smtbmc's basecase FAILs on one property and pdr FAILs, a property that smtbmc didn't mark failed isn't reported as `engine_disagreement` and isn't reported `proven`. The existing `test_classify_property_engine_disagreement` (basecase and induction pass, pdr FAIL) must still give `engine_disagreement`.
+- **Pull requests:** none yet.
+- **What:** In `engine/scripts/check_formal.py`, `classify_property` gets `smt_sub` (basecase and induction) and `pdr_status` per sby task, not per property. abc pdr checks every assert at once and stops at the first one it can break. So when one assert has a real basecase counterexample, every other assert on the block reaches `pdr_status == "FAIL"` and is reported as an `engine_disagreement` error (run 91 saw this on riscv's formal plant). `/vde` sends those to the property-writer, and `skills/vde/reference/remediations/engine_disagreement.md` tells it to trust PDR's trace. That pushes it to rewrite asserts that aren't broken. The likely fix: when some property in the same run has a basecase counterexample, read pdr FAIL as explained by it. Report each unflagged property as not verified (it was checked only up to the failing step, with no pdr corroboration), and keep `engine_disagreement` for a pdr FAIL that nothing else explains. The per-property loop in `run` (which calls `classify_property` near line 1404) has to pass in whether any other case has a basecase counterexample. Moves up into Proposed goals as `**Status:** open` when a slot frees.
+
 ## Closed
 
 What has landed, from the git history (a line per PR).
