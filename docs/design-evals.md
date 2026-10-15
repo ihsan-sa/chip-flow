@@ -69,7 +69,7 @@ A benchmark stops separating systems when everyone scores near the top, which is
 
 ## 2. Brief detail as a measured variable
 
-This section and the next are the design for the full suite and none of it is built yet: no brief variants, no `ladder.py --detail` field and no bare-arm scoring workspace exist in the repo. How much the brief says is a factor in the experiment, not a choice made once. VerilogEval v2's finding that prompt shape moves the score is the reason.
+This section and the next are the design for the full suite. Only counter8 is built so far: its three brief levels, `ladder.py --detail`, `--arm` and `--deliverables` (the scoring workspace both arms go through), `scorecard.py --round` for the paired differences, and `evals/round/`, which runs the 18 counter8 design runs in a sandbox that cannot read `corpus/`, with its spend limits in code. The other rungs have no brief variants yet. How much the brief says is a factor in the experiment, not a choice made once. VerilogEval v2's finding that prompt shape moves the score is the reason.
 
 **Three detail levels per rung.**
 
@@ -242,5 +242,6 @@ The per-run figure is thin. Only three runs recorded a cost, all of them /msde o
 - The OQPSK paper's shuttle name and the full measured results were not read, only its abstract and record.
 - Venues are given where a source page or record stated them (VerilogEval ICCAD 2023, RTLLM ASP-DAC 2024, OpenLLM-RTL ICCAD 2024, AnalogCoder AAAI 2025, ChatEDA IEEE TCAD 2024, SWE-bench ICLR 2024); otherwise the arXiv year is given. I did not check later publication venues for the arXiv-only entries.
 - Citations were checked for title, year, link and the specific numbers quoted, against the abstract or the cited passage, not re-read in full.
-- The detail-level split, the scoring workspace for the bare arm, the analog held-out swap, the copy check against the corpus reference and the `--detail` field are proposals in this document. None of them is built yet.
+- The detail-level split, the scoring workspace and the `--detail` field are built for counter8 only. The analog held-out swap and the copy check against the corpus reference are still proposals.
+- The round's sandbox leaves two paths open: the agent can read the account's OAuth token, so a run could start its own `claude` whose spend `total_cost_usd` would not show, and the isolation probe does not walk the EDA tool tree or read files over 5 MB.
 - The scoring formulas in section 4 describe what `scorecard.py` is meant to do; the code is the authority where they differ.

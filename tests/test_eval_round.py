@@ -1,0 +1,1088 @@
+"""evals/round/: the sandboxed eval-round runner. The limit decisions with
+fakes, the bwrap argv, the skill export, the stand-in approval and the one
+notice; one slow test runs the isolation probe in a real sandbox."""
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import socket
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO / "evals" / "round"))
+
+import pytest  # noqa: E402
+
+import round as rnd  # noqa: E402
+import sandbox as sb  # noqa: E402
+from conftest import needs_bwrap  # noqa: E402
+
+CRED_TEXT = '{"claudeAiOauth": {"refreshToken": "FIXTURE-SECRET-xyz"}}'
+
+
+# ------------------------------------------------------------- fixtures
+@pytest.fixture(autouse=True)
+def _global_dir(tmp_path, monkeypatch):
+    """Every Round in these tests books into a temp global lock and ledger,
+    never the box's real one."""
+    g = tmp_path / "global"
+    monkeypatch.setattr(rnd, "default_global_dir", lambda: g)
+    return g
+
+
+def _claude_dir(root: Path) -> Path:
+    """A stand-in ~/.claude holding one of each kind of entry."""
+    cd = root / ".claude"
+    for d in ("projects", "skills", "agents", "plugins", "session-env"):
+        (cd / d).mkdir(parents=True)
+    (cd / "projects" / "-home-x").mkdir()
+    (cd / "projects" / "-home-x" / "old.jsonl").write_text("{}\n")
+    (cd / "skills" / "other").mkdir()
+    (cd / sb.CREDENTIALS).write_text(CRED_TEXT)
+    (cd / "settings.json").write_text('{"hooks": {"Stop": []}}')
+    (cd / "CLAUDE.md").write_text("private instructions\n")
+    (cd / "history.jsonl").write_text('{"display": "x"}\n')
+    return cd
+
+
+def _claude_json(root: Path) -> Path:
+    p = root / ".claude.json"
+    p.write_text(json.dumps({
+        "oauthAccount": {"accountUuid": "u", "emailAddress": "a@b.invalid"},
+        "userID": "id", "projects": {"/somewhere": {}},
+        "mcpServers": {"x": {}}}))
+    return p
+
+
+def _layout(tmp: Path, arm: str, run: str = "run1",
+            export: Path | None = None) -> sb.Layout:
+    home = tmp / "realhome"
+    if not (home / ".claude").exists():
+        _claude_dir(home)
+        _claude_json(home)
+    rd = tmp / "round" / run
+    sb.prepare_run(rd, "# spec\n", real_claude_json=home / ".claude.json")
+    (tmp / "edatree").mkdir(exist_ok=True)
+    (tmp / "edabin").mkdir(exist_ok=True)
+    (tmp / "claude-elf").write_text("")
+    return sb.Layout(arm=arm, run_dir=rd, claude_bin=tmp / "claude-elf",
+                     eda_tree=tmp / "edatree", eda_bin_dir=tmp / "edabin",
+                     real_claude_dir=home / ".claude", export_dir=export)
+
+
+def _mounts(argv: list[str]) -> dict[str, tuple[str, str | None]]:
+    """target -> (op, source) for the bwrap mount options."""
+    out, i = {}, 0
+    while i < len(argv) and argv[i] != "--":
+        a = argv[i]
+        if a in ("--bind", "--ro-bind", "--symlink", "--setenv"):
+            out[argv[i + 2]] = (a, argv[i + 1])
+            i += 3
+        elif a in ("--tmpfs", "--proc", "--dev", "--chdir", "--hostname"):
+            out[argv[i + 1]] = (a, None)
+            i += 2
+        else:
+            i += 1
+    return out
+
+
+# ----------------------------------------------------- limit decisions
+def test_budget_decision_caps_the_total_and_the_run():
+    assert rnd.budget_decision(0.0) == {"ok": True, "spent": 0.0,
+                                        "run_budget": 70.0}
+    assert rnd.budget_decision(430.0)["ok"]
+    assert rnd.budget_decision(430.0)["run_budget"] == 70.0
+    no = rnd.budget_decision(430.01)
+    assert not no["ok"] and "budget" in no["reason"]
+
+
+def test_usage_limit_decision():
+    assert not rnd.usage_limit_decision(lambda: (0, "usage limit until 10:00Z"))["ok"]
+    assert rnd.usage_limit_decision(lambda: (1, "clear"))["ok"]
+    assert not rnd.usage_limit_decision(lambda: (2, "?"))["ok"]
+
+    def boom():
+        raise OSError("no cc-limit")
+    assert not rnd.usage_limit_decision(boom)["ok"]
+
+
+def test_wait_for_load_sleeps_until_the_load_drops():
+    loads, slept = iter([15.0, 12.5, 4.0]), []
+    r = rnd.wait_for_load(lambda: next(loads), slept.append)
+    assert r["ok"] and r["load"] == 4.0
+    assert slept == [rnd.LOAD_SLEEP_S, rnd.LOAD_SLEEP_S]
+    slept.clear()
+    r = rnd.wait_for_load(lambda: 30.0, slept.append, dry_run=True)
+    assert r["ok"] and slept == [] and "would sleep" in r["note"]
+
+
+def test_overrun_decision():
+    assert rnd.overrun_decision(70.0)["ok"]
+    assert not rnd.overrun_decision(70.01)["ok"]
+
+
+# ------------------------------------------------------ the round loop
+class Fake:
+    """A Round with every outside effect stubbed: run_cell returns a run
+    of the cost `costs` gives, notify is counted."""
+
+    def __init__(self, tmp: Path, costs=None, status=(1, "clear"),
+                 loads=None, raise_on=None, dry_run=False):
+        self.calls, self.notices, self.slept = [], [], []
+        loads = iter(loads or [1.0] * 100)
+        self.r = rnd.Round(tmp / "round", dry_run=dry_run,
+                           status_fn=lambda: status,
+                           load_fn=lambda: next(loads),
+                           sleep_fn=self.slept.append,
+                           notify_fn=lambda s, m: self.notices.append((s, m))
+                           or {"sent": True}, log=lambda m: None)
+        costs = costs or {}
+
+        def run_cell(arm, detail, repeat, budget, export):
+            cid = rnd.cell_id(arm, detail, repeat)
+            self.calls.append((cid, budget))
+            if raise_on == cid:
+                raise sb.SandboxError("planted failure")
+            cost = costs.get(cid, 1.0)
+            known = cost is not None
+            cost = 70.0 if cost is None else cost
+            self.r.ledger.reserve(cid, budget)
+            self.r.ledger.settle(cid, cost)
+            return {"cell": cid, "arm": arm, "probe": {"ok": True},
+                    "cost_usd": cost, "cost_known": known, "wall_s": 1.0,
+                    "credentials": {"ok": True}}
+        self.r.run_cell = run_cell
+        self.r.export = lambda: tmp / "export"
+        self.r.scorecard = lambda: {"ran": False}
+
+
+def test_round_runs_repeat_major_and_notifies_once(tmp_path):
+    f = Fake(tmp_path)
+    out = f.r.run()
+    order = [c for c, _ in f.calls]
+    assert order == [rnd.cell_id(a, d, r) for r in (1, 2, 3)
+                     for d in ("terse", "typical", "full")
+                     for a in ("bare", "skill")]
+    assert order[:2] == ["bare-terse-r1", "skill-terse-r1"]
+    assert out["status"] == "pass" and len(f.notices) == 1
+    assert f.notices[0][0] == "finished"
+
+
+def test_round_skips_cells_that_have_a_result(tmp_path):
+    f = Fake(tmp_path)
+    f.r.results_dir.mkdir(parents=True)
+    for cid in ("bare-terse-r1", "skill-terse-r1"):
+        (f.r.results_dir / f"{cid}.json").write_text(json.dumps(
+            {"cell": cid, "arm": cid.split("-")[0], "cost_usd": 1.0}))
+    f.r.run()
+    order = [c for c, _ in f.calls]
+    assert len(order) == 16 and order[0] == "bare-typical-r1"
+
+
+def test_round_stops_at_the_total_budget(tmp_path):
+    f = Fake(tmp_path, costs={rnd.cell_id(a, d, r): 60.0 for a in rnd.ARMS
+                              for d in rnd.DETAILS for r in rnd.REPEATS})
+    out = f.r.run()
+    # 7 runs at $60 = $420; an 8th would need 420 + 70 <= 500: yes; a 9th no.
+    assert len(f.calls) == 8
+    assert f.r.ledger.spent() == 480.0
+    assert out["status"] == "violations" and "budget" in out["state"]
+    assert all(b == 70.0 for _, b in f.calls)
+    assert len(f.notices) == 1
+
+
+def test_round_budget_counts_a_dead_runs_reservation(tmp_path):
+    f = Fake(tmp_path)
+    for i in range(7):
+        f.r.ledger.reserve(f"dead{i}", 70.0)  # runs that never settled
+    out = f.r.run()
+    assert f.calls == [] and "budget" in out["state"]
+
+
+def test_round_stops_on_a_per_run_overrun(tmp_path):
+    f = Fake(tmp_path, costs={"skill-terse-r1": 70.5})
+    out = f.r.run()
+    assert [c for c, _ in f.calls] == ["bare-terse-r1", "skill-terse-r1"]
+    assert "overrun" in out["state"] and len(f.notices) == 1
+
+
+def test_round_stops_on_an_unknown_cost(tmp_path):
+    f = Fake(tmp_path, costs={"skill-terse-r1": None})
+    out = f.r.run()
+    assert [c for c, _ in f.calls] == ["bare-terse-r1", "skill-terse-r1"]
+    assert "cost unknown" in out["state"] and len(f.notices) == 1
+    assert not rnd.overrun_decision(1.0, cost_known=False)["ok"]
+    assert rnd.overrun_decision(1.0, cost_known=True)["ok"]
+
+
+@pytest.mark.parametrize("status", [(0, "usage limit until 12:00Z"),
+                                    (3, "weird")])
+def test_round_stops_on_a_usage_limit_without_waiting(tmp_path, status):
+    f = Fake(tmp_path, status=status)
+    out = f.r.run()
+    assert f.calls == [] and f.slept == []
+    assert "usage limit" in out["state"] and len(f.notices) == 1
+
+
+def test_round_waits_out_the_load(tmp_path):
+    f = Fake(tmp_path, loads=[20.0, 13.0, 3.0] + [1.0] * 50)
+    f.r.run(only="bare/terse/1")
+    assert f.slept == [rnd.LOAD_SLEEP_S] * 2 and len(f.calls) == 1
+
+
+def test_round_stops_when_a_run_raises_and_still_notifies_once(tmp_path):
+    f = Fake(tmp_path, raise_on="skill-terse-r1")
+    out = f.r.run()
+    assert len(f.calls) == 2
+    assert "skill-terse-r1 could not run" in out["state"]
+    assert len(f.notices) == 1 and f.notices[0][0] == "stopped"
+
+
+def test_dry_run_sends_no_notice(tmp_path):
+    f = Fake(tmp_path, dry_run=True)
+
+    def run_cell(arm, detail, repeat, budget, export):
+        f.calls.append(rnd.cell_id(arm, detail, repeat))
+        return {"probe": {"ok": True}, "dry_run": True}
+    f.r.run_cell = run_cell
+    out = f.r.run(only="skill/terse/1")
+    assert out["state"] == "dry-run" and f.notices == []
+    assert not (f.r.dir / "ledger.json").exists()
+    assert not f.r.ledger.path.exists()
+
+
+def test_only_rejects_a_bad_cell():
+    with pytest.raises(rnd.RoundError):
+        rnd.plan_cells("bare/huge/1")
+    assert rnd.plan_cells("skill/terse/1") == [("skill", "terse", 1)]
+
+
+# ------------------------------------------------------------- sandbox
+def test_argv_masks_every_claude_entry_but_the_credentials(tmp_path):
+    lay = _layout(tmp_path, "bare")
+    argv = sb.build_argv(lay, ["true"])
+    m = _mounts(argv)
+    sbc = f"{sb.SB_HOME}/.claude"
+    assert m[sbc] == ("--bind", str(lay.real_claude_dir))
+    for name in os.listdir(lay.real_claude_dir):
+        tgt = f"{sbc}/{name}"
+        if name == sb.CREDENTIALS:
+            assert tgt not in m
+            continue
+        op, src = m[tgt]
+        if name == "projects":
+            assert (op, src) == ("--bind", str(lay.projects))
+        elif (lay.real_claude_dir / name).is_dir():
+            assert op == "--tmpfs", name
+        else:
+            assert op == "--ro-bind" and Path(src).parent == lay.blanks, name
+            assert Path(src).read_text().strip() in ("", "{}")
+    # its own namespaces, network included; nothing shares the host's
+    assert "--unshare-all" in argv
+    assert not any(a.startswith("--share") for a in argv)
+    assert "--clearenv" in argv
+
+
+def test_projects_is_a_per_run_host_dir(tmp_path):
+    a = _layout(tmp_path, "bare", run="a")
+    b = _layout(tmp_path, "bare", run="b")
+    pa = _mounts(sb.build_argv(a, ["true"]))[f"{sb.SB_HOME}/.claude/projects"]
+    pb = _mounts(sb.build_argv(b, ["true"]))[f"{sb.SB_HOME}/.claude/projects"]
+    assert pa == ("--bind", str(a.run_dir / "claude-projects"))
+    assert pb == ("--bind", str(b.run_dir / "claude-projects"))
+    assert pa != pb
+    # the run's home (where .claude.json lives) is a host dir too
+    assert _mounts(sb.build_argv(a, ["true"]))[sb.SB_HOME] == \
+        ("--bind", str(a.home))
+
+
+def test_credentials_are_never_copied(tmp_path):
+    lay = _layout(tmp_path, "bare")
+    sb.build_argv(lay, ["true"])
+    for root, _d, files in os.walk(tmp_path / "round"):
+        for name in files:
+            p = Path(root) / name
+            assert name != sb.CREDENTIALS
+            assert "FIXTURE-SECRET" not in p.read_text(errors="replace"), p
+    cj = json.loads((lay.home / ".claude.json").read_text())
+    assert set(cj["projects"]) == {"/work"} and "mcpServers" not in cj
+    assert "emailAddress" not in cj["oauthAccount"]
+
+
+def test_claude_dir_symlink_or_missing_projects_is_refused(tmp_path):
+    lay = _layout(tmp_path, "bare")
+    (lay.real_claude_dir / "link").symlink_to("/etc")
+    with pytest.raises(sb.SandboxError, match="symlink"):
+        sb.build_argv(lay, ["true"])
+    (lay.real_claude_dir / "link").unlink()
+    shutil.rmtree(lay.real_claude_dir / "projects")
+    with pytest.raises(sb.SandboxError, match="projects"):
+        sb.build_argv(lay, ["true"])
+
+
+def test_skill_arm_binds_the_export_read_only(tmp_path):
+    exp = tmp_path / "export"
+    exp.mkdir()
+    lay = _layout(tmp_path, "skill", export=exp)
+    m = _mounts(sb.build_argv(lay, ["true"]))
+    sk = f"{sb.SB_HOME}/.claude/skills"
+    assert m[sk] == ("--tmpfs", None)
+    assert m[f"{sk}/chip-flow"] == ("--ro-bind", str(exp))
+    assert m[f"{sk}/vde"] == ("--symlink", "chip-flow/skills/vde")
+    bare = _mounts(sb.build_argv(_layout(tmp_path, "bare", run="b"), ["true"]))
+    assert f"{sk}/chip-flow" not in bare
+
+
+def _git(cwd, *args):
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True,
+                   env={**os.environ, "GIT_AUTHOR_NAME": "t",
+                        "GIT_AUTHOR_EMAIL": "t@t.invalid",
+                        "GIT_COMMITTER_NAME": "t",
+                        "GIT_COMMITTER_EMAIL": "t@t.invalid"})
+
+
+def test_export_takes_the_working_tree_minus_corpus_evals_tests(tmp_path):
+    repo = tmp_path / "repo"
+    for rel in ("corpus/vde/c/holdout/test_x.py", "evals/ladder.py",
+                "tests/test_a.py", "docs/design.md", "docs/log.md",
+                ".github/ci.yml", "skills/vde/SKILL.md", "engine/a.py"):
+        (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+        (repo / rel).write_text(f"{rel}\n")
+    _git(repo, "init", "-q")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "x")
+    (repo / "skills/vde/SKILL.md").write_text("edited, not committed\n")
+    (repo / "skills/untracked.md").write_text("untracked\n")
+    info = sb.export_repo(repo, tmp_path / "exp")
+    got = sorted(str(p.relative_to(tmp_path / "exp"))
+                 for p in (tmp_path / "exp").rglob("*") if p.is_file())
+    assert got == ["docs/design.md", "engine/a.py", "skills/vde/SKILL.md"]
+    assert (tmp_path / "exp/skills/vde/SKILL.md").read_text() == \
+        "edited, not committed\n"
+    assert info["dirty"] is True and len(info["commit"]) == 40
+    assert not os.access(tmp_path / "exp/engine/a.py", os.W_OK)
+
+
+def test_export_of_this_repo_holds_no_corpus_evals_or_tests():
+    files = sb.export_files(REPO)
+    tops = {f.split("/", 1)[0] for f in files}
+    assert not tops & {"corpus", "evals", "tests", ".github"}
+    assert [f for f in files if f.startswith("docs/")] == ["docs/design.md"]
+    assert "skills/vde/SKILL.md" in files
+
+
+# --------------------------------------------- stand-in approval, run_cell
+@pytest.fixture
+def cell_env(tmp_path, monkeypatch):
+    home = tmp_path / "realhome"
+    _claude_dir(home)
+    _claude_json(home)
+    monkeypatch.setattr(sb, "real_home", lambda: home)
+    r = rnd.Round(tmp_path / "round", status_fn=lambda: (1, "clear"),
+                  load_fn=lambda: 0.0, notify_fn=lambda s, m: {},
+                  log=lambda m: None)
+    (tmp_path / "edatree").mkdir()
+    (tmp_path / "claude-elf").write_text("")
+    r.layout = lambda arm, rd, export: sb.Layout(
+        arm=arm, run_dir=rd, claude_bin=tmp_path / "claude-elf",
+        eda_tree=tmp_path / "edatree", eda_bin_dir=tmp_path,
+        real_claude_dir=home / ".claude", export_dir=export)
+    r.run_probe = lambda layout: {"ok": True, "status": "pass"}
+    r.score = lambda *a: {"scored": True}
+    r.export_info = {"commit": "c" * 40, "dirty": False}
+    return r
+
+
+def _state(work: Path, status: str, challenge: str = "H1-a1b2c3") -> None:
+    p = work / "blocks" / "counter8" / "state.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"human": {"H1": {"status": status,
+                                              "challenge": challenge}}}))
+
+
+def test_stand_in_approval_quotes_the_presented_challenge(cell_env):
+    cmds = []
+
+    def invoke(layout, cmd, n):
+        cmds.append(cmd)
+        _state(layout.work, "presented" if n == 0 else "approved")
+        return {"n": n, "session_id": "sess-1", "total_cost_usd": 2.0}
+    cell_env.invoke = invoke
+    res = cell_env.run_cell("skill", "terse", 1, 70.0, Path("/x"))
+    assert len(cmds) == 2
+    resume = cmds[1]
+    assert resume[resume.index("--resume") + 1] == "sess-1"
+    assert "H1-a1b2c3" in resume[resume.index("-p") + 1]
+    assert resume[resume.index("--max-budget-usd") + 1] == "68.00"
+    assert [a["challenge"] for a in res["stand_in_approvals"]] == ["H1-a1b2c3"]
+    assert res["cost_usd"] == 4.0
+    assert res["repo"]["commit"] and "dirty" in res["repo"]
+    assert res["export"]["commit"] == "c" * 40
+
+
+@pytest.mark.parametrize("arm,status", [("skill", "approved"),
+                                        ("bare", "presented")])
+def test_no_stand_in_without_a_presented_checkpoint_or_in_bare(
+        cell_env, arm, status):
+    cmds = []
+
+    def invoke(layout, cmd, n):
+        cmds.append(cmd)
+        _state(layout.work, status)
+        return {"n": n, "session_id": "s", "total_cost_usd": 1.0}
+    cell_env.invoke = invoke
+    res = cell_env.run_cell(arm, "terse", 1, 70.0,
+                            Path("/x") if arm == "skill" else None)
+    assert len(cmds) == 1 and res["stand_in_approvals"] == []
+    assert "--resume" not in cmds[0]
+
+
+def test_stand_in_resumes_at_most_max_resumes(cell_env):
+    cmds = []
+
+    def invoke(layout, cmd, n):
+        cmds.append(cmd)
+        _state(layout.work, "presented", f"H1-{n:06x}")
+        return {"n": n, "session_id": "s", "total_cost_usd": 1.0}
+    cell_env.invoke = invoke
+    res = cell_env.run_cell("skill", "full", 2, 70.0, Path("/x"))
+    assert len(cmds) == 1 + rnd.MAX_RESUMES
+    assert len(res["stand_in_approvals"]) == rnd.MAX_RESUMES
+
+
+def test_unknown_cost_books_the_whole_budget(cell_env):
+    cell_env.invoke = lambda layout, cmd, n: {"n": n}
+    res = cell_env.run_cell("bare", "terse", 1, 70.0, None)
+    assert res["cost_usd"] == 70.0 and res["cost_known"] is False
+
+
+# ------------------------------------------------- real sandbox probe
+@pytest.mark.slow
+@needs_bwrap
+def test_probe_in_a_real_sandbox_fails_a_planted_holdout_and_passes_clean(
+        tmp_path):
+    held = sorted((rnd.RUNG_DIR / "holdout").glob("*.py"))[0]
+    keep = []
+
+    def connect(host, port):
+        a, b = socket.socketpair()
+        keep.append(b)
+        return a
+    r = rnd.Round(tmp_path / "round", probe_roots=["/work", "/home/eval"],
+                  proxy_connect=connect, log=lambda m: None)
+
+    def lay(run):
+        lo = _layout(tmp_path, "bare", run=run)
+        lo.claude_bin = sb.resolve_claude_bin()
+        return lo
+
+    clean = lay("clean")
+    v = r.run_probe(clean)
+    assert v["ok"], v.get("findings") or v.get("detail")
+    assert v["walk"]["files"] >= 2
+    denied = {p["target"]: p["refused"] for p in v["net"]["proxy"]}
+    assert denied["github.com:443"] is True
+    assert denied["api.anthropic.com:443"] is False
+    assert all(d["blocked"] for d in v["net"]["direct"])
+
+    planted = lay("planted")
+    (planted.work / "notes").mkdir()
+    shutil.copy(held, planted.work / "notes" / "copy.py")
+    v = r.run_probe(planted)
+    assert not v["ok"]
+    kinds = {f["kind"] for f in v["findings"]}
+    assert "sha256" in kinds and "name" in kinds
+    assert not (r.dir / "probe-baseline.json").exists()
+
+
+# ---------------------------------------------------------------- proxy
+def test_proxy_on_a_deep_path_allows_only_the_allowlist(tmp_path):
+    import proxy as proxymod
+    deep = tmp_path / ("d" * 60) / ("e" * 60)
+    keep = []
+
+    def connect(host, port):
+        a, b = socket.socketpair()
+        keep.append(b)
+        return a
+
+    def ask(sock_path, target):
+        with socket.socket(socket.AF_UNIX) as c:
+            dfd = os.open(sock_path.parent, os.O_PATH | os.O_DIRECTORY)
+            try:
+                c.connect(f"/proc/self/fd/{dfd}/{sock_path.name}")
+            finally:
+                os.close(dfd)
+            c.sendall(f"CONNECT {target} HTTP/1.1\r\n\r\n".encode())
+            return c.recv(64).split(b"\r\n")[0].decode()
+    sock = deep / "proxy.sock"
+    log = tmp_path / "proxy.log"
+    assert len(str(sock)) > 108
+    with proxymod.ConnectProxy(sock, log, connect=connect):
+        assert " 403 " in ask(sock, "github.com:443")
+        assert " 200 " in ask(sock, "api.anthropic.com:443")
+        assert " 403 " in ask(sock, "api.anthropic.com:80")
+    s = proxymod.summarize_log(log)
+    assert s["denied"] == {"CONNECT github.com:443": 1,
+                           "CONNECT api.anthropic.com:80": 1}
+    assert s["allowed"] == {"CONNECT api.anthropic.com:443": 1}
+
+
+# ------------------------------------------- cost, checkpoints, ~/.claude
+def test_cost_counts_only_when_the_whole_stdout_is_one_object(tmp_path):
+    real = {"type": "result", "total_cost_usd": 12.5, "session_id": "s"}
+    p = tmp_path / "out.json"
+    p.write_text(json.dumps(real, indent=1) + "\n")
+    assert rnd.parse_claude_json(p) == real
+    # an agent writing a cheaper object into claude's stdout, after or
+    # before the real one, or alone after noise, makes the cost unknown
+    spoof = '{"total_cost_usd": 0.01}'
+    for text in (json.dumps(real) + "\n" + spoof, spoof + "\n" + json.dumps(real),
+                 "noise\n" + spoof, "\0" * 8 + spoof, "[1, 2]", ""):
+        p.write_text(text)
+        assert rnd.parse_claude_json(p) is None, text
+    for bad in (True, -1.0, float("nan"), float("inf"), "0.01", None):
+        assert rnd.known_cost(bad) is None
+    assert rnd.known_cost(0) == 0.0 and rnd.known_cost(3.5) == 3.5
+
+
+def test_a_spoofed_or_negative_cost_books_the_whole_budget(cell_env):
+    cell_env.invoke = lambda layout, cmd, n: {"n": n, "session_id": "s",
+                                              "total_cost_usd": -50.0}
+    res = cell_env.run_cell("bare", "terse", 1, 70.0, None)
+    assert res["cost_usd"] == 70.0 and res["cost_known"] is False
+    entry = cell_env.ledger.data["entries"][-1]
+    assert entry["state"] == "spent" and entry["usd"] == 70.0
+
+
+def test_unknown_cost_never_resumes_a_checkpoint(cell_env):
+    cmds = []
+
+    def invoke(layout, cmd, n):
+        cmds.append(cmd)
+        _state(layout.work, "presented")
+        return {"n": n, "session_id": "s"}
+    cell_env.invoke = invoke
+    res = cell_env.run_cell("skill", "terse", 1, 70.0, Path("/x"))
+    assert len(cmds) == 1 and "cost unknown" in res["resume_skipped"]
+    assert res["cost_usd"] == 70.0
+
+
+def test_open_checkpoints_reads_only_regular_files(tmp_path):
+    work = tmp_path / "work"
+    _state(work, "presented", "H1-good")
+    found = rnd.open_checkpoints(work)
+    assert [c["challenge"] for c in found] == ["H1-good"]
+    # a link to a presented checkpoint elsewhere, a linked block dir, a FIFO
+    # (would block a plain read) and an oversized file are all skipped
+    elsewhere = tmp_path / "elsewhere"
+    _state(elsewhere, "presented", "H1-link")
+    src = elsewhere / "blocks" / "counter8" / "state.json"
+    (work / "blocks" / "a").mkdir()
+    (work / "blocks" / "a" / "state.json").symlink_to(src)
+    (work / "blocks" / "b").symlink_to(src.parent)
+    (work / "blocks" / "c").mkdir()
+    os.mkfifo(work / "blocks" / "c" / "state.json")
+    (work / "blocks" / "d").mkdir()
+    big = {"human": {"H1": {"status": "presented", "challenge": "H1-big"}},
+           "pad": "x" * (rnd.MAX_STATE_BYTES + 10)}
+    (work / "blocks" / "d" / "state.json").write_text(json.dumps(big))
+    (work / "state.json").symlink_to(src)
+    found = rnd.open_checkpoints(work)
+    assert [c["challenge"] for c in found] == ["H1-good"]
+    # a linked blocks/ is not followed at all
+    work2 = tmp_path / "work2"
+    work2.mkdir()
+    (work2 / "blocks").symlink_to(elsewhere / "blocks")
+    assert rnd.open_checkpoints(work2) == []
+
+
+def test_a_new_host_claude_entry_stops_the_round_and_is_quarantined(cell_env):
+    home = sb.real_home()
+
+    def invoke(layout, cmd, n):
+        _state(layout.work, "presented")
+        (home / ".claude" / "settings.local.json").write_text('{"x": 1}')
+        return {"n": n, "session_id": "s", "total_cost_usd": 1.0}
+    cell_env.invoke = invoke
+    scored = []
+    cell_env.score = lambda *a: scored.append(a) or {"scored": True}
+    res = cell_env.run_cell("skill", "terse", 1, 70.0, Path("/x"))
+    assert "settings.local.json" in res["stop"]
+    assert res["host_claude_dir_new"] == ["settings.local.json"]
+    assert res["invocations"][0]["host_claude_dir_new"] == ["settings.local.json"]
+    assert len(res["invocations"]) == 1 and res["stand_in_approvals"] == []
+    assert not scored and res["score"]["scored"] is False
+    # moved out of the host dir into the run's quarantine, never deleted
+    assert not (home / ".claude" / "settings.local.json").exists()
+    q = Path(res["run_dir"]) / "quarantine" / "inv-0" / "settings.local.json"
+    assert q.read_text() == '{"x": 1}'
+    assert res["quarantined"] == [{"name": "settings.local.json", "to": str(q)}]
+    assert "CREATE" in res["invocations"][0]["host_claude_dir_watch"][
+        "violations"][0]["events"]
+
+
+def test_no_new_host_claude_entry_lets_the_run_finish(cell_env):
+    cell_env.invoke = lambda layout, cmd, n: {"n": n, "total_cost_usd": 1.0}
+    res = cell_env.run_cell("bare", "terse", 1, 70.0, None)
+    assert "stop" not in res and res["host_claude_dir_new"] == []
+    assert res["invocations"][0]["credentials_ok"] is True
+    assert res["score"] == {"scored": True}
+
+
+@pytest.mark.parametrize("damage", ["empty", "symlink", "gone"])
+def test_a_damaged_credentials_file_stops_the_run(cell_env, damage):
+    cred = sb.real_home() / ".claude" / sb.CREDENTIALS
+
+    def invoke(layout, cmd, n):
+        if damage == "empty":
+            cred.write_text("")
+        else:
+            cred.unlink()
+            if damage == "symlink":
+                cred.symlink_to("/etc/hostname")
+        return {"n": n, "total_cost_usd": 1.0}
+    cell_env.invoke = invoke
+    res = cell_env.run_cell("bare", "terse", 1, 70.0, None)
+    assert "credentials" in res["stop"]
+
+
+def test_the_round_stops_on_a_run_that_set_stop(cell_env):
+    home = sb.real_home()
+
+    def invoke(layout, cmd, n):
+        (home / ".claude" / "agents2").mkdir()
+        return {"n": n, "total_cost_usd": 1.0}
+    cell_env.invoke = invoke
+    cell_env.scorecard = lambda: {"ran": False}
+    out = cell_env.run("bare/terse/1")
+    assert out["status"] == "violations" and "agents2" in out["state"]
+    assert out["state"].startswith("stopped")
+    saved = json.loads((cell_env.results_dir / "bare-terse-r1.json").read_text())
+    assert saved["host_claude_dir_new"] == ["agents2"]
+
+
+def test_in_sandbox_scripts_are_bound_from_the_run_dir_not_the_repo(tmp_path):
+    lay = _layout(tmp_path, "bare")
+    m = _mounts(sb.build_argv(lay, ["true"]))
+    for name in sb.OPT_FILES:
+        op, src = m[f"{sb.SB_OPT}/{name}"]
+        assert op == "--ro-bind" and Path(src) == lay.opt / name
+        assert Path(src).read_bytes() == (REPO / "evals" / "round" / name).read_bytes()
+    srcs = [src for op, src in m.values() if op in ("--bind", "--ro-bind")]
+    assert not [s for s in srcs if Path(s).resolve().is_relative_to(REPO.resolve())]
+    # a run dir without the copies is refused, never bound from the repo
+    (lay.opt / "forward.py").chmod(0o644)
+    (lay.opt / "forward.py").unlink()
+    with pytest.raises(sb.SandboxError, match="forward.py"):
+        sb.build_argv(lay, ["true"])
+
+
+# ------------------------------------------- limits added in the fix pass
+def test_claude_cmd_disallows_the_web_tools_and_caps_the_budget():
+    cmd = rnd.claude_cmd("go", 12.345)
+    i = cmd.index("--disallowedTools")
+    assert cmd[i + 1:i + 3] == ["WebFetch", "WebSearch"]
+    assert cmd[cmd.index("--max-budget-usd") + 1] == "12.35"
+    assert "--resume" not in cmd
+    assert rnd.claude_cmd("ok", 1.0, resume="s")[3:5] == ["--resume", "s"]
+
+
+def test_a_second_round_on_the_same_dir_is_refused_without_a_notice(tmp_path):
+    f = Fake(tmp_path)
+    f.r.dir.mkdir(parents=True)
+    held = f.r.lock()
+    try:
+        with pytest.raises(rnd.RoundError, match="one run at a time"):
+            f.r.run()
+        assert f.calls == [] and f.notices == []
+    finally:
+        held.close()
+    f.r.run(only="bare/terse/1")  # released: the round runs
+    assert len(f.calls) == 1
+
+
+@pytest.mark.parametrize("rc,timed_out", [(137, False), (-9, True), (2, False)])
+def test_a_killed_claude_has_no_cost_even_with_one_clean_object(
+        tmp_path, monkeypatch, rc, timed_out):
+    lay = _layout(tmp_path, "bare")
+
+    def fake_group(argv, stdin, out, err, wall, on_start=None):
+        out.write_text('{"type": "result", "total_cost_usd": 0.01, '
+                       '"session_id": "s"}')
+        err.write_text("")
+        return {"rc": rc, "timed_out": timed_out, "wall_s": 1.0}
+    monkeypatch.setattr(rnd, "run_group", fake_group)
+    r = rnd.Round(tmp_path / "round", log=lambda m: None)
+    rec = r.invoke(lay, ["claude"], 0)
+    assert rec["json"] is False and "total_cost_usd" not in rec
+    assert rnd.known_cost(rec.get("total_cost_usd")) is None
+    monkeypatch.setattr(rnd, "run_group", lambda *a, **k: fake_group(*a) and
+                        {"rc": 1, "timed_out": False, "wall_s": 1.0})
+    assert r.invoke(lay, ["claude"], 1)["total_cost_usd"] == 0.01
+
+
+def test_an_unknown_cost_is_booked_at_budget_and_stops_the_round(cell_env):
+    """A run whose cost is unknown is booked at its whole $70 budget
+    against the $500 cap, and the round stops after it."""
+    calls = []
+
+    def invoke(layout, cmd, n):
+        calls.append(cmd)
+        return {"n": n}
+    cell_env.invoke = invoke
+    cell_env.scorecard = lambda: {"ran": False}
+    out = cell_env.run()
+    assert len(calls) == 1 and cell_env.ledger.spent() == 70.0
+    assert "cost unknown" in out["state"]
+
+
+def test_a_long_challenge_is_capped_in_the_reply(tmp_path):
+    work = tmp_path / "work"
+    _state(work, "presented", "H1-" + "x" * 100_000)
+    [cp] = rnd.open_checkpoints(work)
+    assert len(cp["challenge"]) == rnd.MAX_CHALLENGE_CHARS
+
+
+# ------------------------------------- the live ~/.claude watch (fix pass 2)
+def _watch(cd: Path, kills: list | None = None) -> sb.ClaudeDirWatch:
+    return sb.ClaudeDirWatch(cd, kill=(kills.append if kills is not None
+                                       else lambda pgid: None)).start()
+
+
+def _cred_write(cd: Path, tmp_hex: str = "0123abcd") -> None:
+    """What claude's own credential refresh does in ~/.claude."""
+    lock = cd / sb.WRITE_LOCK
+    lock.mkdir()
+    os.utime(lock)
+    tmp = cd / f"{sb.CREDENTIALS}.tmp.{tmp_hex}"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    os.write(fd, b'{"claudeAiOauth": {}}')
+    os.close(fd)
+    os.chmod(tmp, 0o600)
+    os.rename(tmp, cd / sb.CREDENTIALS)
+    os.chmod(cd / sb.CREDENTIALS, 0o600)
+    lock.rmdir()
+
+
+def test_watch_passes_claude_own_credentials_write(tmp_path):
+    cd = _claude_dir(tmp_path)
+    kills = []
+    w = _watch(cd, kills)
+    w.attach(4242)
+    _cred_write(cd)
+    (cd / "history.jsonl.lock").mkdir()     # a host session's history lock
+    (cd / "history.jsonl.lock").rmdir()
+    (cd / "projects" / "inside.jsonl").write_text("{}")  # not watched
+    rec = w.stop()
+    assert rec["ok"] and rec["violations"] == [] and kills == []
+    assert rec["events_total"] >= 8 and all(e["allowed"] for e in rec["events"])
+    assert rec["mode_before"] == rec["mode_after"]
+
+
+def test_watch_catches_create_then_delete_and_kills_once(tmp_path):
+    cd = _claude_dir(tmp_path)
+    kills = []
+    w = _watch(cd, kills)
+    (cd / "CLAUDE2.md").write_text("load me\n")
+    (cd / "CLAUDE2.md").unlink()
+    deadline = time.time() + 5
+    while not w.violations and time.time() < deadline:
+        time.sleep(0.01)
+    assert w.violations                  # seen live, before stop()
+    w.attach(4242)                       # a trip before the attach kills here
+    rec = w.stop()
+    assert kills == [4242] and rec["killed"]
+    kinds = [(v["name"], v["events"]) for v in rec["violations"]]
+    assert ("CLAUDE2.md", ["CREATE"]) in kinds
+    assert ("CLAUDE2.md", ["DELETE"]) in kinds
+    assert not (cd / "CLAUDE2.md").exists()
+
+
+def test_watch_kills_an_attached_group_on_the_first_violation(tmp_path):
+    cd = _claude_dir(tmp_path)
+    w = sb.ClaudeDirWatch(cd).start()          # the real os.killpg
+    p = subprocess.Popen(["sleep", "30"], start_new_session=True)
+    w.attach(p.pid)
+    t0 = time.monotonic()
+    (cd / "agents2").mkdir()
+    p.wait(timeout=10)
+    rec = w.stop()
+    assert p.returncode == -9 and time.monotonic() - t0 < 5
+    assert rec["killed"] and rec["violations"][0]["name"] == "agents2"
+
+
+@pytest.mark.parametrize("act,want", [
+    ("chmod", ("", "ATTRIB")), ("rm_cred", (sb.CREDENTIALS, "DELETE")),
+    ("move_cred", (sb.CREDENTIALS, "MOVED_FROM")),
+    ("touch_settings", ("settings.json", "ATTRIB")),
+    ("file_named_lock", (sb.WRITE_LOCK, "CREATE")),
+    ("bad_tmp_name", (f"{sb.CREDENTIALS}.tmp.xyz", "CREATE"))])
+def test_watch_catches_what_claude_does_not_do(tmp_path, act, want):
+    cd = _claude_dir(tmp_path)
+    w = _watch(cd)
+    if act == "chmod":
+        cd.chmod(0o777)
+    elif act == "rm_cred":
+        (cd / sb.CREDENTIALS).unlink()
+    elif act == "move_cred":
+        (cd / sb.CREDENTIALS).rename(tmp_path / "stolen")
+    elif act == "touch_settings":
+        os.utime(cd / "settings.json")
+    else:
+        (cd / want[0]).write_text("x")
+    rec = w.stop()
+    assert not rec["ok"]
+    assert any(v["name"] == want[0] and want[1] in v["events"]
+               for v in rec["violations"]), rec["violations"]
+    if act == "chmod":
+        assert rec["mode_before"] != rec["mode_after"]
+        assert any("MODE_CHANGED" in v["events"] for v in rec["violations"])
+
+
+def test_watch_that_cannot_be_set_up_is_a_refusal(tmp_path):
+    with pytest.raises(sb.SandboxError):
+        sb.ClaudeDirWatch(tmp_path / "missing").start()
+    f = tmp_path / "file"
+    f.write_text("")
+    with pytest.raises(sb.SandboxError):
+        sb.ClaudeDirWatch(f).start()
+
+
+def test_allowed_event_is_only_claude_own_credential_write():
+    a = sb.allowed_event
+    tmpn = f"{sb.CREDENTIALS}.tmp.deadbeef"
+    assert a(sb.CREDENTIALS, sb.IN_MOVED_TO) and a(sb.CREDENTIALS, sb.IN_ATTRIB)
+    assert not a(sb.CREDENTIALS, sb.IN_CREATE)
+    assert not a(sb.CREDENTIALS, sb.IN_DELETE)
+    assert a(tmpn, sb.IN_CREATE) and a(tmpn, sb.IN_MOVED_FROM)
+    assert not a(tmpn, sb.IN_MOVED_TO) and not a(tmpn, sb.IN_CREATE | sb.IN_ISDIR)
+    assert a(sb.WRITE_LOCK, sb.IN_CREATE | sb.IN_ISDIR)
+    assert not a(sb.WRITE_LOCK, sb.IN_CREATE)
+    for bad in (sb.IN_Q_OVERFLOW, sb.IN_IGNORED, sb.IN_DELETE_SELF,
+                sb.IN_MOVE_SELF, sb.IN_ATTRIB | sb.IN_ISDIR):
+        assert not a("", bad)
+    assert not a("CLAUDE.md", sb.IN_CREATE)
+
+
+def test_create_then_delete_in_a_run_stops_the_round(cell_env):
+    home = sb.real_home()
+
+    def invoke(layout, cmd, n):
+        (home / ".claude" / "CLAUDE2.md").write_text("be evil\n")
+        (home / ".claude" / "CLAUDE2.md").unlink()
+        return {"n": n, "total_cost_usd": 1.0}
+    cell_env.invoke = invoke
+    cell_env.scorecard = lambda: {"ran": False}
+    out = cell_env.run("bare/terse/1")
+    assert out["status"] == "violations" and "CLAUDE2.md" in out["state"]
+    saved = json.loads((cell_env.results_dir / "bare-terse-r1.json").read_text())
+    assert saved["host_claude_dir_new"] == []          # the listing alone missed it
+    assert not saved["invocations"][0]["host_claude_dir_watch"]["ok"]
+    rd = Path(saved["run_dir"])
+    assert json.loads((rd / "claude-dir-watch-0.json").read_text())["stop"]
+
+
+def test_a_planted_claude_md_is_quarantined_and_a_chmod_stops(cell_env):
+    home = sb.real_home()
+    cd = home / ".claude"
+    (cd / "CLAUDE.md").unlink()              # so a planted one is new
+
+    def invoke(layout, cmd, n):
+        (cd / "CLAUDE.md").write_text("planted memory\n")
+        cd.chmod(0o777)
+        return {"n": n, "total_cost_usd": 1.0}
+    cell_env.invoke = invoke
+    res = cell_env.run_cell("bare", "terse", 1, 70.0, None)
+    assert not (cd / "CLAUDE.md").exists()
+    q = Path(res["run_dir"]) / "quarantine" / "inv-0" / "CLAUDE.md"
+    assert q.read_text() == "planted memory\n"
+    assert "CLAUDE.md" in res["stop"] and "MODE_CHANGED" in res["stop"]
+    w = res["invocations"][0]["host_claude_dir_watch"]
+    assert w["mode_before"] != w["mode_after"] == "0o777"
+
+
+def test_an_allowed_credentials_write_in_a_run_passes(cell_env):
+    cd = sb.real_home() / ".claude"
+
+    def invoke(layout, cmd, n):
+        _cred_write(cd)
+        return {"n": n, "total_cost_usd": 1.0}
+    cell_env.invoke = invoke
+    res = cell_env.run_cell("bare", "terse", 1, 70.0, None)
+    assert "stop" not in res and res["quarantined"] == []
+    assert res["invocations"][0]["host_claude_dir_watch"]["ok"]
+    assert res["score"] == {"scored": True}
+
+
+def test_a_failed_quarantine_move_is_named_loudly(tmp_path):
+    cd = _claude_dir(tmp_path)
+    before = set(os.listdir(cd))
+    (cd / "planted.md").write_text("x")
+    blocker = tmp_path / "blocker"
+    blocker.write_text("")                    # dest under a file: mkdir fails
+    q = sb.quarantine_new(cd, before, blocker / "q")
+    assert q["moved"] == [] and q["failed"][0]["name"] == "planted.md"
+    assert (cd / "planted.md").is_file()      # left, never deleted
+    why = rnd.host_claude_dir_stop(before, set(os.listdir(cd)),
+                                   {"ok": True}, None, q)
+    assert why.startswith("QUARANTINE FAILED") and "planted.md" in why
+
+
+def test_quarantine_leaves_claude_own_temp_and_lock(tmp_path):
+    cd = _claude_dir(tmp_path)
+    before = set(os.listdir(cd))
+    (cd / f"{sb.CREDENTIALS}.tmp.0123abcd").write_text("secret")
+    (cd / sb.WRITE_LOCK).mkdir()
+    q = sb.quarantine_new(cd, before, tmp_path / "q")
+    assert sorted(q["left"]) == sorted([f"{sb.CREDENTIALS}.tmp.0123abcd",
+                                        sb.WRITE_LOCK])
+    assert not (tmp_path / "q").exists()
+
+
+def test_a_watch_that_cannot_start_refuses_the_run(cell_env, monkeypatch):
+    def broken(self):
+        raise sb.SandboxError("inotify unavailable: planted")
+    monkeypatch.setattr(sb.ClaudeDirWatch, "start", broken)
+    calls = []
+    cell_env.invoke = lambda layout, cmd, n: calls.append(n) or {}
+    cell_env.scorecard = lambda: {"ran": False}
+    out = cell_env.run("bare/terse/1")
+    assert calls == [] and out["status"] == "violations"
+    assert "inotify unavailable" in out["state"]
+
+
+@needs_bwrap
+def test_the_watch_sees_a_write_from_inside_the_real_bwrap_layout(tmp_path):
+    """The real sandbox argv (build_argv, a shell instead of claude) over a
+    TEMP copy-layout claude dir: a write from inside trips the watch, which
+    kills the sandbox; claude's own credentials write from inside passes."""
+    lay = _layout(tmp_path, "bare")
+    cd = lay.real_claude_dir
+    keep = []
+
+    def connect(host, port):
+        a, b = socket.socketpair()
+        keep.append(b)
+        return a
+
+    def run(script, name):
+        w = sb.ClaudeDirWatch(cd).start()
+        argv = sb.build_argv(lay, ["/bin/sh", "-c", script])
+        with rnd.proxymod.ConnectProxy(lay.proxy_sock, lay.run_dir / "p.log",
+                                       connect=connect):
+            res = rnd.run_group(argv, None, lay.run_dir / f"{name}.out",
+                                lay.run_dir / f"{name}.err", 60,
+                                on_start=w.attach)
+        return res, w.stop()
+
+    res, rec = run("echo planted > $HOME/.claude/CLAUDE2.md; sleep 30", "bad")
+    assert not rec["ok"] and rec["killed"]
+    assert rec["violations"][0]["name"] == "CLAUDE2.md"
+    assert res["rc"] != 0 and res["wall_s"] < 20
+    assert (cd / "CLAUDE2.md").is_file()      # it did land in the host dir
+    q = sb.quarantine_new(cd, set(os.listdir(cd)) - {"CLAUDE2.md"},
+                          lay.run_dir / "quarantine")
+    assert [m["name"] for m in q["moved"]] == ["CLAUDE2.md"]
+
+    c = "$HOME/.claude"
+    res, rec = run(f"mkdir {c}/{sb.WRITE_LOCK} && "
+                   f"(umask 077; echo '{{}}' > {c}/{sb.CREDENTIALS}.tmp.0a1b2c3d)"
+                   f" && mv {c}/{sb.CREDENTIALS}.tmp.0a1b2c3d {c}/{sb.CREDENTIALS}"
+                   f" && chmod 600 {c}/{sb.CREDENTIALS} && rmdir {c}/{sb.WRITE_LOCK}",
+                   "good")
+    err = (lay.run_dir / "good.err").read_text()
+    assert res["rc"] == 0, err
+    assert rec["ok"], rec["violations"]
+    assert (cd / sb.CREDENTIALS).read_text() == "{}\n"
+
+
+# ----------------------------------- global lock and ledger (fix pass 2)
+def test_a_second_round_dir_is_refused_while_the_global_lock_is_held(tmp_path):
+    a = Fake(tmp_path / "a")
+    b = Fake(tmp_path / "b")
+    assert a.r.global_dir == b.r.global_dir and a.r.dir != b.r.dir
+    held = a.r.lock()
+    try:
+        with pytest.raises(rnd.RoundError, match="one run at a time"):
+            b.r.run(only="bare/terse/1")
+        assert b.calls == [] and b.notices == []
+    finally:
+        held.close()
+
+
+def test_spend_in_one_round_dir_counts_against_another(tmp_path):
+    a = Fake(tmp_path / "a", costs={rnd.cell_id(x, d, r): 60.0 for x in rnd.ARMS
+                                    for d in rnd.DETAILS for r in rnd.REPEATS})
+    a.r.run()
+    assert a.r.ledger.spent() == 480.0
+    b = Fake(tmp_path / "b")
+    out = b.r.run()
+    assert b.calls == [] and "budget" in out["state"]
+    assert b.r.ledger.spent() == 480.0 and b.r.ledger.spent_here() == 0.0
+    assert not (a.r.dir / "ledger.json").exists()
+
+
+def test_a_round_dir_with_its_own_old_ledger_is_refused(tmp_path):
+    f = Fake(tmp_path)
+    f.r.dir.mkdir(parents=True)
+    (f.r.dir / "ledger.json").write_text('{"entries": []}')
+    with pytest.raises(rnd.RoundError, match="before the global one"):
+        f.r.run(only="bare/terse/1")
+    assert f.calls == []
+
+
+def test_main_has_no_option_for_the_global_dir():
+    with pytest.raises(SystemExit):
+        rnd.main(["--global-dir", "/tmp/x", "--dry-run"])
+
+
+# ------------------------------- the one notice, however it ends (fix pass 2)
+def test_a_type_error_from_a_cell_still_sends_one_notice(tmp_path):
+    f = Fake(tmp_path)
+
+    def run_cell(*a):
+        raise TypeError("a bug in a cell")
+    f.r.run_cell = run_cell
+    with pytest.raises(TypeError):
+        f.r.run(only="bare/terse/1")
+    assert len(f.notices) == 1 and f.notices[0][0] == "stopped"
+    assert "TypeError: a bug in a cell" in f.notices[0][1]
+
+
+@pytest.mark.parametrize("after_notice", [False, True])
+def test_a_type_error_from_summarize_still_sends_one_notice(tmp_path,
+                                                            after_notice):
+    f = Fake(tmp_path)
+
+    def summarize(state, reason):
+        if after_notice:
+            f.r.notice(state, "summary notice")
+        raise TypeError("a bug in summarize")
+    f.r.summarize = summarize
+    with pytest.raises(TypeError):
+        f.r.run(only="bare/terse/1")
+    assert len(f.notices) == 1
+    if after_notice:
+        assert f.notices[0] == ("finished", "summary notice")
+    else:
+        assert f.notices[0][0] == "stopped"
+        assert "summary failed: TypeError" in f.notices[0][1]
+
+
+def test_main_reports_an_unexpected_error_as_json(tmp_path, monkeypatch,
+                                                  capsys):
+    class Boom:
+        def __init__(self, *a, **k):
+            pass
+
+        def run(self, only):
+            raise TypeError("bug")
+    monkeypatch.setattr(rnd, "Round", Boom)
+    assert rnd.main(["--round-dir", str(tmp_path / "r")]) == 2
+    out = json.loads(capsys.readouterr().out)
+    assert out["status"] == "error" and "TypeError" in out["error"]
