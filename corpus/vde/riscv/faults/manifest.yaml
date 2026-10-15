@@ -19,10 +19,10 @@ faults:
     gate: holdout
     plant: plant_holdout.py
     expect: {status: fail, kind: holdout_failed}
-  # Known red (2026-09-24): on this core sby's abc pdr task crashes writing
-  # its counterexample (AssertionError in yosys's ywio.py), so the formal gate
-  # refuses (exit 2) instead of failing on property_failed. The reference
-  # RTL still proves. The rung stays red here until the toolchain is fixed.
+  # On this core sby's abc pdr task finds the counterexample, then
+  # yosys-witness's aiw2yw crashes converting it to a trace, so the task
+  # reaches DONE (ERROR). check_formal.py's pdr_done_status reads that
+  # case as pdr's FAIL, and smtbmc's basecase reports property_failed.
   - name: formal_register_with_no_reset
     gate: formal
     plant: plant_formal.py
