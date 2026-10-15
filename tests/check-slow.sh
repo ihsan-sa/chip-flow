@@ -30,5 +30,8 @@ cd "$REPO_ROOT"
 # test_harden_job_killed_halfway_..., two full real LibreLane harden runs
 # plus five real signoff gates) that alone measured ~815 s under load - the
 # old 900 s cap left the rest of the slow set almost no room and one busy
-# box away from a false-red timeout kill, not a real hang.
-exec timeout 1800 "$EDA_BIN" python -m pytest tests/ -q -m slow
+# box away from a false-red timeout kill, not a real hang. Tests also
+# marked `harden_faults` (whole corpus rungs, several top hardens each) run
+# in tests/check-harden-faults.sh instead, so they never eat this cap.
+exec timeout 1800 "$EDA_BIN" python -m pytest tests/ -q \
+  -m "slow and not harden_faults"

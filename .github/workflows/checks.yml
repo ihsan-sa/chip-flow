@@ -58,3 +58,38 @@ jobs:
             /tmp/pytest-of-*/**/*.json
           retention-days: 7
           if-no-files-found: ignore
+
+  # The corpus rungs whose planted faults need full top hardens
+  # (tests/test_corpus_faults.py's HARDEN_RUNGS), one job per rung so they
+  # run side by side and outside check-slow.sh's cap.
+  harden-faults:
+    name: tests/check-harden-faults.sh ${{ matrix.rung }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        rung: [dac_tile, sensor_counted]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/toolchain
+      - name: tests/check-harden-faults.sh ${{ matrix.rung }}
+        env:
+          PYTEST_ADDOPTS: -vv
+        run: |
+          set +e
+          start=$SECONDS
+          bash tests/check-harden-faults.sh "${{ matrix.rung }}"
+          rc=$?
+          echo "tests/check-harden-faults.sh ${{ matrix.rung }}: $((SECONDS - start))s, exit $rc" | tee -a "$GITHUB_STEP_SUMMARY"
+          exit $rc
+      - name: keep a failed run's logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: harden-faults-logs-${{ matrix.rung }}
+          path: |
+            /tmp/pytest-of-*/**/*.log
+            /tmp/pytest-of-*/**/*.json
+          retention-days: 7
+          if-no-files-found: ignore
