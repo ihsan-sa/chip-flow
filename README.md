@@ -1,5 +1,7 @@
 # chip-flow
 
+> **This repo has moved.** chip-flow now lives at [Hive-RSI-Lab/hive-chip-flow](https://github.com/Hive-RSI-Lab/hive-chip-flow), where it's kept up to date as a Hive module. This copy is no longer updated.
+
 Claude Code skills for designing chips with open tools: `/vde` for digital blocks in Verilog, `/ade` for analog
 blocks, and `/msde` for a mixed-signal task that drives the other two. Each takes a task wherever a project stands,
 and every result has to pass gates that are hard to fool: lint, simulation, formal proof, hardening, timing, DRC,
